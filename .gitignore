@@ -1,18 +1,33 @@
 # Dependencies
-node_modules/
+node_modules
 
 # Build and coverage output
 dist/
-build/
 coverage/
 .next/
+.vinext/
+.wrangler/
+.sites-runtime/
+work/
 .nuxt/
 .output/
+*.tsbuildinfo
+next-env.d.ts
+
+# build/ contains maintained source files; ignore only generated contents.
+/build/*
+!/build/connector-preview-plugin.mjs
+!/build/connector-preview-worker.mjs
+!/build/sites-vite-plugin.LICENSE
+!/build/sites-vite-plugin.ts
+!/build/sites-worker.ts
 
 # Local environment and logs
 .env
 .env.*
 !.env.example
+.dev.vars*
+*.pem
 *.log
 
 # OS and editor files
