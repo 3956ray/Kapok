@@ -29,12 +29,14 @@ export type ReflectionAuthor = ReflectionReader & {
 export type Reflection = ReflectionReader | ReflectionAuthor;
 export type ActivityItem = {
     id: string;
-    kind: 'reflection' | 'video' | 'announcement';
     title: string;
     href: string;
     publishedAt: string;
     updatedAt: string;
-};
+} & (
+    | { kind: 'video'; publisherId: string | null; publisherName: string | null }
+    | { kind: 'reflection' | 'announcement' }
+);
 export type ActivityPage = {
     items: ActivityItem[];
     nextCursor: string | null;

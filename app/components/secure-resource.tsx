@@ -1,4 +1,5 @@
 'use client';
+import { bindRegistrationPrefill, clearRegistrationPrefill } from '../../lib/client/registration-prefill';
 
 import { createContext, useContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -6,6 +7,7 @@ import type { BootstrapStatus } from '../../lib/contracts';
 import { api, withRequestDeadline } from '../../lib/client/api';
 import { handleSessionSignal, createSessionGuard } from '../../lib/client/session-guard';
 import { confirmNavigationActor, clearNavigationActor, clearNavigationRoute, currentRoute, retainRouteUI } from '../../lib/client/navigation-state';
+import { reconcileRegistrationActor } from '../../lib/client/registration-draft';
 import type { SessionSignal } from '../../lib/client/session-guard';
 type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>);
 export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnprofiled = false) {
@@ -71,6 +73,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
         };
     }, [notify]);
     const processSignal = useCallback((signal: SessionSignal) => {
+        clearRegistrationPrefill();
         interruption.current += 1;
         const result = handleSessionSignal(guard.current, actorId, signal, {
             surface: container.current,
@@ -107,10 +110,12 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 await withRequestDeadline(async signal => {
                     const before = await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
                     if (guard.current.token() !== token) return;
-                    if (before.siteUserId !== actorId) {
+                    if ((before.actorId ?? before.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
                         return;
                     }
+                    bindRegistrationPrefill(actorId, allowUnprofiled && !before.me.membership && before.me.user?.status !== 'deleted');
+                    reconcileRegistrationActor(actorId);
                     if (before.me.user?.status !== 'active' && !(allowUnprofiled && before.me.user === null)) {
                         clearNavigationActor(actorId);
                         setData(null);
@@ -120,7 +125,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                     if (guard.current.token() !== token) return;
                     const after = await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
                     if (guard.current.token() !== token) return;
-                    if (after.siteUserId !== actorId) {
+                    if ((after.actorId ?? after.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
                         return;
                     }
@@ -134,7 +139,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                         setData(null);
                         throw new Error('成员权限在确认期间已变化，请重新确认。');
                     }
-                    if (!guard.current.confirm(token, after.siteUserId, true)) return;
+                    if (!guard.current.confirm(token, (after.actorId ?? after.siteUserId), true)) return;
                     const stamp = JSON.stringify([after.me.user?.id, after.me.membership]);
                     confirmNavigationActor(actorId, stamp);
                     confirmedStamp.current = stamp;
@@ -269,7 +274,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 }
                 throw new Error('页面正在重新确认，请保留内容并再次操作。');
             }
-            if (current.siteUserId !== actorId) {
+            if ((current.actorId ?? current.siteUserId) !== actorId) {
                 processSignal({ actorId, kind: 'ended' });
                 throw new Error('登录账号已变化，请重新加载。');
             }
@@ -313,13 +318,15 @@ export function SecureStatus({
     error,
     checking,
     checkingMessage = '正在重新确认当前账号与权限…',
-    retry
+    retry,
+    reverifyHref,
 }: {
     locked: boolean;
     error: string;
     checking: boolean;
     checkingMessage?: string;
     retry: () => void;
+    reverifyHref?: string;
 }) {
     return locked ? <div className={error ? "notice error" : "notice"} role={error ? 'alert' : 'status'} aria-busy={checking}>
 
@@ -327,6 +334,7 @@ export function SecureStatus({
         <p>{error || (checking ? checkingMessage : '页面已暂时锁定，请重新确认当前账号与权限。')}</p>
 
         {!checking && <button className="secondary" onClick={retry}>重新确认</button>}
+        {!checking && reverifyHref && <a className="kapok-auth-secondary" href={reverifyHref}>重新验证邮箱</a>}
 
     </div> : null;
 }
@@ -344,16 +352,17 @@ type BoundaryProps<T> = {
     load: Loader<T>;
     allowUnprofiled?: boolean;
     checkingMessage?: string;
+    reverifyHref?: string;
     children: (data: T) => ReactNode;
 };
 export function AccountBoundary<T>(props: BoundaryProps<T>) {
     // A new official actor always receives new in-memory state, even on a retained route component.
     return <AccountBoundarySession key={props.actorId} {...props} />;
 }
-function AccountBoundarySession<T>({ actorId, load, allowUnprofiled = false, checkingMessage, children }: BoundaryProps<T>) {
+function AccountBoundarySession<T>({ actorId, load, allowUnprofiled = false, checkingMessage, reverifyHref, children }: BoundaryProps<T>) {
     const secure = useSecureResource<T>(actorId, load, allowUnprofiled);
     return <>
-        <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} checkingMessage={secure.verificationMessage || checkingMessage} retry={() => void secure.verify()} />
+        <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} checkingMessage={secure.verificationMessage || checkingMessage} retry={() => void secure.verify()} reverifyHref={reverifyHref} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
             <AccountContext.Provider key={secure.authorizationStamp} value={secure}>
                 {secure.data !== null && children(secure.data)}

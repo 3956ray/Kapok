@@ -1,3 +1,5 @@
+// Legacy Sites invite behavior below is exercised only as an explicit synthetic fixture, outside the product HTTP surface.
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
@@ -5,20 +7,24 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
+import { dispatchApi } from '../../lib/server/http.ts';
 
-const owner = { subject: 'synthetic-owner' };
-const alice = { subject: 'synthetic-alice' };
-const bob = { subject: 'synthetic-bob' };
+const owner = sitesPrincipal('synthetic-owner');
+const alice = sitesPrincipal('synthetic-alice');
+const bob = sitesPrincipal('synthetic-bob');
 const bootstrapInput = { discName: '合成领队', jerseyNumber: '01' };
 const profile = { discName: '木棉', jerseyNumber: '07', returnTo: '/videos/synthetic?t=32' };
 const now = () => new Date('2026-10-16T00:00:00Z');
+async function migrate(db, file) {
+  const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
+  await db.batch(migration.split(';').map(x => x.trim()).filter(Boolean).map(sql => db.prepare(sql)));
+}
 async function fixture(t, persistent = false) {
   const directory = await mkdtemp(pathJoin(tmpdir(), 'kapok-d1-'));
   const make = () => new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("test"); } }', compatibilityDate: '2026-05-22', d1Databases: ['DB'], ...(persistent ? { d1Persist: directory } : {}) });
   let mf = make();
   let db = await mf.getD1Database('DB');
-  const migration = await readFile(new URL('../../drizzle/0000_identity.sql', import.meta.url), 'utf8');
-  for (const sql of migration.split(';').map(x => x.trim()).filter(Boolean)) await db.prepare(sql).run();
+  for (const file of ['0000_identity.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql']) await migrate(db, file);
   let service = createService({ db, clock: now, bootstrapSiteUserId: owner.subject });
   t.after(async () => { await mf.dispose(); await rm(directory, { recursive: true, force: true }); });
   return { get db() { return db; }, get service() { return service; }, async restart() { await mf.dispose(); mf = make(); db = await mf.getD1Database('DB'); service = createService({ db, clock: now, bootstrapSiteUserId: owner.subject }); } };
@@ -152,21 +158,25 @@ test('recipient restrictions and rejoin use a new epoch without a second profile
 });
 
 test('HTTP requires identity and same Origin, keeps responses no-store and never takes role/actor from input', async t => {
-  const { dispatchApi } = await import('../../lib/server/http.ts');
-  const { f, token } = await seeded(t);
-  const request = (path, input, overrides = {}) => new Request(`https://kapok.test/api/v1/${path}`, { method: 'POST', headers: { Origin: 'https://kapok.test', 'Content-Type': 'application/json', 'Idempotency-Key': 'http-test', 'X-Kapok-Actor': alice.subject, ...overrides }, body: JSON.stringify(input) });
+  const f = await fixture(t);
+  await migrate(f.db, '0001_training.sql');
+  await migrate(f.db, '0008_fixed_team_onboarding.sql');
+  const access = { provider: 'access', issuer: 'https://synthetic.cloudflareaccess.com', subject: alice.subject, verifiedEmail: 'alice@example.test' };
+  const aliceActor = await actorKey(access);
+  const confirmedProfile = { ...profile, intent: 'register', confirmed: true };
+  const request = (path, input, overrides = {}) => new Request(`https://kapok.test/api/v1/${path}`, { method: 'POST', headers: { Origin: 'https://kapok.test', 'Content-Type': 'application/json', 'Idempotency-Key': 'http-test', 'X-Kapok-Actor': aliceActor, ...overrides }, body: JSON.stringify(input) });
   const tokenOnly = await dispatchApi(request('internal/bootstrap', bootstrapInput, { Authorization: 'Bearer synthetic-service-token' }), ['internal', 'bootstrap'], null, f.service);
   assert.equal(tokenOnly.status, 401);
-  const crossOrigin = await dispatchApi(request('join', { ...profile, token }, { Origin: 'https://evil.test' }), ['join'], alice, f.service);
+  const crossOrigin = await dispatchApi(request('join', confirmedProfile, { Origin: 'https://evil.test' }), ['join'], access, f.service);
   assert.equal(crossOrigin.status, 403);
-  const missingOrigin = new Request('https://kapok.test/api/v1/join', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'missing-origin' }, body: JSON.stringify({ ...profile, token }) });
-  assert.equal((await dispatchApi(missingOrigin, ['join'], alice, f.service)).status, 403);
-  const changedAccount = await dispatchApi(request('join', { ...profile, token }, { 'X-Kapok-Actor': bob.subject }), ['join'], alice, f.service);
+  const missingOrigin = new Request('https://kapok.test/api/v1/join', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'missing-origin' }, body: JSON.stringify(profile) });
+  assert.equal((await dispatchApi(missingOrigin, ['join'], access, f.service)).status, 403);
+  const changedAccount = await dispatchApi(request('join', confirmedProfile, { 'X-Kapok-Actor': await actorKey(bob) }), ['join'], access, f.service);
   assert.equal(changedAccount.status, 409);
   assert.equal((await changedAccount.json()).error.code, 'ACCOUNT_CHANGED');
-  const spoofed = await dispatchApi(request('join', { ...profile, token, subject: owner.subject, role: 'admin' }), ['join'], alice, f.service);
+  const spoofed = await dispatchApi(request('join', { ...confirmedProfile, subject: owner.subject, role: 'admin' }), ['join'], access, f.service);
   assert.equal(spoofed.status, 400);
-  const success = await dispatchApi(request('join', { ...profile, token }), ['join'], alice, f.service);
+  const success = await dispatchApi(request('join', confirmedProfile), ['join'], access, f.service);
   assert.equal(success.status, 200);
   assert.match(success.headers.get('cache-control'), /private, no-store/);
   assert.match(tokenOnly.headers.get('cache-control'), /no-store/);
@@ -219,4 +229,81 @@ test('a zero-row receipt write trips the late guard and rolls back consumed invi
   assert.equal((await f.db.prepare('SELECT count(*) AS n FROM join_receipts').first()).n, 0);
   await f.db.prepare('DROP TRIGGER suppress_receipt').run();
   assert.equal((await f.service.join(alice, { ...profile, token }, 'late-zero')).me.membership.role, 'member');
+});
+
+test('identity lookup separates equal subjects by provider and issuer', async t => {
+  const { f } = await seeded(t);
+  const otherProvider = { provider: 'access', issuer: 'https://synthetic.cloudflareaccess.com', subject: owner.subject, verifiedEmail: 'owner@example.test' };
+  const otherIssuer = { provider: 'site', issuer: 'sites:other', subject: owner.subject };
+  assert.equal((await f.service.me(otherProvider)).user, null);
+  assert.equal((await f.service.me(otherIssuer)).user, null);
+  await rejectsCode(f.service.bootstrap(otherProvider, bootstrapInput, 'access-init'), 'FORBIDDEN');
+  await rejectsCode(f.service.bootstrap(otherIssuer, bootstrapInput, 'wrong-issuer-init'), 'FORBIDDEN');
+});
+
+test('forward migration preserves an existing Sites binding and foreign key checks', async t => {
+  const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response()}}', d1Databases: ['DB'] });
+  t.after(() => mf.dispose());
+  const db = await mf.getD1Database('DB');
+  await migrate(db, '0000_identity.sql');
+  await db.prepare("INSERT INTO users (id,created_at) VALUES ('existing-id','synthetic-time')").run();
+  await db.prepare("INSERT INTO auth_identities VALUES ('existing-binding','site',?,'existing-id')").bind(owner.subject).run();
+  await migrate(db, '0006_identity_namespace.sql');
+  assert.equal((await createService({ db }).me(owner)).user.id, 'existing-id');
+  assert.deepEqual(await db.prepare("SELECT issuer,user_id FROM auth_identities WHERE id='existing-binding'").first(), { issuer: owner.issuer, user_id: 'existing-id' });
+  await assert.rejects(db.prepare("INSERT INTO auth_identities VALUES ('bad-fk','site','synthetic-issuer','synthetic-subject','missing')").run());
+});
+
+test('Access pre-membership HTTP surface only exposes own minimal state and rejects Sites bootstrap/invitations', async t => {
+  const { f, token } = await seeded(t);
+  const principal = { provider: 'access', issuer: 'https://synthetic.cloudflareaccess.com', subject: owner.subject, verifiedEmail: 'member@example.test' };
+  const actor = await actorKey(principal);
+  const endpoint = (route, p = principal, method = 'GET', body = {}, writeActor = actor) => dispatchApi(
+    new Request('https://kapok.test/api/v1/' + route, method === 'GET' ? undefined : { method, headers: {
+      Origin: 'https://kapok.test', 'X-Kapok-Actor': writeActor, 'Content-Type': 'application/json', 'Idempotency-Key': 'synthetic-http',
+    }, body: JSON.stringify(body) }),
+    route.split('/'), p, f.service,
+  );
+
+  assert.equal((await endpoint('me', null)).status, 401);
+  const bootstrap = await endpoint('bootstrap');
+  assert.match(bootstrap.headers.get('Cache-Control'), /no-store/);
+  assert.equal(bootstrap.headers.get('X-Kapok-Actor'), actor);
+  assert.deepEqual((await bootstrap.json()).data, { actorId: actor, initialized: true, canBootstrap: false, me: { user: null, profile: null, membership: null, team: null } });
+  assert.deepEqual((await (await endpoint('me')).json()).data, { user: null, profile: null, membership: null, team: null });
+  for (const route of ['trainings', 'members', 'collections', 'reflections', 'me/export', 'me/recycle', 'videos/fake/media']) {
+    assert.equal((await endpoint(route)).status, 403, route);
+  }
+  assert.equal((await endpoint('internal/bootstrap', principal, 'POST', bootstrapInput)).status, 404);
+  assert.equal((await endpoint('join', principal, 'POST', { ...profile, token })).status, 400);
+  assert.equal((await endpoint('join', principal, 'POST', { ...profile, token }, await actorKey(owner))).status, 409);
+
+  // An Access-only synthetic membership is inserted directly until Task 2 implements enrollment.
+  const { identityFor } = await import('../../lib/server/identity.ts');
+  const id = await identityFor(f.db, principal);
+  const other = { ...principal, issuer: 'https://other-synthetic.cloudflareaccess.com' };
+  assert.notEqual(id, await identityFor(f.db, other));
+  assert.notEqual(id, (await f.service.me(owner)).user.id);
+  await f.db.batch([
+    f.db.prepare("INSERT INTO users (id,created_at) VALUES (?,'synthetic-time')").bind(id),
+    f.db.prepare("INSERT INTO auth_identities VALUES ('access-binding','access',?,?,?)").bind(principal.issuer, principal.subject, id),
+    f.db.prepare("INSERT INTO profiles VALUES (?,'合成 Access', '08', 1)").bind(id),
+    f.db.prepare("INSERT INTO memberships (id,team_id,user_id,role,status,epoch,joined_at) VALUES ('access-member','kapok',?,'member','active',1,'synthetic-time')").bind(id),
+  ]);
+  const active = (await (await endpoint('bootstrap')).json()).data.me;
+  assert.equal(active.membership.status, 'active');
+  assert.equal(active.profile, null);
+  assert.equal(active.team, null);
+  assert.equal((await (await endpoint('me')).json()).data.profile.discName, '合成 Access');
+  assert.equal((await f.service.me(other)).user, null);
+  const sameEmail = { ...principal, subject: 'different-access-subject' };
+  assert.equal((await f.service.me(sameEmail)).user, null);
+
+  await f.db.prepare("UPDATE memberships SET status='paused' WHERE user_id=?").bind(id).run();
+  const paused = (await (await endpoint('me')).json()).data;
+  assert.equal(paused.membership.status, 'paused');
+  assert.equal(paused.profile, null);
+  assert.equal(paused.team, null);
+  assert.equal((await endpoint('me/export')).status, 403);
+  await rejectsCode(f.service.updateProfile(principal, { discName: 'blocked', jerseyNumber: '09', expectedVersion: 1 }, 'paused-update'), 'FORBIDDEN');
 });

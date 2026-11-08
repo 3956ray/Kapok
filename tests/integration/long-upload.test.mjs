@@ -1,3 +1,4 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { hashUploadFile } from '../../lib/client/upload.ts';
 import { MEDIA_PART_BYTES } from '../../lib/contracts/media.ts';
-const owner = { subject: 'long-owner' };
+const owner = sitesPrincipal('long-owner');
 const original = await readFile(new URL('../fixtures/synthetic-pass.mp4', import.meta.url));
 const stream = b => new Response(b).body;
 const reject = (p, code) => assert.rejects(p, e => e.code === code);
@@ -77,7 +78,7 @@ test('5GiB admission at local 10GiB has zero retry headroom; hosted policy and 8
  const bytes=new Uint8Array(MEDIA_PART_BYTES),h=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
  const {manifestRoot}=await import('../../lib/contracts/media.ts');const digests=Array.from({length:1024},()=>h),m={root:await manifestRoot(localPolicy.maxBytes,digests),digests};
  const {dispatchApi}=await import('../../lib/server/http.ts');
- const response=await dispatchApi(new Request('https://kapok.test/api/v1/uploads',{method:'POST',headers:{Origin:'https://kapok.test','X-Kapok-Actor':owner.subject,'Idempotency-Key':'five','Content-Type':'application/json'},body:JSON.stringify({bytes:localPolicy.maxBytes,manifest:m})}),['uploads'],owner,s);
+ const response=await dispatchApi(new Request('https://kapok.test/api/v1/uploads',{method:'POST',headers:{Origin:'https://kapok.test','X-Kapok-Actor':await actorKey(owner),'Idempotency-Key':'five','Content-Type':'application/json'},body:JSON.stringify({bytes:localPolicy.maxBytes,manifest:m})}),['uploads'],owner,s);
  assert.equal(response.status,200);const u=(await response.json()).data;assert.equal((await s.getUpload(owner,u.id)).reservedBytes,10*1024**3);
  let puts=0;const faulty=proxy(bucket,{async put(){puts++;throw new Error('synthetic unknown staging outcome');}});
  const counted=accounting(db,faulty),service=createService({db:counted.db,bucket:counted.bucket,mediaPolicy:localPolicy});
@@ -193,10 +194,10 @@ test('HEAD-confirmed terminal completion can be cleaned before its old response 
 });
 test('incremental 0004 preserves v5 ready media and existing rows, while legacy pending is explicitly distinguishable',async t=>{
  const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("test")}}',compatibilityDate:'2026-05-22',d1Databases:['DB'],r2Buckets:['BUCKET']});t.after(()=>mf.dispose());const db=await mf.getD1Database('DB'),bucket=await mf.getR2Bucket('BUCKET');
- for(const file of ['0000_identity.sql','0001_training.sql','0002_upload_cleanup.sql'])for(const sql of(await readFile(new URL('../../drizzle/'+file,import.meta.url),'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+ for(const file of ['0000_identity.sql','0001_training.sql','0002_upload_cleanup.sql','0006_identity_namespace.sql', '0007_email_bound_invites.sql'])for(const sql of(await readFile(new URL('../../drizzle/'+file,import.meta.url),'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
  const s=createService({db,bucket,bootstrapSiteUserId:owner.subject});await s.bootstrap(owner,{discName:'旧版合成管理员',jerseyNumber:'01'},'boot');const me=await s.me(owner);await bucket.put('legacy-ready',original);
  for(const [id,status]of[['legacy-ready','ready'],['legacy-pending','pending']])await db.prepare('INSERT INTO uploads(id,team_id,owner_id,bytes,status,object_key,mime,duration_sec,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,me.membership.teamId,me.user.id,original.length,status,status==='ready'?'legacy-ready':null,status==='ready'?'video/mp4':null,status==='ready'?3:null,'2026-10-16').run();
- for(const sql of(await readFile(new URL('../../drizzle/0004_resumable_uploads.sql',import.meta.url),'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+ for(const file of ['0004_resumable_uploads.sql','0010_training_publication.sql'])for(const sql of(await readFile(new URL('../../drizzle/'+file,import.meta.url),'utf8')).split(/;|--> statement-breakpoint/).map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
  const rows=(await db.prepare('SELECT id,protocol_version,reserved_bytes FROM uploads ORDER BY id').all()).results;assert.equal(rows.length,2);assert.ok(rows.every(r=>r.protocol_version===1&&r.reserved_bytes===original.length));
  const tr=await s.saveTraining(owner,null,{title:'旧版训练',date:'2026-10-17',description:'',status:'published'},'training');const v=await s.addVideo(owner,tr.id,{title:'旧版视频',source:'upload',uploadId:'legacy-ready',position:0},'video');const r=await s.getMedia(owner,v.id,'bytes=0-15');assert.equal(r.status,206);assert.equal((await r.arrayBuffer()).byteLength,16);
  assert.equal((await s.getUpload(owner,'legacy-pending')).protocol,1);assert.equal((await s.getUpload(owner,'legacy-ready')).status,'ready');

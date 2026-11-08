@@ -126,3 +126,21 @@ test('T3 fix1 expiry preserves the pending draft and old generations stay locked
     assert.equal(stored.has(draftKey('A', 'new')), false);
     assert.equal(stored.get(draftKey('B', 'new')), 'B private draft');
 });
+
+test('same subject in another issuer cannot deliver client data or use the same draft key', async t => {
+    const { api } = await import('../../lib/client/api.ts');
+    const { actorKey } = await import('../../lib/server/identity.ts');
+    const identity = { provider: 'access', issuer: 'https://first.cloudflareaccess.com', subject: 'same-subject', verifiedEmail: 'synthetic@example.test' };
+    const a = await actorKey(identity);
+    const b = await actorKey({ ...identity, issuer: 'https://second.cloudflareaccess.com' });
+    assert.notEqual(draftKey(a, 'new'), draftKey(b, 'new'));
+    let resolve;
+    const late = new Promise(done => { resolve = done; });
+    t.mock.method(globalThis, 'fetch', () => late);
+    const request = api('reflections', undefined, a);
+    resolve({
+        status: 200, headers: new Headers({ 'X-Kapok-Actor': b }),
+        json: () => assert.fail('cross-issuer response body must never be read'),
+    });
+    await assert.rejects(request, error => error.code === 'ACCOUNT_CHANGED');
+});

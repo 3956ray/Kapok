@@ -35,12 +35,15 @@ export async function withRequestDeadline<T>(run: (signal: AbortSignal) => Promi
     if (interrupted) controller.signal.removeEventListener('abort', interrupted);
   }
 }
-export async function api<T>(path: string, options?: { method?: 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown; key?: string; actorId: string; uploadTimeout?: boolean }, expectedActor?: string, signal?: AbortSignal): Promise<T> {
+export async function api<T>(path: string, options?: { method?: 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown; key?: string; actorId: string; importPrecondition?: unknown; uploadTimeout?: boolean }, expectedActor?: string, signal?: AbortSignal): Promise<T> {
   const requestKey = options ? pendingMutationKey(options.actorId, options.method ?? 'GET', path, options.body ?? {}, options.key ?? '') : '';
   return withRequestDeadline(async currentSignal => {
     const response = await fetch(`/api/v1/${path}`, {
       method: options?.method ?? 'GET', credentials: 'same-origin', cache: 'no-store', signal: currentSignal,
-      headers: options ? { 'Content-Type': 'application/json', 'Idempotency-Key': requestKey, 'X-Kapok-Actor': options.actorId } : {},
+      headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      ...(options ? { 'Content-Type': 'application/json', 'Idempotency-Key': requestKey, 'X-Kapok-Actor': options.actorId, ...(options.importPrecondition ? { 'X-Kapok-Import': JSON.stringify(options.importPrecondition) } : {}) } : {}),
+    },
       ...(options ? { body: JSON.stringify(options.body ?? {}) } : {}),
     });
     // A superseded request must not broadcast a stale account/expiry signal or parse its payload.

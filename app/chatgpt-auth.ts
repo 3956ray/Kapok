@@ -1,14 +1,20 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import type { Principal } from "../lib/contracts";
+import { safeReturnTo } from "../lib/server/domain";
+import { actorKey } from "../lib/server/identity";
+import { authMode, scopedPrincipal } from "../lib/server/request-identity";
+
+export { authMode };
 
 export type ChatGPTUser = {
   userId: string;
+  principal: Principal;
   displayName: string;
   email: string;
   fullName: string | null;
 };
 
-const USER_ID_HEADER = "oai-authenticated-user-id";
 const USER_EMAIL_HEADER = "oai-authenticated-user-email";
 const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
 const USER_FULL_NAME_ENCODING_HEADER =
@@ -16,14 +22,18 @@ const USER_FULL_NAME_ENCODING_HEADER =
 const PERCENT_ENCODED_UTF8 = "percent-encoded-utf-8";
 const SIGN_IN_PATH = "/signin-with-chatgpt";
 const SIGN_OUT_PATH = "/signout-with-chatgpt";
-const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
-  const userId = requestHeaders.get(USER_ID_HEADER);
-  const email = requestHeaders.get(USER_EMAIL_HEADER);
-  if (!userId || !email) return null;
+  const principal = scopedPrincipal(requestHeaders);
+  if (!principal) return null;
+  const userId = await actorKey(principal);
+  if (principal.provider === 'access') {
+    const email = principal.verifiedEmail;
+    return { userId, principal, displayName: email, email, fullName: null };
+  }
 
+  const email = requestHeaders.get(USER_EMAIL_HEADER)!;
   const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
   const fullName =
     encodedFullName &&
@@ -33,6 +43,7 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
 
   return {
     userId,
+    principal,
     displayName: fullName ?? email,
     email,
     fullName,
@@ -50,35 +61,16 @@ export async function requireChatGPTUser(
 
 export function chatGPTSignInPath(returnTo: string): string {
   const safeReturnTo = safeRelativeReturnPath(returnTo);
-  return `${SIGN_IN_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
+  return authMode() === 'site' ? `${SIGN_IN_PATH}?return_to=${encodeURIComponent(safeReturnTo)}` : safeReturnTo;
 }
 
 export function chatGPTSignOutPath(returnTo = "/"): string {
   const safeReturnTo = safeRelativeReturnPath(returnTo);
-  return `${SIGN_OUT_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
+  return authMode() === 'site' ? `${SIGN_OUT_PATH}?return_to=${encodeURIComponent(safeReturnTo)}` : '/cdn-cgi/access/logout';
 }
 
 function safeRelativeReturnPath(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/";
-
-  let url: URL;
-  try {
-    url = new URL(value, "https://app.local");
-  } catch {
-    return "/";
-  }
-  if (url.origin !== "https://app.local") return "/";
-  if (isReservedAuthPath(url.pathname)) return "/";
-
-  return `${url.pathname}${url.search}${url.hash}`;
-}
-
-function isReservedAuthPath(pathname: string): boolean {
-  return (
-    pathname === SIGN_IN_PATH ||
-    pathname === SIGN_OUT_PATH ||
-    pathname === CALLBACK_PATH
-  );
+  return safeReturnTo(value);
 }
 
 function safeDecodeURIComponent(value: string): string | null {

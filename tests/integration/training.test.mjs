@@ -1,12 +1,13 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
-const owner = { subject: 'owner' };
-const alice = { subject: 'alice' };
-const outsider = { subject: 'outsider' };
+const owner = sitesPrincipal('owner');
+const alice = sitesPrincipal('alice');
+const outsider = sitesPrincipal('outsider');
 const reject = (promise, code) => assert.rejects(promise, e => e.code === code);
 async function fixture(t) {
     const mf = new Miniflare({
@@ -19,9 +20,9 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for(const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql']) {
+    for(const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
         const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
-        for(const sql of migration.split(';').map(s => s.trim()).filter(Boolean))
+        for(const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean))
             await db.prepare(sql).run();
     }
     const s = createService({ db, bucket, bootstrapSiteUserId: owner.subject });
@@ -136,7 +137,8 @@ test(
         assert.equal(rows.find(x => x.id === c.id).text, null);
         assert.equal(rows.find(x => x.id === r.id).text, '回复');
         assert.equal(rows.find(x => x.id === r.id).authorJerseyNumber, '01');
-        assert.equal(rows.find(x => x.id === r.id).replyTargetName, '木棉');
+        assert.equal(rows.find(x => x.id === r.id).replyToId, c.id);
+        assert.equal(rows.find(x => x.id === r.id).replyTargetName, null);
         assert.equal(rows.find(x => x.id === c.id).authorJerseyNumber, '07');
         assert.equal(Object.keys(rows[0]).some(key => /email|provider|subject/i.test(key)), false);
     }
@@ -270,6 +272,8 @@ test(
         assert.equal(ready.mime, 'video/mp4');
         assert.equal(ready.durationSec, 3);
         const v = await s.addVideo(owner, tr.id, { title: '合成上传', source: 'upload', uploadId: upload.id, position: 0 }, 'video');
+        assert.equal(v.publisherId, (await s.me(owner)).user.id);
+        assert.equal(v.publisherName, '领队');
         const response = await s.getMedia(alice, v.id, 'bytes=0-31');
         assert.equal(response.status, 206);
         assert.equal((await response.arrayBuffer()).byteLength, 32);
@@ -321,7 +325,7 @@ test(
             headers: {
                 Origin: 'https://kapok.test',
                 'Content-Type': 'application/json',
-                'X-Kapok-Actor': owner.subject,
+                'X-Kapok-Actor': await actorKey(owner),
                 'Idempotency-Key': 'http'
             },
             body: JSON.stringify(training)
@@ -331,7 +335,7 @@ test(
         assert.match(response.headers.get('Cache-Control'), /no-store/);
         const bad = new Request('https://kapok.test/api/v1/uploads/id/content', {
             method: 'PUT',
-            headers: { Origin: 'https://evil.test', 'X-Kapok-Actor': owner.subject, 'Idempotency-Key': 'put' },
+            headers: { Origin: 'https://evil.test', 'X-Kapok-Actor': await actorKey(owner), 'Idempotency-Key': 'put' },
             body: new Uint8Array(1)
         });
         assert.equal((await dispatchApi(bad, ['uploads', 'id', 'content'], owner, s)).status, 403);
@@ -872,10 +876,10 @@ test(
 
 test('mobile Bilibili share creates canonical persisted video with guarded replay',async t=>{
  const {s,db}=await fixture(t);const tr=await published(s);let calls=0;let challenged=false;
- t.mock.method(globalThis,'fetch',async()=>{calls++;return challenged?new Response(null,{status:200}):new Response(null,{status:302,headers:{location:'https://www.bilibili.com/video/BV1raQXYpEkG?spm_id_from=tracking'}});});
- const input={title:'分享验证',source:'bilibili',url:'【【华工飞盘】比赛-哔哩哔哩】 https://b23.tv/vP9CEuO',position:0};
+ t.mock.method(globalThis,'fetch',async()=>{calls++;return challenged?new Response(null,{status:200}):new Response(null,{status:302,headers:{location:'https://www.bilibili.com/video/BV1KapokTest?spm_id_from=tracking'}});});
+ const input={title:'分享验证',source:'bilibili',url:'【【合成比赛】回看-哔哩哔哩】 https://b23.tv/Example01',position:0};
  await reject(s.addVideo(alice,tr.id,input,'denied'),'FORBIDDEN');assert.equal(calls,0);
- const result=await s.addVideo(owner,tr.id,input,'share');assert.equal(result.url,'https://www.bilibili.com/video/BV1raQXYpEkG/');
+ const result=await s.addVideo(owner,tr.id,input,'share');assert.equal(result.url,'https://www.bilibili.com/video/BV1KapokTest/');
  challenged=true;await assert.rejects(s.addVideo(owner,tr.id,input,'share'),e=>e.status===503&&e.retryable);challenged=false;
  assert.equal((await s.addVideo(owner,tr.id,input,'share')).id,result.id);
  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM videos WHERE training_id=?').bind(tr.id).first()).n,1);

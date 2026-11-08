@@ -1,3 +1,4 @@
+import { sitesPrincipal } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -6,7 +7,7 @@ import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
 import { sha256 } from '../../lib/server/identity.ts';
 
-const author = { subject: 'author' }, coach = { subject: 'coach' }, admin = { subject: 'admin' };
+const author = sitesPrincipal('author'), coach = sitesPrincipal('coach'), admin = sitesPrincipal('admin');
 const body = { title: '保留标题', text: '逐字保留正文\n第二行 🥏', date: '2026-10-18', trainingId: null, videoId: null };
 const state = r => ({ expectedVersion: r.version, expectedSharingVersion: r.sharingVersion, expectedGeneration: r.generation });
 const denied = (promise, code) => assert.rejects(promise, e => e.code === code);
@@ -15,7 +16,7 @@ async function fixture(t) {
     const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("test")}}', compatibilityDate: '2026-05-22', d1Databases: ['DB'] });
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
-    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql') && x < '0005').sort()) {
+    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql') && (x < '0005' || ['0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql'].includes(x))).sort()) {
         for (const statement of split(await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8'))) await db.prepare(statement).run();
     }
     const options = { db, bootstrapSiteUserId: admin.subject, clock: () => new Date('2026-10-18T01:00:00.000Z') };

@@ -1,5 +1,6 @@
 import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
+import { runWithSitesIdentity } from "../lib/server/request-identity";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 export default {
@@ -23,6 +24,6 @@ export default {
         },
       };
     }
-    return runWithConnectorBinding(binding, () => handler.fetch(request, env, ctx));
+    return runWithSitesIdentity(() => runWithConnectorBinding(binding, () => handler.fetch(request, env, ctx)));
   },
 };

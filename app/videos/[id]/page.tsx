@@ -9,8 +9,7 @@ export default async function VideoPage({ params, searchParams }: {
     const { t } = await searchParams;
     const context = await getPageContext();
     const returnTo = safeReturnTo('/videos/' + id + (t !== undefined ? '?t=' + encodeURIComponent(t) : ''));
-    return <Shell title="训练视频" back="/trainings">
-        <EnvironmentNote />
-        {context.user && isMember(context.me) ? <VideoDiscussion actorId={context.user.userId} videoId={id} initialSeconds={t !== undefined ? /^\d+$/.test(t) ? Number(t) : Number.NaN : undefined} /> : <AccessState context={context} returnTo={returnTo} />}
+    return <Shell title="视频与讨论" back="/trainings" surface="video" canCompose={isMember(context.me)}>
+        {context.user && isMember(context.me) ? <VideoDiscussion actorId={context.user.userId} videoId={id} initialSeconds={t !== undefined ? /^\d+$/.test(t) ? Number(t) : Number.NaN : undefined} environmentNote={<EnvironmentNote />} /> : <div className="video-content video-access"><EnvironmentNote /><AccessState context={context} returnTo={returnTo} /></div>}
     </Shell>;
 }

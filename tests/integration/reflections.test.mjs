@@ -1,24 +1,15 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
-const admin = {
-    subject: 'admin'
-};
-const author = {
-    subject: 'author'
-};
-const member = {
-    subject: 'member'
-};
-const coach = {
-    subject: 'coach'
-};
-const outsider = {
-    subject: 'outsider'
-};
+const admin = sitesPrincipal('admin');
+const author = sitesPrincipal('author');
+const member = sitesPrincipal('member');
+const coach = sitesPrincipal('coach');
+const outsider = sitesPrincipal('outsider');
 const content = {
     title: '',
     text: '私人的训练思考',
@@ -438,7 +429,7 @@ test(
         assert.deepEqual((await s.listActivity(member)).items, []);
         const response = await dispatchApi(new Request('https://kapok.test/api/v1/activity'), ['activity'], member, s);
         assert.equal(response.status, 200);
-        assert.equal(response.headers.get('X-Kapok-Actor'), member.subject);
+        assert.equal(response.headers.get('X-Kapok-Actor'), await actorKey(member));
         assert.match(response.headers.get('cache-control'), /no-store/);
     }
 );
@@ -619,7 +610,7 @@ test(
                 headers: {
                     Origin: 'https://kapok.test',
                     'Content-Type': 'application/json',
-                    'X-Kapok-Actor': author.subject,
+                    'X-Kapok-Actor': await actorKey(author),
                     'Idempotency-Key': 'actor-stale'
                 },
                 body: JSON.stringify({

@@ -1,21 +1,35 @@
 import type { Principal } from '../contracts/index';
 import { DomainError } from './domain.ts';
 import type { Service } from './domain';
+import { actorKey } from './identity.ts';
 
-export const privateHeaders = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Cookie, oai-authenticated-user-id', 'X-Content-Type-Options': 'nosniff' };
+export const privateHeaders = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Cookie, oai-authenticated-user-id, Cf-Access-Jwt-Assertion', 'X-Content-Type-Options': 'nosniff' };
 export async function dispatchApi(request: Request, path: string[], principal: Principal | null, service: Service): Promise<Response> {
   const requestId = crypto.randomUUID();
+  let actor: string | undefined;
   try {
     if (!principal) throw new DomainError('UNAUTHENTICATED', '请先登录。', 401);
+    actor = await actorKey(principal);
     const route = path.join('/');
     const method = request.method;
     if (!['GET', 'HEAD'].includes(method)) {
       if (request.headers.get('Origin') !== new URL(request.url).origin) throw new DomainError('FORBIDDEN', '请从本站提交操作。', 403);
-      if (request.headers.get('X-Kapok-Actor') !== principal.subject) throw new DomainError('ACCOUNT_CHANGED', '登录账号已变化，请重新加载页面后再提交。', 409);
+      if (request.headers.get('X-Kapok-Actor') !== actor) throw new DomainError('ACCOUNT_CHANGED', '登录账号已变化，请重新加载页面后再提交。', 409);
       if (!(method === 'PUT' && /^uploads\/[^/]+\/content$/.test(route)) && !request.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')) throw new DomainError('INVALID_INPUT', '请提交JSON格式内容。', 415);
       if (!(method === 'PUT' && /^uploads\/[^/]+\/content$/.test(route)) && Number(request.headers.get('Content-Length') ?? 0) > (method === 'POST' && route === 'uploads' ? 80000 : 40000)) throw new DomainError('INVALID_INPUT', '提交内容过长。', 413);
     }
+    if (route === 'admin/invites' || route === 'internal/bootstrap') throw new DomainError('NOT_FOUND', '此功能暂不可用。', 404);
+    if (method === 'POST' && route === 'join' && principal.provider !== 'access') throw new DomainError('FORBIDDEN', '请使用已验证的邮箱账号完善资料。', 403);
+    const allowedBeforeJoining = (method === 'GET' && (route === 'bootstrap' || route === 'me')) || (method === 'POST' && route === 'join');
+    if (principal.provider === 'access' && !allowedBeforeJoining) await service.activeMember(principal);
     const key = request.headers.get('Idempotency-Key') ?? '';
+    let importPrecondition: unknown;
+    const importHeader = request.headers.get('X-Kapok-Import');
+    if (importHeader !== null) {
+      if (importHeader.length > 2000) throw new DomainError('INVALID_INPUT', '导入审批条件无效。');
+      try { importPrecondition = JSON.parse(importHeader); } catch { throw new DomainError('INVALID_INPUT', '导入审批条件无效。'); }
+      if (!importPrecondition || method !== 'POST' || !(route === 'trainings/publish' || /^trainings\/[^/]+\/videos$/.test(route))) throw new DomainError('INVALID_INPUT', '导入审批条件无效。');
+    }
     const maxBody = method === 'POST' && route === 'uploads' ? 80000 : 40000;
     const body = async () => {
       const reader = request.body?.getReader();
@@ -34,11 +48,9 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'POST' && route === 'me/leave') data = await service.leaveTeam(principal, await body(), key);
     else if (method === 'GET' && route === 'admin/members') data = await service.listManagedMembers(principal);
     else if (method === 'PATCH' && path[0] === 'admin' && path[1] === 'members' && path.length === 3) data = await service.updateMembership(principal, path[2], await body(), key);
-    else if (method === 'GET' && route === 'me') data = await service.me(principal);
-    else if (method === 'POST' && route === 'internal/bootstrap') data = await service.bootstrap(principal, await body(), key);
+    else if (method === 'GET' && route === 'me') data = await service.getAccount(principal);
     else if (method === 'POST' && route === 'join') data = await service.join(principal, await body(), key);
     else if (method === 'PATCH' && route === 'me') data = await service.updateProfile(principal, await body(), key);
-    else if (method === 'POST' && route === 'admin/invites') data = await service.createInvite(principal, await body(), key);
     else if (method === 'GET' && route === 'reflections') data = await service.listMyReflections(principal);
     else if (method === 'POST' && route === 'reflections') data = await service.saveReflection(principal, null, await body(), key);
     else if (method === 'POST' && path[0] === 'reflections' && path[2] === 'restore' && path.length === 3) data = await service.restoreReflection(principal, path[1], await body(), key);
@@ -58,11 +70,13 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'POST' && route === 'announcements') data = await service.saveAnnouncement(principal, null, await body(), key);
     else if (method === 'GET' && path[0] === 'announcements' && path.length === 2) data = await service.getAnnouncement(principal, path[1]);
     else if (method === 'PATCH' && path[0] === 'announcements' && path.length === 2) data = await service.saveAnnouncement(principal, path[1], await body(), key);
+    else if (method === 'GET' && route === 'trainings/import-inventory') data = await service.importInventory(principal);
     else if (method === 'GET' && route === 'trainings') data = await service.listTrainings(principal);
     else if (method === 'POST' && route === 'trainings') data = await service.saveTraining(principal, null, await body(), key);
-    else if (method === 'GET' && path[0] === 'trainings' && path.length === 2) data = await service.getTraining(principal, path[1]);
+    else if (method === 'POST' && route === 'trainings/publish') data = await service.publishTraining(principal, await body(), key, importPrecondition);
+    else if (method === 'GET' && path[0] === 'trainings' && path.length === 2) data = await service.getTraining(principal, path[1], new URL(request.url).searchParams.get('view') === 'member' ? 'member' : undefined);
     else if (method === 'PATCH' && path[0] === 'trainings' && path.length === 2) data = await service.saveTraining(principal, path[1], await body(), key);
-    else if (method === 'POST' && path[0] === 'trainings' && path[2] === 'videos' && path.length === 3) data = await service.addVideo(principal, path[1], await body(), key);
+    else if (method === 'POST' && path[0] === 'trainings' && path[2] === 'videos' && path.length === 3) data = await service.addVideo(principal, path[1], await body(), key, importPrecondition);
     else if (method === 'GET' && path[0] === 'videos' && path.length === 2) data = await service.getVideo(principal, path[1]);
     else if (method === 'PATCH' && path[0] === 'videos' && path.length === 2) data = await service.updateVideo(principal, path[1], await body(), key);
     else if (method === 'GET' && path[0] === 'videos' && path[2] === 'media' && path.length === 3) return await service.getMedia(principal, path[1], request.headers.get('Range'));
@@ -82,9 +96,9 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'POST' && path[0] === 'uploads' && path[2] === 'complete' && path.length === 3) { await emptyBody(); data = await service.completeUpload(principal, path[1], key); }
     else if (method === 'POST' && path[0] === 'uploads' && path[2] === 'cancel' && path.length === 3) { await emptyBody(); data = await service.cancelUpload(principal, path[1], key); }
     else throw new DomainError('NOT_FOUND', '此功能暂不可用。', 404);
-    return Response.json({ data, requestId }, { headers: { ...privateHeaders, 'X-Kapok-Actor': principal.subject } });
+    return Response.json({ data, requestId }, { headers: { ...privateHeaders, 'X-Kapok-Actor': actor } });
   } catch (error) {
     const known = error instanceof DomainError ? error : new DomainError('SERVICE_UNAVAILABLE', '暂时未能完成请求，请稍后重试。', 503, true);
-    return Response.json({ error: { code: known.code, message: known.message, retryable: known.retryable }, requestId }, { status: known.status, headers: { ...privateHeaders, ...(principal ? { 'X-Kapok-Actor': principal.subject } : {}) } });
+    return Response.json({ error: { code: known.code, message: known.message, retryable: known.retryable }, requestId }, { status: known.status, headers: { ...privateHeaders, ...(actor ? { 'X-Kapok-Actor': actor } : {}) } });
   }
 }

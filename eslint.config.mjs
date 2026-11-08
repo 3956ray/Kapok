@@ -10,7 +10,11 @@ const eslintConfig = defineConfig([
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
-    "build/**",
+    "build/**/*",
+    "!build/staging-worker.ts",
+    "!build/staging-wrangler.ts",
+    ".superpowers/sdd/**",
+    ".wrangler/staging-dry-run/**",
     "next-env.d.ts",
   ]),
   {

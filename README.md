@@ -1,40 +1,28 @@
 # Kapok
 
-Kapok 是一个面向团队的训练记录应用，支持记录训练、整理视频和复盘、查看成员信息与团队动态。应用使用 React、TypeScript 和 Vinext，后端运行于 Cloudflare Workers，数据结构和迁移使用 D1 与 Drizzle，媒体使用 R2 存储。
+Kapok Bloom 是队伍训练、比赛回看与成长记录工具。访问 [kapok.party](https://kapok.party)。
 
-本仓库中的代码来自已验收的 v14 源码快照（原工程提交 `d0483882`）。正在开发的“复盘分享与撤回”功能不包含在此版本中。
+- 用邮箱注册。先填盘名与背号，验证邮箱，确认后加入 Kapok 队伍。
+- 在训练记录观看 B 站视频，定位时间点、讨论和直接回复。
+- 收藏片段、保存私人备注、写复盘，按需要分享给全队或撤回。
+- 管理员可同页发布训练和可选视频，之后编辑、补视频及预览队员页面。
 
-## 本地开发
+后续开发请先读 [完整交接](HANDOFF.md) 和 [部署与恢复手册](docs/DEPLOYMENT.md)。[AGENTS.md](AGENTS.md) 是仓库内协作说明。
 
-需要 Node.js 22.13.0 或更新版本及 npm：
+## 本地验证
+
+使用 Node.js 24 和 npm。在干净的 checkout 运行：
 
 ```sh
 npm run install:ci
-npm run dev
-```
-
-开发服务器默认在本机的 5173 端口启动。项目包含本地开发用的模拟登录及 D1、R2 绑定；实际托管环境的身份认证和资源绑定需要按部署平台配置。安装方式、预览、数据库迁移和部署集成的详细说明见 [STARTER.md](STARTER.md)。
-
-## 常用检查
-
-```sh
-npm run typecheck
+npm run typecheck -- --incremental false
 npm run lint
-npm run test:integration
-npm run build
+node --test --test-concurrency=1 tests/integration/*.test.mjs
+npm run build:staging
+npm run test:staging
+npm run dry-run:staging
 ```
 
-## 目录
+`build:staging` 是历史命名，当前是 Cloudflare Worker 构建。普通克隆默认使用合成 D1、合成身份配置和测试视频编号，无远程路由。线上构建需要负责人提供正式配置和获准的队伍视频清单。生产数据、备份、账号会话和凭据均在受限环境管理。
 
-- `app/`、`components/`：页面与界面组件。
-- `lib/`：客户端逻辑、服务端业务逻辑和数据契约。
-- `db/`、`drizzle/`：数据库结构与迁移。
-- `build/`、`scripts/`：项目需要的构建和开发工具源码。
-- `tests/`：测试与合成测试素材。
-- `vendor/`：第三方资源及其许可证。
-
-依赖目录、构建输出、本地状态和环境变量文件不纳入仓库。历史验收截图、报告与本机运行资料不在此快照中。托管配置仅保留所需的绑定名称，不包含原项目的部署标识。
-
-## 许可证
-
-本仓库采用 [MIT 许可证](LICENSE)；第三方资源的许可证随对应文件保留。
+如需手动操作页面，按[本地浏览器验证步骤](HANDOFF.md#本地浏览器验证)启动合成环境。旧 Sites starter 手册见 [STARTER.md](STARTER.md)。

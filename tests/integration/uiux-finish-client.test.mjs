@@ -17,6 +17,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.BroadcastChannel = class { close() {} };
 globalThis.ResizeObserver = class { observe() {} disconnect() {} };
 dom.window.HTMLMediaElement.prototype.pause = function () {};
+dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 const { createRoot } = await import('react-dom/client');
 const { ReflectionSharing, ReflectionRead, ReflectionEditor } = await import('../../app/components/reflections.tsx');
 const { VideoDiscussion } = await import('../../app/components/video-discussion.tsx');
@@ -45,7 +47,7 @@ async function flush() { await act(async () => { await new Promise(resolve => se
 async function mount(node) { document.body.innerHTML = '<div id="root"></div>'; root = createRoot(document.getElementById('root')); await act(async () => root.render(node)); await flush(); }
 async function unmount() { await act(async () => root?.unmount()); root = null; }
 const buttons = text => [...document.querySelectorAll('button')].filter(b => b.textContent.includes(text));
-async function click(text) { const b = buttons(text)[0]; assert.ok(b, text); await act(async () => b.click()); await flush(); }
+async function click(text) { const b = buttons(text).find(b => b.closest('dialog[open]')) ?? buttons(text)[0]; assert.ok(b, text); await act(async () => b.click()); await flush(); }
 async function selectScope(value) { const node = document.querySelector(`input[type=radio][value=${value}]`); assert.ok(node); await act(async () => node.click()); await flush(); }
 async function input(node, value) { await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }); }
 async function lifecycle(name) { await act(async () => window.dispatchEvent(new Event(name))); await flush(); }
@@ -55,14 +57,13 @@ test('two-scope UI offers only private/team, cancels without write and keeps pub
     setup();
     try {
         await mount(h(ReflectionSharing, { actorId: 'A', id: 'r' }));
-        assert.equal(document.querySelector('.status-label').textContent, '仅自己');
+        assert.match(document.querySelector('.sharing-summary').textContent, /阅读：仅自己/);
         assert.deepEqual([...document.querySelectorAll('input[type=radio]')].map(x => x.value), ['private', 'team']);
         assert.equal(calls.some(c => c.path === 'coaches'), false);
         await selectScope('team');
-        let confirmation;
-        window.confirm = text => { confirmation = text; return false; };
-        await click('确认阅读范围');
-        assert.match(confirmation, /全队.*不会进入首页动态/);
+        await click('确认全队可读');
+        assert.match(document.querySelector('dialog').textContent, /现有及未来.*不会发布到动态/);
+        await act(async () => document.querySelector('dialog button').click());
         assert.equal(writes().length, 0);
         assert.equal(document.querySelector('input[type=radio]:checked').value, 'team');
         window.confirm = () => true;
@@ -72,9 +73,10 @@ test('two-scope UI offers only private/team, cancels without write and keeps pub
             data['reflections/r/edit'] = { ...reflection, scope: 'team', sharingVersion: 2 };
             return response(data['reflections/r/edit']);
         };
-        await click('确认阅读范围');
+        await click('确认全队可读');
+        await click('允许全队阅读');
         assert.equal(writes().length, 1);
-        assert.match(document.querySelector('.status-label').textContent, /全队可读.*未发布/);
+        assert.match(document.querySelector('.sharing-summary').textContent, /阅读：全队.*动态：未发布/);
         assert.equal(buttons('发布到动态').length, 1);
         assert.equal(calls.some(c => c.path.endsWith('/publication')), false);
         assert.equal(calls.some(c => c.path === 'coaches'), false);
@@ -199,13 +201,13 @@ test('two-scope sharing failure preserves selection and permits same-key retry w
     try {
         await mount(h(ReflectionSharing, { actorId: 'A', id: 'r' }));
         await selectScope('team');
-        await click('确认阅读范围');
-        assert.match(document.querySelector('[role=alert]').textContent, /保存暂不可用/);
+        await click('确认全队可读'); await click('允许全队阅读');
+        assert.match(document.querySelector('[role=alert]').textContent, /暂未确认操作结果/);
         assert.equal(document.querySelector('input[type=radio]:checked').value, 'team');
-        await click('确认阅读范围');
+        await click('核对结果');
         assert.equal(attempts, 2);
         assert.equal(writes()[0].options.headers['Idempotency-Key'], writes()[1].options.headers['Idempotency-Key']);
-        assert.match(document.querySelector('.status-label').textContent, /全队可读.*未发布/);
+        assert.match(document.querySelector('.sharing-summary').textContent, /阅读：全队.*动态：未发布/);
         assert.equal(calls.some(c => c.path === 'coaches' || c.path.endsWith('/publication')), false);
     } finally { await unmount(); }
 });

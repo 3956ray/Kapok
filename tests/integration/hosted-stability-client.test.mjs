@@ -10,25 +10,28 @@ for (const name of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInput
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.BroadcastChannel = class { close() {} };
 // Media decoding is outside this event/request regression; existing R1 tests instrument pause ordering.
+dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
 dom.window.HTMLMediaElement.prototype.pause = function () {};
 const { createRoot } = await import('react-dom/client');
-const { BootstrapScreen, HomeScreen } = await import('../../app/components/legacy-screens.tsx');
+const { JoinScreen, HomeScreen } = await import('../../app/components/legacy-screens.tsx');
 const { VideoDiscussion } = await import('../../app/components/video-discussion.tsx');
 const { AccountBoundary } = await import('../../app/components/secure-resource.tsx');
 const { api, createRequestKey } = await import('../../lib/client/api.ts');
 const { AccessState } = await import('../../app/components/shell.tsx');
 const h = React.createElement;
 const emptyMe = { user: null, profile: null, membership: null, team: null };
-const eligible = { siteUserId: 'A', initialized: false, canBootstrap: true, me: emptyMe };
-const initialized = { ...eligible, initialized: true, canBootstrap: false, me: { ...emptyMe, user: { id: 'user-A', status: 'active' }, membership: { id: 'm', status: 'active', role: 'admin', epoch: 1 } } };
+const eligible = { actorId: 'A', me: emptyMe };
+const initialized = { ...eligible, me: { ...emptyMe, user: { id: 'user-A', status: 'active' }, membership: { id: 'm', status: 'active', role: 'admin', epoch: 1 } } };
 let root, state, calls, override;
 const response = (data, actor = 'A') => new Response(JSON.stringify({ data }), { headers: { 'X-Kapok-Actor': actor } });
 async function settle() { await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); }); }
-async function mount(node = h(BootstrapScreen, { actorId: 'A' })) {
+async function mount(node = h(JoinScreen, { actorId: 'A', returnTo: '/trainings' })) {
+    window.sessionStorage.clear();
     calls = []; state = eligible; override = null;
     globalThis.fetch = async (url, options = {}) => {
         const path = String(url).replace('/api/v1/', ''); calls.push({ path, options });
-        return (await override?.(path, options)) ?? response(path === 'bootstrap' ? state : path.startsWith('activity?') ? { items: [], nextCursor: null } : path === 'videos/v' ? { id: 'v', title: 'synthetic video', source: 'upload', status: 'active', durationSec: 30, training: { id: 't', status: 'published' } } : []);
+        return (await override?.(path, options)) ?? response(path === 'bootstrap' ? state : path === 'me' ? state.me : path.startsWith('activity?') ? { items: [], nextCursor: null } : path === 'videos/v' ? { id: 'v', title: 'synthetic video', source: 'upload', status: 'active', durationSec: 30, training: { id: 't', status: 'published' } } : []);
     };
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root'));
@@ -42,7 +45,7 @@ const writes = () => calls.filter(call => call.options.method !== 'GET');
 async function input(node, value) { await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }); }
 async function submit() { await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); await settle(); }
 
-test('hosted bootstrap field focus is stable; passive window blur has honest status and read-only retry', async () => {
+test('hosted onboarding field focus is stable; passive window blur has honest status and read-only retry', async () => {
     try {
         await mount();
         const name = document.querySelector('[name=discName]');
@@ -63,7 +66,7 @@ test('hosted bootstrap field focus is stable; passive window blur has honest sta
     } finally { await unmount(); }
 });
 
-test('hosted bootstrap pending timeout is finite, stays concealed, and retry reads initialized truth', async t => {
+test('hosted onboarding timeout is finite and retry reads current membership', async t => {
     try {
         await mount();
         const name = document.querySelector('[name=discName]');
@@ -78,11 +81,10 @@ test('hosted bootstrap pending timeout is finite, stays concealed, and retry rea
         assert.equal(document.querySelector('[role=alert]').getAttribute('aria-busy'), 'false');
         override = null; state = initialized;
         await click('重新确认');
-        assert.match(document.body.textContent, /合成队伍已初始化/);
+        assert.match(document.body.textContent, /该账号已完成注册/);
         assert.equal(document.querySelector('form'), null);
-        assert.equal([...document.querySelectorAll('a')].find(a => a.textContent === '前往首页')?.getAttribute('href'), '/');
         await act(async () => finish(response(eligible))); await settle();
-        assert.equal(document.querySelector('form'), null, 'late timeout payload cannot restore initialization');
+        assert.equal(document.querySelector('form'), null, 'late timeout payload cannot reopen onboarding');
         assert.equal(writes().length, 0);
     } finally { t.mock.timers.reset(); await unmount(); }
 });
@@ -98,8 +100,8 @@ test('hosted superseded bootstrap response cannot end or reopen a newer verified
         assert.equal(oldSignal?.aborted, true);
         override = null; state = initialized;
         await lifecycle('pageshow');
-        await act(async () => finish(response({ ...eligible, siteUserId: 'B' }, 'B'))); await settle();
-        assert.match(document.body.textContent, /合成队伍已初始化/);
+        await act(async () => finish(response({ ...eligible, actorId: 'B' }, 'B'))); await settle();
+        assert.match(document.body.textContent, /该账号已完成注册/);
         assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, false);
         assert.equal(document.querySelector('form'), null);
         assert.equal(writes().length, 0);
@@ -144,7 +146,7 @@ test('hosted API bounds fetch and body waits; write timeout keeps result unknown
         }
         const key = createRequestKey(); const body = { discName: 'A', jerseyNumber: '01' }; const first = key('A', body);
         globalThis.fetch = async () => new Promise(() => {});
-        const write = api('internal/bootstrap', { method: 'POST', actorId: 'A', body, key: first });
+        const write = api('join', { method: 'POST', actorId: 'A', body, key: first });
         const rejected = assert.rejects(write, error => error.code === 'REQUEST_TIMEOUT' && /结果尚未确认/.test(error.message));
         t.mock.timers.tick(15_001);
         let completed = false; rejected.then(() => { completed = true; });
@@ -154,47 +156,42 @@ test('hosted API bounds fetch and body waits; write timeout keeps result unknown
     } finally { t.mock.timers.reset(); globalThis.fetch = original; }
 });
 
-test('hosted bootstrap lost committed response confirms current state without a second initialization', async t => {
+test('hosted lost enrollment response confirms current membership without a second write', async t => {
     try {
         await mount();
         t.mock.timers.enable({ apis: ['setTimeout'] });
         let committed = false, finishConfirmation;
         override = (path, options) => {
-            if (path === 'internal/bootstrap' && options.method === 'POST') { state = initialized; committed = true; return new Promise(() => {}); }
+            if (path === 'join' && options.method === 'POST') { state = initialized; committed = true; return new Promise(() => {}); }
             if (path === 'bootstrap' && committed) { committed = false; return new Promise(resolve => { finishConfirmation = resolve; }); }
             return null;
         };
+        await input(document.querySelector('[name=discName]'), '队员');
+        await input(document.querySelector('[name=jerseyNumber]'), '07');
         await submit();
+        await click('确认提交');
         assert.equal(writes().length, 1);
         await act(async () => t.mock.timers.tick(15_001)); await settle();
-        assert.match(document.querySelector('[role=status]').textContent, /正在确认上次初始化结果/);
+        assert.match(document.querySelector('[role=status]').textContent, /正在确认上次资料提交结果/);
         assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
         await act(async () => finishConfirmation(response(initialized))); await settle();
-        assert.match(document.body.textContent, /合成队伍已初始化/);
+        assert.match(document.body.textContent, /该账号已完成注册/);
         assert.equal(document.querySelector('form'), null);
         assert.equal(writes().length, 1);
-        assert.ok(!document.body.textContent.includes('邀请已复制'));
+        assert.equal(document.querySelector('[name=token]'), null);
     } finally { t.mock.timers.reset(); await unmount(); }
 });
 
-test('B normal onboarding retains invitation recovery without advertising restricted bootstrap', async () => {
+test('B verified unregistered Access session sees an explicit registration choice on the business entry', async () => {
     try {
-        await mount(h(AccessState, { context: { user: { userId: 'A' }, me: emptyMe, error: null } }));
-        assert.equal(document.querySelector('a[href="/internal/bootstrap"]'), null);
-        const link = [...document.querySelectorAll('a')].find(node => node.textContent === '确认邀请并建档');
-        assert.ok(link);
-        assert.equal(new URL(link.href).pathname, '/join');
-        assert.equal(new URL(link.href).searchParams.get('returnTo'), '/');
-        const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
-        let productPrevented;
-        const observe = click => { productPrevented = click.defaultPrevented; click.preventDefault(); };
-        // Observe after React's root handler, then prevent JSDOM's unsupported document navigation.
-        document.addEventListener('click', observe, { once: true });
-        await act(async () => link.dispatchEvent(event));
-        assert.equal(productPrevented, false);
+        const principal = { provider: 'access', issuer: 'https://example.test', subject: 'A', verifiedEmail: 'a@example.test' };
+        await mount(h(AccessState, { context: { user: { userId: 'A', principal }, me: emptyMe, error: null }, returnTo: '/growth' }));
+        assert.match(document.body.textContent, /该邮箱尚未注册/);
+        assert.ok(document.querySelector('a[href="/register?returnTo=%2Fgrowth"]'));
+        assert.equal(document.querySelector('form'), null);
+        assert.equal(document.querySelector('[name=token], a[href="/internal/bootstrap"]'), null);
     } finally { await unmount(); }
 });
-
 
 test('hosted actual Home/Video loader transport and body abort suppress late account/expiry signals', async () => {
     for (const screen of [HomeScreen, VideoDiscussion]) {
@@ -234,22 +231,28 @@ test('hosted actual Home/Video loader transport and body abort suppress late acc
     }
 });
 
-test('hosted bootstrap duplicate submit in one event turn issues only one initialization', async () => {
+test('hosted onboarding double submit issues only one enrollment', async () => {
     try {
         await mount();
         let finish;
-        override = (path, options) => path === 'internal/bootstrap' && options.method === 'POST' ? new Promise(resolve => { finish = resolve; }) : null;
+        override = (path, options) => path === 'join' && options.method === 'POST' ? new Promise(resolve => { finish = resolve; }) : null;
+        await input(document.querySelector('[name=discName]'), '队员');
+        await input(document.querySelector('[name=jerseyNumber]'), '07');
         const form = document.querySelector('form');
         await act(async () => {
             form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
             form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         }); await settle();
+        assert.equal(writes().length, 0);
+        const confirm = [...document.querySelectorAll('dialog button')].find(node => node.textContent === '确认提交');
+        await act(async () => { confirm.click(); confirm.click(); }); await settle();
         assert.equal(writes().length, 1);
-        await act(async () => finish(response({ me: initialized.me, inviteId: 'synthetic-invite', expiresAt: '2026-10-23' }))); await settle();
+        state = initialized;
+        await act(async () => finish(response({ me: initialized.me, returnTo: '/trainings' }))); await settle();
     } finally { await unmount(); }
 });
 
-test('hosted bootstrap visibility restore rechecks without flashing or losing same-account inputs', async () => {
+test('hosted onboarding visibility restore rechecks without flashing or losing same-account inputs', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
     try {
         await mount();
@@ -285,7 +288,7 @@ test('hosted bootstrap visibility restore rechecks without flashing or losing sa
     }
 });
 
-test('hosted bootstrap network failure keeps safe retry actionable across repeated failures', async () => {
+test('hosted onboarding network failure keeps safe retry actionable across repeated failures', async () => {
     try {
         await mount();
         const name = document.querySelector('[name=discName]');

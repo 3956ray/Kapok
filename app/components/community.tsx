@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useCallback, useRef, useState } from 'react';
+import { ChevronRight, Megaphone, NotebookPen, Video } from 'lucide-react';
 import type { ActivityPage, Announcement, PublicMember, PublicProfile } from '../../lib/contracts/reflections';
 import { acknowledgeMutation, clearFormUI, navigationBuffer, currentRoute, useNavigationField } from '../../lib/client/navigation-state';
-import { api, createRequestKey } from '../../lib/client/api';
+import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { SecureStatus, useSecureResource } from './secure-resource';
 import { ProfileSummary, RecordRow } from './presentation';
 export function MemberDirectory({
@@ -18,26 +19,40 @@ export function MemberDirectory({
     const [query, setQuery] = useNavigationField(actorId, 'member-search', '');
     const profile = id ? secure.data as PublicProfile | null : null;
     const members = id ? null : secure.data as PublicMember[] | null;
+    const matching = members?.filter(m => m.discName.includes(query) || m.jerseyNumber.includes(query));
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {members && <label>查找盘名或背号
+            {members && <label className="member-search">查找盘名或背号
                 <input type="search" value={query} placeholder="输入盘名或背号" onChange={e => setQuery(e.target.value)} />
             </label>}
-            {members && <section className="panel">
-                {members.filter(m => m.discName.includes(query) || m.jerseyNumber.includes(query)).map(m => <Link className="row-link" key={m.id} href={`/members/${m.id}`}>
-                    <span className="profile-summary"><span className="default-avatar" aria-label="默认头像">{Array.from(m.discName)[0] || '队'}</span><span>{m.discName}<small>背号 {m.jerseyNumber} · {m.role === 'coach' ? '教练' : m.role === 'admin' ? '管理员' : '队员'}</small></span></span><span aria-hidden="true">→</span>
+            {members && <section className="panel member-list" aria-label="成员列表">
+                {matching?.map(m => <Link className="row-link" key={m.id} href={`/members/${m.id}`}>
+                    <span className="profile-summary"><span className="default-avatar" aria-hidden="true">{Array.from(m.discName)[0] || '队'}</span><span>{m.discName}<small>背号 {m.jerseyNumber} · {m.role === 'coach' ? '教练' : m.role === 'admin' ? '管理员' : '队员'}</small></span></span><ChevronRight size={18} aria-hidden="true" />
                 </Link>)}
-                {!members.length ? <p>队伍暂时没有成员。</p> : !members.some(m => m.discName.includes(query) || m.jerseyNumber.includes(query)) && <p>没有匹配的成员。可以修改盘名或背号搜索。</p>}
+                {!members.length ? <p>队伍暂时没有成员。</p> : !matching?.length && <p role="status">没有匹配的成员。可以修改盘名或背号搜索。</p>}
             </section>}
             {profile && <>
-                <section className="panel"><ProfileSummary name={profile.discName} number={profile.jerseyNumber} role={profile.role === 'coach' ? '教练' : profile.role === 'admin' ? '管理员' : '队员'} /></section>
-                <h2 className="section">分享给全队的复盘</h2>
-                <section className="panel">{profile.reflections.length ? profile.reflections.map(r => <RecordRow key={r.id} date={r.date} href={`/reflections/${r.id}`} title={r.title || '训练复盘'} detail="全队可读" />) : <p>当前没有全队可读复盘。</p>}</section>
+                <section className="panel account-profile">
+                    <p className="workspace-overline">队内资料</p>
+                    <ProfileSummary name={profile.discName} number={profile.jerseyNumber} role={profile.role === 'coach' ? '教练' : profile.role === 'admin' ? '管理员' : '队员'} large />
+                </section>
+                <section className="section" aria-labelledby="member-shared-reflections">
+                    <div className="account-card-heading"><h2 id="member-shared-reflections">分享给全队的复盘</h2><span className="status-label">全队可读</span></div>
+                    <div className="panel member-reflections">
+                        {profile.reflections.length ? profile.reflections.map(r => <RecordRow key={r.id} date={r.date} href={`/reflections/${r.id}`} title={r.title || '训练复盘'} detail="全队可读" />) : <p>当前没有全队可读复盘。</p>}
+                    </div>
+                </section>
             </>}
         </div>
     </>;
 }
+const activityKinds = {
+    reflection: { label: '主动发布的复盘', Icon: NotebookPen },
+    video: { label: '新视频', Icon: Video },
+    announcement: { label: '队伍公告', Icon: Megaphone },
+};
+
 export function Activity({
     actorId,
     home = false
@@ -92,27 +107,25 @@ export function Activity({
             setBusy(false);
         }
     }
-    return <section className="section">
-
-        <div className="section-heading">
-            {home && <h2>队内动态</h2>}
-            {home && <Link href="/activity">查看全部动态</Link>}
-        </div>
-
+    return <section className={home ? 'section activity-feed' : 'activity-feed'} aria-label={home ? undefined : '动态列表'}>
+        {home && <div className="section-heading"><h2>队内动态</h2><Link href="/activity">查看全部动态</Link></div>}
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
 
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {secure.data && displayed.map(item => <article className="panel" key={item.id}>
-
-                <p className="muted">{item.kind === 'reflection' ? '主动发布的复盘' : item.kind === 'video' ? '新视频' : '队伍公告'} · {item.publishedAt.slice(0, 10)}</p>
-
-                <h2>
-                    <Link href={item.href}>{item.title || '训练复盘'}</Link>
-                </h2>
-
-                {item.updatedAt > item.publishedAt && <p className="muted">更新于 {item.updatedAt.slice(0, 10)}</p>}
-
-            </article>)}
+            {secure.data && displayed.map(item => {
+                const { label, Icon } = activityKinds[item.kind];
+                const Heading = home ? 'h3' : 'h2';
+                return <article className="panel activity-card" key={item.id}>
+                    <div className="activity-card-meta">
+                        <span className="quick-icon"><Icon size={17} aria-hidden="true" /></span>
+                        <span>{label}</span>
+                        <time dateTime={item.publishedAt}>{item.publishedAt.slice(0, 10)}</time>
+                    </div>
+                    <Heading><Link href={item.href}>{item.title || label}<ChevronRight size={17} aria-hidden="true" /></Link></Heading>
+                    {item.kind === 'video' && item.publisherName && <p className="small">发布者 {item.publisherName}</p>}
+                    {item.updatedAt > item.publishedAt && <p className="small">更新于 <time dateTime={item.updatedAt}>{item.updatedAt.slice(0, 10)}</time></p>}
+                </article>;
+            })}
             {secure.data && displayed.length === 0 && <p className="panel">还没有可读动态。训练与成长历史可从相应入口查看。</p>}
             {!home && next && <button className="secondary" disabled={busy} onClick={() => void load()}>{busy ? '正在加载…' : '加载更多'}</button>}
             {error && <p role="alert">{error}</p>}
@@ -131,10 +144,13 @@ export function AnnouncementRead({
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {secure.data && <article className="panel">
-                <h2>{secure.data.title}</h2>
-                <p>更新于 {secure.data.updatedAt.slice(0, 10)}</p>
-                <p className="preserve reflection-body">{secure.data.text}</p>
+            {secure.data && <article className="reflection-paper">
+                <div className="account-card-heading detail-meta">
+                    <span className="status-label">{secure.data.status === 'published' ? '队伍公告' : '管理员草稿'}</span>
+                    <span>更新于 <time dateTime={secure.data.updatedAt}>{secure.data.updatedAt.slice(0, 10)}</time></span>
+                </div>
+                <h2 className="detail-title">{secure.data.title}</h2>
+                <p id="body" className="preserve reflection-body">{secure.data.text}</p>
             </article>}
         </div>
     </>;
@@ -145,27 +161,31 @@ export function AnnouncementAdmin({
     actorId: string;
 }) {
     const secure = useSecureResource<Announcement[]>(actorId, 'announcements');
+    const [feedback, setFeedback] = useState<{ text: string; error: boolean } | null>(null);
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
-        <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
+        <div className="account-stack" data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
             {secure.data && <>
-                <details className="panel">
+                {feedback && <p className={feedback.error ? 'notice error' : 'notice success'} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
+                <details className="panel announcement-card">
                     <summary>创建公告</summary>
                     <AnnouncementForm
                         actorId={actorId}
+                        onFeedback={setFeedback}
                         refresh={secure.verify}
                         authorize={secure.authorize}
                         isCurrent={secure.isCurrent}
                     />
                 </details>
                 {secure.data.length === 0 && <section className="panel"><h2>还没有公告</h2><p>创建后先保存为草稿，确认发布才会出现在队内动态。</p></section>}
-                {secure.data.map(a => <details className="panel" key={a.id}>
-                    <summary>{a.title} · {a.status === 'published' ? '已发布' : '草稿'}</summary>
+                {secure.data.map(a => <details className="panel announcement-card" key={a.id}>
+                    <summary><span>{a.title}</span><span className="status-label">{a.status === 'published' ? '已发布' : '草稿'}</span></summary>
 
                     <AnnouncementForm
                         key={`${a.version}-${secure.authorizationStamp}`}
                         actorId={actorId}
                         item={a}
+                        onFeedback={setFeedback}
                         refresh={secure.verify}
                         authorize={secure.authorize}
                         isCurrent={secure.isCurrent}
@@ -179,22 +199,26 @@ export function AnnouncementAdmin({
 function AnnouncementForm({
     actorId,
     item,
+    onFeedback,
     refresh,
     authorize,
     isCurrent
 }: {
     actorId: string;
     item?: Announcement;
+    onFeedback: (feedback: { text: string; error: boolean } | null) => void;
     refresh: () => Promise<void>;
     authorize: () => Promise<number>;
     isCurrent: (token: number) => boolean;
 }) {
     const key = useRef(createRequestKey());
+    const submitting = useRef(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const formRef = useRef<HTMLFormElement>(null);
     async function save(status: string) {
-        if (busy || !formRef.current) return;
+        if (submitting.current || !formRef.current) return;
+        if (status !== 'deleted' && !formRef.current.reportValidity()) return;
         const form = new FormData(formRef.current);
         const body = {
             title: String(form.get('title')),
@@ -207,8 +231,10 @@ function AnnouncementForm({
         if (status === 'published' && !window.confirm('确认将公告发布到队内动态？')) return;
         if (item?.status === 'published' && status === 'draft' && !window.confirm('撤回这条公告？队内动态与阅读入口将停止展示。')) return;
         if (status === 'deleted' && !window.confirm('删除这条公告？各阅读入口将立即停止展示。')) return;
+        submitting.current = true;
         setBusy(true);
         setError('');
+        onFeedback(null);
         try {
             const token = await authorize();
             await api(
@@ -224,14 +250,20 @@ function AnnouncementForm({
             acknowledgeMutation(actorId, item ? 'PATCH' : 'POST', item ? `announcements/${item.id}` : 'announcements', body);
             clearFormUI(actorId, item?.id ?? 'announcement-new');
             if (!item) formRef.current?.reset();
+            onFeedback({ text: '公告变更已确认。', error: false });
             await refresh();
         } catch (e) {
-            setError(e instanceof Error ? e.message : '公告未能保存。');
+            const text = e instanceof Error ? e.message : '公告未能保存。';
+            if (e instanceof ApiError && ['VERSION_CONFLICT', 'FORBIDDEN', 'NOT_FOUND'].includes(e.code)) {
+                onFeedback({ text, error: true });
+                await refresh();
+            } else setError(text);
         } finally {
+            submitting.current = false;
             setBusy(false);
         }
     }
-    return <form data-buffer-id={item?.id ?? 'announcement-new'}
+    return <form data-buffer-id={item?.id ?? 'announcement-new'} aria-busy={busy}
         ref={formRef}
         onSubmit={e => {
             e.preventDefault();

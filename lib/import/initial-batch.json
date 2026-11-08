@@ -1,0 +1,85 @@
+{
+  "authorization": "Public local test fixture",
+  "status": "PUBLIC_TEST_FIXTURE",
+  "metadata_verification": "Synthetic BV identifiers for offline automated tests",
+  "items": [
+    {
+      "bvid": "BV1Kapok0001",
+      "url": "https://www.bilibili.com/video/BV1Kapok0001/",
+      "display_title": "合成视频示例 1",
+      "user_date_label": "1107",
+      "event_date": "2026-11-07",
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0002",
+      "url": "https://www.bilibili.com/video/BV1Kapok0002/",
+      "display_title": "合成视频示例 2",
+      "user_date_label": "1101",
+      "event_date": "2026-11-01",
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0003",
+      "url": "https://www.bilibili.com/video/BV1Kapok0003/",
+      "display_title": "合成视频示例 3",
+      "user_date_label": "1028",
+      "event_date": "2026-10-28",
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0004",
+      "url": "https://www.bilibili.com/video/BV1Kapok0004/",
+      "display_title": "合成视频示例 4",
+      "user_date_label": "1025",
+      "event_date": "2026-10-25",
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0005",
+      "url": "https://www.bilibili.com/video/BV1Kapok0005/",
+      "display_title": "合成视频示例 5",
+      "user_date_label": null,
+      "event_date": null,
+      "title_source": "user",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0006",
+      "url": "https://www.bilibili.com/video/BV1Kapok0006/",
+      "display_title": "合成视频示例 6",
+      "user_date_label": null,
+      "event_date": null,
+      "title_source": "user",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0007",
+      "url": "https://www.bilibili.com/video/BV1Kapok0007/",
+      "display_title": "合成视频示例 7",
+      "user_date_label": null,
+      "event_date": null,
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    },
+    {
+      "bvid": "BV1Kapok0008",
+      "url": "https://www.bilibili.com/video/BV1Kapok0008/",
+      "display_title": "合成视频示例 8",
+      "user_date_label": null,
+      "event_date": null,
+      "title_source": "temporary_label",
+      "status": "PUBLIC_TEST_FIXTURE"
+    }
+  ],
+  "initial_batch": [
+    "BV1Kapok0001",
+    "BV1Kapok0002",
+    "BV1Kapok0003",
+    "BV1Kapok0004"
+  ]
+}

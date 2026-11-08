@@ -1,4 +1,4 @@
-import { Shell, getPageContext, AccessState } from '../../components/shell';
+import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../../components/shell';
 import { ReflectionRead } from '../../components/reflections';
 export const dynamic = 'force-dynamic';
 export default async function ReflectionPage({
@@ -19,8 +19,8 @@ export default async function ReflectionPage({
     const {
         saved
     } = await searchParams;
-    return <Shell title="复盘阅读" back="/growth">
-        {context.user && context.me?.user?.status === 'active' ? <ReflectionRead
+    return <Shell title="复盘阅读" back="/growth" canCompose={isMember(context.me)}>
+        {context.user && canReadPersonal(context.user, context.me) ? <ReflectionRead
             key={context.user.userId + ':' + id}
             actorId={context.user.userId}
             id={id}

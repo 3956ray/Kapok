@@ -1,9 +1,10 @@
 import { resolveBilibiliShare } from './bilibili.ts';
 import type { Me, Principal } from '../contracts/index';
-import type { Training, Video, Comment, Collection, CollectionReflectionSeed } from '../contracts/training';
+import type { Training, TrainingPublication, Video, Comment, Collection, CollectionReflectionSeed } from '../contracts/training';
 import { DomainError, assertGuard } from './domain.ts';
 import type { StoredResult } from './domain';
 import type { Reflection } from '../contracts/reflections';
+import { actorKey, accessMembershipFence } from './identity.ts';
 import { reflectionShared } from './reflections.ts';
 import { createResumableUploads } from './resumable-upload.ts';
 import type { MediaPolicy, UploadPage, UploadReservation } from '../contracts/media';
@@ -18,6 +19,7 @@ type Op = {
     replay: {
         result: StoredResult;
     } | null;
+    rejectImportMapping: (predicate: string, values: unknown[]) => Promise<{ operationId: string; result: StoredResult } | null>;
     commit: (body: D1PreparedStatement[], result: StoredResult) => Promise<{
         result: StoredResult;
     }>;
@@ -30,7 +32,7 @@ type Dependencies = {
     clock: () => Date;
     me: (p: Principal | null) => Promise<Me>;
     activeMember: (p: Principal | null, admin?: boolean) => Promise<Context>;
-    operation: (actor: string, kind: string, target: string, key: string, input: unknown) => Promise<Op>;
+    operation: (actor: string, kind: string, target: string, key: string, input: unknown, prepareInput?: () => Promise<unknown>) => Promise<Op>;
 };
 function object(input: unknown, fields: string[]) {
     if(!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !fields.includes(k)))
@@ -41,6 +43,15 @@ function text(v: unknown, max: number, optional = false) {
     if(typeof v !== 'string' || (!optional && !v.trim()) || v.trim().length > max)
         throw new DomainError('INVALID_INPUT', `内容需为${optional ? '0' : '1'}–${max}字。`);
     return v.trim();
+}
+function trainingFields(r: Record<string, unknown>) {
+    const title = text(r.title, 80);
+    const description = text(r.description, 2000, true);
+    const date = text(r.date, 10);
+    const midnight = new Date(date + 'T00:00:00Z');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(midnight.getTime()) || midnight.toISOString().slice(0, 10) !== date)
+        throw new DomainError('INVALID_INPUT', '请检查日期与训练状态。');
+    return { title, date, description };
 }
 function version(v: unknown) {
     if(!Number.isSafeInteger(v) || Number(v) < 1)
@@ -60,7 +71,25 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     const now = () => clock().toISOString();
     const missing = () => new DomainError('NOT_FOUND', '内容不可用或当前无权查看。', 404);
     const trainingSelect = 'SELECT id,title,date,description,status,version,updated_at AS updatedAt FROM trainings';
-    const videoSelect = `SELECT v.id,v.training_id AS trainingId,v.title,v.source,v.url,v.position,v.status,v.version,u.duration_sec AS durationSec FROM videos v LEFT JOIN uploads u ON u.id=v.upload_id`;
+    const videoSelect = `SELECT v.id,v.training_id AS trainingId,v.title,v.source,v.url,v.position,v.status,v.version,
+        u.duration_sec AS durationSec,v.publisher_id AS publisherId,
+        (SELECT p.disc_name FROM profiles p JOIN users pu ON pu.id=p.user_id
+         WHERE p.user_id=v.publisher_id AND pu.status='active') AS publisherName
+        FROM videos v LEFT JOIN uploads u ON u.id=v.upload_id`;
+    function insertTraining(c: Context, id: string, fields: ReturnType<typeof trainingFields>, status: string) {
+        const at = now();
+        return q(
+            'INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            id, c.membership.teamId, fields.title, fields.date, fields.description, status, at, at
+        );
+    }
+    function insertVideo(c: Context, id: string, trainingId: string, video: Pick<Video, 'title' | 'source' | 'url' | 'position'>, uploadId: string | null) {
+        const at = now();
+        return q(
+            'INSERT INTO videos(id,training_id,team_id,title,source,url,upload_id,position,created_at,updated_at,publisher_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            id, trainingId, c.membership.teamId, video.title, video.source, video.url, uploadId, video.position, at, at, c.user.id
+        );
+    }
     function memberGuard(op: Op, c: Context, admin = false, phase = 'member') {
         return assertGuard(
             db,
@@ -103,6 +132,14 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             throw new DomainError('VERSION_CONFLICT', '内容或权限已经变化，请刷新后重试。', 409);
         }
     }
+    async function importInventory(p: Principal | null) {
+        const c = await activeMember(p, true);
+        const trainings = await q('SELECT id,title,date,status FROM trainings WHERE team_id=?', c.membership.teamId).all();
+        const videos = await q("SELECT id,training_id AS trainingId,title,source,url,position,status,publisher_id AS publisherId FROM videos WHERE team_id=? AND source='bilibili'", c.membership.teamId).all();
+        const after = await activeMember(p, true);
+        if (after.user.id !== c.user.id || after.membership.id !== c.membership.id || after.membership.teamId !== c.membership.teamId || after.membership.epoch !== c.membership.epoch) throw missing();
+        return { trainings: trainings.results, videos: videos.results };
+    }
     async function listTrainings(p: Principal | null) {
         const c = await activeMember(p);
         return (await q(
@@ -110,27 +147,34 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             c.membership.teamId
         ).all<Training>()).results;
     }
-    async function getTraining(p: Principal | null, id: string) {
-        const c = await activeMember(p);
-        const t = await q(
-            `${trainingSelect} WHERE id=? AND team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : "AND status IN ('published','archived')"}`,
+    async function getTraining(p: Principal | null, id: string, view?: 'member') {
+        const c = await activeMember(p, view === 'member');
+        const adminView = c.membership.role === 'admin' && view !== 'member';
+        const trainingQuery = q(
+            `${trainingSelect} WHERE id=? AND team_id=? ${adminView ? "AND status!='deleted'" : "AND status IN ('published','archived')"}`,
             id,
             c.membership.teamId
-        ).first<Training>();
+        );
+        const videoStatus = adminView ? "v.status IN ('active','hidden')" : "v.status='active'";
+        const videoQuery = q(`${videoSelect} WHERE v.training_id=? AND v.team_id=? AND ${videoStatus} ORDER BY v.position,v.id`, id, c.membership.teamId);
+        if(view === 'member') {
+            // Read the training and its member-visible videos from the same D1 snapshot.
+            const [training, videos] = await db.batch<Training | Video>([trainingQuery, videoQuery]);
+            const [t] = training.results as Training[];
+            if(!t) throw missing();
+            return { ...t, videos: videos.results as Video[] };
+        }
+        const t = await trainingQuery.first<Training>();
         if(!t)
             throw missing();
-        const videoStatus = c.membership.role === 'admin' ? "v.status IN ('active','hidden')" : "v.status='active'";
-        const videos = (await q(`${videoSelect} WHERE v.training_id=? AND v.team_id=? AND ${videoStatus} ORDER BY v.position,v.id`, id, c.membership.teamId).all<Video>()).results;
-        return { ...t, videos };
+        return { ...t, videos: (await videoQuery.all<Video>()).results };
     }
     async function saveTraining(p: Principal | null, id: string | null, input: unknown, key: string) {
         const c = await activeMember(p, true);
         const r = object(input, ['title', 'date', 'description', 'status', 'expectedVersion']);
-        const title = text(r.title, 80);
-        const description = text(r.description, 2000, true);
-        const date = text(r.date, 10);
+        const { title, date, description } = trainingFields(r);
         const status = text(r.status, 12);
-        if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || (!Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) || !['draft', 'published', 'archived', 'hidden', 'deleted'].includes(status))
+        if(!['draft', 'published', 'archived', 'hidden', 'deleted'].includes(status))
             throw new DomainError('INVALID_INPUT', '请检查日期与训练状态。');
         const expected = id ? version(r.expectedVersion) : null;
         const op = await operation(c.user.id, 'training', id ?? c.membership.teamId, key, { title, date, description, status, expected });
@@ -160,17 +204,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     ),
                     assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM trainings WHERE id=? AND version=?)', [id, expected! + 1])
                 ] : [
-                    q(
-                        'INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                        target,
-                        c.membership.teamId,
-                        title,
-                        date,
-                        description,
-                        status,
-                        now(),
-                        now()
-                    )
+                    insertTraining(c, target, { title, date, description }, status)
                 ],
                 { id: target },
                 true
@@ -182,6 +216,99 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         if (!saved) throw missing();
         return saved;
     }
+    async function importBinding(p: Principal | null, c: Context, value: unknown, trainingId: string | null) {
+        if (value === undefined) return null;
+        const r = object(value, ['actor', 'userId', 'teamId', 'membershipId', 'epoch', 'trainingDate', 'trainingId']);
+        if (!p || r.actor !== await actorKey(p) || r.userId !== c.user.id || r.teamId !== c.membership.teamId
+            || r.membershipId !== c.membership.id || r.epoch !== c.membership.epoch || r.trainingId !== trainingId
+            || typeof r.trainingDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.trainingDate))
+            throw new DomainError('VERSION_CONFLICT', '导入审批的账号、团队、权限版本或训练归属已变化，请重新核对。', 409);
+        return { trainingId, trainingDate: r.trainingDate };
+    }
+    type ImportMapping = { trainingId: string | null; trainingDate: string } | null;
+    function importMappingPredicate(c: Context, approved: NonNullable<ImportMapping>, videoUrl: string | null) {
+        const date = approved.trainingDate;
+        const mapping = approved.trainingId === null
+            ? { sql: 'NOT EXISTS(SELECT 1 FROM trainings WHERE team_id=? AND date=?)', values: [c.membership.teamId, date] }
+            : { sql: "(SELECT count(*) FROM trainings WHERE team_id=? AND date=?)=1 AND EXISTS(SELECT 1 FROM trainings WHERE id=? AND team_id=? AND date=? AND status='published')", values: [c.membership.teamId, date, approved.trainingId, c.membership.teamId, date] };
+        if (!videoUrl) return mapping;
+        // Reconciliation identifies a BVID independently of www, trailing slash,
+        // query/page and fragment. Include every status and publisher in this team.
+        const bvid = new URL(videoUrl).pathname.split('/')[2];
+        const prefixes = [`https://www.bilibili.com/video/${bvid}`, `https://bilibili.com/video/${bvid}`];
+        return {
+            sql: `(${mapping.sql}) AND NOT EXISTS(SELECT 1 FROM videos WHERE team_id=? AND source='bilibili' AND (${prefixes.map(() => "(substr(url,1,?)=? AND substr(url,?,1) IN ('','/','?','#'))").join(' OR ')}))`,
+            values: [...mapping.values, c.membership.teamId, ...prefixes.flatMap(prefix => [prefix.length, prefix, prefix.length + 1])],
+        };
+    }
+    function importMappingGuard(op: Op, c: Context, approved: ImportMapping, date: string, videoUrl: string | null) {
+        if (!approved) return [];
+        if (approved.trainingDate !== date) throw new DomainError('VERSION_CONFLICT', '导入训练日期已变化。', 409);
+        const predicate = importMappingPredicate(c, approved, videoUrl);
+        return [assertGuard(db, op.opId, 'import-mapping', predicate.sql, predicate.values)];
+    }
+    async function commitImport(op: Op, c: Context, approved: ImportMapping, body: D1PreparedStatement[], result: StoredResult, videoUrl: string | null) {
+        const classify = async () => {
+            if (!approved) return null;
+            const mapping = importMappingPredicate(c, approved, videoUrl);
+            // Do not unlock on account/epoch changes. An existing successful receipt wins.
+            return op.rejectImportMapping(`NOT (${mapping.sql}) AND EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.id=? AND m.user_id=? AND m.team_id=? AND m.epoch=? AND m.status='active' AND m.role='admin' AND u.status='active')`,
+                [...mapping.values, c.membership.id, c.user.id, c.membership.teamId, c.membership.epoch]);
+        };
+        const replay = await classify();
+        if (replay) return replay;
+        try { return await commit(op, c, body, result, true); }
+        catch (error) {
+            // Unknown transport/commit outcomes are never classified as no-commit.
+            if (error instanceof DomainError && error.code === 'VERSION_CONFLICT') {
+                const committed = await classify();
+                if (committed) return committed;
+            }
+            throw error;
+        }
+    }
+    async function publishTraining(p: Principal | null, input: unknown, key: string, precondition?: unknown): Promise<TrainingPublication> {
+        const c = await activeMember(p, true);
+        const approved = await importBinding(p, c, precondition, null);
+        const raw = object(input, ['title', 'date', 'description', 'video']);
+        const fields = trainingFields(raw);
+        const entry = raw.video === undefined ? null : object(raw.video, ['title', 'url']);
+        const rawVideo = entry ? { title: text(entry.title, 80), url: entry.url } : null;
+        const normalize = async () => ({
+            ...fields,
+            video: rawVideo ? { title: rawVideo.title, url: await resolveBilibiliShare(rawVideo.url) } : null,
+        });
+        let normalized: ReturnType<typeof normalize> | undefined;
+        const prepare = () => normalized ??= normalize();
+        const op = await operation(c.user.id, 'training-publish', c.membership.teamId, key, { ...fields, video: rawVideo }, prepare);
+        let receipt = op.replay?.result;
+        if(!receipt) {
+            const id = crypto.randomUUID();
+            const { video } = await prepare();
+            const statements = [...importMappingGuard(op, c, approved, fields.date, video?.url ?? null), insertTraining(c, id, fields, 'published')];
+            const videoId = video ? crypto.randomUUID() : undefined;
+            if(video && videoId) {
+                statements.push(
+                    insertVideo(c, videoId, id, { ...video, source: 'bilibili', position: 0 }, null),
+                    assertGuard(db, op.opId, 'video-event',
+                        `EXISTS(SELECT 1 FROM videos v JOIN video_events e ON e.video_id=v.id
+                                WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.publisher_id=?)`,
+                        [videoId, id, c.membership.teamId, c.user.id])
+                );
+            }
+            receipt = (await commitImport(op, c, approved, statements, { id, videoId }, video?.url ?? null)).result;
+        }
+        const current = await activeMember(p, true);
+        if(current.user.id !== c.user.id || current.membership.teamId !== c.membership.teamId)
+            throw new DomainError('FORBIDDEN', '当前账号没有此操作权限。', 403);
+        const savedTraining = await q(`${trainingSelect} WHERE id=? AND team_id=? AND status!='deleted'`, receipt.id, current.membership.teamId).first<Training>();
+        if(!savedTraining) throw missing();
+        const savedVideo = receipt.videoId
+            ? await q(`${videoSelect} WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.status!='deleted'`, receipt.videoId, savedTraining.id, current.membership.teamId).first<Video>()
+            : null;
+        if(receipt.videoId && !savedVideo) throw missing();
+        return { training: savedTraining, video: savedVideo };
+    }
     async function getVideo(p: Principal | null, id: string) {
         const c = await activeMember(p);
         const v = await q(`${videoSelect} WHERE v.id=? AND v.team_id=? AND v.status='active'`, id, c.membership.teamId).first<Video>();
@@ -190,8 +317,9 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const training = await getTraining(p, v.trainingId);
         return { ...v, training };
     }
-    async function addVideo(p: Principal | null, trainingId: string, input: unknown, key: string) {
+    async function addVideo(p: Principal | null, trainingId: string, input: unknown, key: string, precondition?: unknown) {
         const c = await activeMember(p, true);
+        const approved = await importBinding(p, c, precondition, trainingId);
         const r = object(input, ['title', 'source', 'url', 'uploadId', 'position']);
         const t = await getTraining(p, trainingId);
         if(!['draft', 'published'].includes(t.status))
@@ -207,7 +335,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const op = await operation(c.user.id, 'video-add', trainingId, key, { title, source, url, uploadId, position: r.position });
         let id = op.replay?.result.id ?? crypto.randomUUID();
         if(!op.replay) {
-            const body = [trainingGuard(op, trainingId, c.membership.teamId)];
+            const body = [...importMappingGuard(op, c, approved, t.date, url), trainingGuard(op, trainingId, c.membership.teamId)];
             if(uploadId)
                 body.push(assertGuard(
                     db,
@@ -216,20 +344,8 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     "EXISTS(SELECT 1 FROM uploads WHERE id=? AND team_id=? AND owner_id=? AND status='ready' AND cleanup_state='none' AND transfer_active=0)",
                     [uploadId, c.membership.teamId, c.user.id]
                 ));
-            body.push(q(
-                'INSERT INTO videos(id,training_id,team_id,title,source,url,upload_id,position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                id,
-                trainingId,
-                c.membership.teamId,
-                title,
-                source,
-                url,
-                uploadId,
-                r.position,
-                now(),
-                now()
-            ));
-            id = (await commit(op, c, body, { id }, true)).result.id!;
+            body.push(insertVideo(c, id, trainingId, { title, source, url, position: Number(r.position) }, uploadId));
+            id = (await commitImport(op, c, approved, body, { id }, url)).result.id!;
         }
         return getVideo(p, id);
     }
@@ -273,20 +389,35 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     async function listComments(p: Principal | null, videoId: string) {
         await getVideo(p, videoId);
         return (await q(
-            `SELECT c.id,c.video_id AS videoId,c.root_id AS rootId,c.author_id AS authorId,p.disc_name AS authorName,p.jersey_number AS authorJerseyNumber,rp.disc_name AS replyTargetName,CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,c.timestamp_sec AS timestampSec,c.status,c.version,c.created_at AS createdAt,CASE WHEN c.updated_at!=c.created_at THEN 1 ELSE 0 END AS edited FROM video_comments c JOIN profiles p ON p.user_id=c.author_id LEFT JOIN video_comments root ON root.id=c.root_id LEFT JOIN profiles rp ON rp.user_id=root.author_id WHERE c.video_id=? ORDER BY c.created_at,c.id`,
+            `SELECT c.id,c.video_id AS videoId,c.root_id AS rootId,c.reply_to_id AS replyToId,
+                c.author_id AS authorId,p.disc_name AS authorName,p.jersey_number AS authorJerseyNumber,rp.disc_name AS replyTargetName,
+                CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,c.timestamp_sec AS timestampSec,c.status,c.version,
+                c.created_at AS createdAt,CASE WHEN c.updated_at!=c.created_at THEN 1 ELSE 0 END AS edited
+            FROM video_comments c JOIN profiles p ON p.user_id=c.author_id
+            LEFT JOIN video_comments target ON target.id=COALESCE(c.reply_to_id,c.root_id)
+                AND target.video_id=c.video_id AND target.team_id=c.team_id AND target.status='active'
+                AND COALESCE(target.root_id,target.id)=c.root_id
+            LEFT JOIN profiles rp ON rp.user_id=target.author_id
+            WHERE c.video_id=? ORDER BY c.created_at,c.id`,
             videoId
         ).all<Comment>()).results;
     }
+    const replyTarget = `FROM video_comments target
+        JOIN video_comments root ON root.id=COALESCE(target.root_id,target.id)
+            AND root.video_id=target.video_id AND root.team_id=target.team_id AND root.root_id IS NULL AND root.status='active'
+        WHERE target.id=? AND target.video_id=? AND target.team_id=? AND target.status='active'`;
     async function saveComment(p: Principal | null, videoId: string, id: string | null, input: unknown, key: string) {
         const c = await activeMember(p);
         const v = await getVideo(p, videoId);
-        const r = object(input, ['text', 'timestampSec', 'rootId', 'expectedVersion', 'action']);
+        const r = object(input, ['text', 'timestampSec', 'rootId', 'expectedVersion', 'action', ...(id ? [] : ['replyToId'])]);
         if(v.training.status !== 'published')
             throw new DomainError('READ_ONLY', '此训练暂不接受新讨论或修改。', 409);
         const action = r.action === 'delete' ? 'delete' : 'save';
         const bodyText = action === 'delete' ? '' : text(r.text, 2000);
         const timestampSec = seconds(r.timestampSec, v.durationSec);
-        const rootId = r.rootId == null ? null : text(r.rootId, 80);
+        let rootId = r.rootId == null ? null : text(r.rootId, 80);
+        const directId = r.replyToId == null ? null : text(r.replyToId, 80);
+        const replyToId = id ? null : directId ?? rootId;
         const expected = id ? version(r.expectedVersion) : null;
         if(id) {
             const old = await q('SELECT author_id FROM video_comments WHERE id=? AND video_id=? AND team_id=?', id, videoId, c.membership.teamId).first<{
@@ -297,14 +428,14 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             if(old.author_id !== c.user.id)
                 throw new DomainError('FORBIDDEN', '只能编辑或删除自己的讨论。', 403);
         }
-        if(rootId && !id && !await q(
-            "SELECT id FROM video_comments WHERE id=? AND video_id=? AND team_id=? AND root_id IS NULL AND status='active'",
-            rootId,
-            videoId,
-            c.membership.teamId
-        ).first())
-            throw new DomainError('INVALID_INPUT', '回复对象必须是同视频的有效根讨论。');
-        const op = await operation(c.user.id, 'comment', id ?? videoId, key, { bodyText, timestampSec, rootId, expected, action });
+        if(replyToId) {
+            const root = await q(`SELECT root.id ${replyTarget}`, replyToId, videoId, c.membership.teamId).first<{ id: string }>();
+            if(!root || (rootId !== null && root.id !== rootId))
+                throw new DomainError('INVALID_INPUT', '回复对象必须属于同视频的有效讨论。');
+            rootId = root.id;
+        }
+        // Keep root-only callers compatible with receipts written before direct replies.
+        const op = await operation(c.user.id, 'comment', id ?? videoId, key, { bodyText, timestampSec, rootId, expected, action, ...(directId ? { replyToId: directId } : {}) });
         let target = op.replay?.result.id ?? id ?? crypto.randomUUID();
         if(!op.replay) {
             const guards = [
@@ -323,13 +454,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     [videoId, c.membership.teamId]
                 )
             ];
-            if(rootId && !id)
+            if(replyToId)
                 guards.push(assertGuard(
                     db,
                     op.opId,
-                    'root',
-                    "EXISTS(SELECT 1 FROM video_comments WHERE id=? AND video_id=? AND team_id=? AND root_id IS NULL AND status='active')",
-                    [rootId, videoId, c.membership.teamId]
+                    'reply-target',
+                    `EXISTS(SELECT 1 ${replyTarget} AND root.id=?)`,
+                    [replyToId, videoId, c.membership.teamId, rootId]
                 ));
             if(id)
                 guards.push(
@@ -354,12 +485,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                 );
             else
                 guards.push(q(
-                    'INSERT INTO video_comments(id,video_id,team_id,author_id,root_id,text,timestamp_sec,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO video_comments(id,video_id,team_id,author_id,root_id,reply_to_id,text,timestamp_sec,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
                     target,
                     videoId,
                     c.membership.teamId,
                     c.user.id,
                     rootId,
+                    replyToId,
                     bodyText,
                     timestampSec,
                     now(),
@@ -443,7 +575,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const c = await me(p);
         if(c.user?.status !== 'active')
             throw new DomainError('FORBIDDEN', '请先完成建档。', 403);
-        return c.user.id;
+        return { ...c, user: c.user };
     }
     async function resolveSource(p: Principal | null, kind: string, id: string, timestampSec: number | null = null) {
         try {
@@ -476,16 +608,22 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         }
     }
     async function listCollections(p: Principal | null) {
-        const owner = await personal(p);
+        const c = await personal(p);
+        const owner = c.user.id;
+        const access = accessMembershipFence(p, c);
         const rows = (await q(
-            'SELECT id,source_kind AS sourceKind,source_id AS sourceId,timestamp_sec AS timestampSec,private_note AS privateNote,version,created_at AS createdAt FROM collections WHERE owner_id=? ORDER BY created_at DESC,id DESC',
-            owner
+            `SELECT id,source_kind AS sourceKind,source_id AS sourceId,timestamp_sec AS timestampSec,private_note AS privateNote,version,created_at AS createdAt
+                FROM collections WHERE owner_id=? AND ${access.predicate} ORDER BY created_at DESC,id DESC`,
+            owner, ...access.values
         ).all<Omit<Collection, 'source'>>()).results;
         return Promise.all(rows.map(async (r) => ({ ...r, source: await resolveSource(p, r.sourceKind, r.sourceId, r.timestampSec) })));
     }
     async function getCollectionReflectionSeed(p: Principal | null, id: string): Promise<CollectionReflectionSeed> {
-        const owner = await personal(p);
-        const row = await q('SELECT source_kind,source_id,private_note FROM collections WHERE id=? AND owner_id=?', id, owner).first<{
+        const c = await personal(p);
+        const owner = c.user.id;
+        const access = accessMembershipFence(p, c);
+        const row = await q(`SELECT source_kind,source_id,private_note FROM collections WHERE id=? AND owner_id=? AND ${access.predicate}`,
+            id, owner, ...access.values).first<{
             source_kind: string; source_id: string; private_note: string;
         }>();
         if (!row) throw missing();
@@ -517,11 +655,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             if (!(e instanceof DomainError && [403, 404].includes(e.status))) throw e;
         }
         // Source access may disappear independently; the owner's saved note remains theirs.
-        if (await personal(p) !== owner) throw missing();
+        if ((await personal(p)).user.id !== owner) throw missing();
         return { text: row.private_note, trainingId, videoId };
     }
     async function saveCollection(p: Principal | null, id: string | null, input: unknown, key: string) {
-        const owner = await personal(p);
+        const c = await personal(p);
+        const owner = c.user.id;
+        const access = accessMembershipFence(p, c);
         const r = object(input, ['sourceKind', 'sourceId', 'timestampSec', 'privateNote', 'expectedVersion', 'action']);
         const action = r.action === 'delete' ? 'delete' : 'save';
         const note = action === 'delete' ? '' : text(r.privateNote ?? '', 2000, true);
@@ -595,7 +735,8 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         let target = op.replay?.result.id ?? old?.id ?? crypto.randomUUID();
         if(!op.replay) {
             const guards = [
-                assertGuard(db, op.opId, 'owner', "EXISTS(SELECT 1 FROM users WHERE id=? AND status='active')", [owner])
+                assertGuard(db, op.opId, 'owner', `EXISTS(SELECT 1 FROM users WHERE id=? AND status='active') AND ${access.predicate}`,
+                    [owner, ...access.values])
             ];
             if(id) {
                 guards.push(
@@ -1267,9 +1408,11 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         return new Response(file.body, { status: range ? 206 : 200, headers });
     }
     return {
+        importInventory,
         listTrainings,
         getTraining,
         saveTraining,
+        publishTraining,
         getVideo,
         addVideo,
         updateVideo,

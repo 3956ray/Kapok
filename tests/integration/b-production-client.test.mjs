@@ -63,15 +63,18 @@ test('B member/admin freeze13, edit/remove/no-time, explicit reply failure and c
   await mount(VideoDiscussion);const player=document.querySelector('video');Object.defineProperty(player,'readyState',{configurable:true,value:1});Object.defineProperty(player,'duration',{configurable:true,value:60});
   player.currentTime=13.9;await act(async()=>player.dispatchEvent(new Event('loadedmetadata')));await click('添加当前视频时间');
   player.currentTime=29;assert.equal(document.querySelector('input[type=number]').value,'13');
-  await click('回复');assert.match(document.body.textContent,/回复 阿禾/);await input(document.querySelector('#comment-input'),'原卡回复');
-  override=(path,options)=>{if(options.method==='POST')throw new Error('断网未保存');};await click('发送讨论');
-  assert.equal(document.querySelector('#comment-input').value,'原卡回复');assert.equal(document.querySelector('input[type=number]').value,'13');assert.equal(JSON.parse(writes()[0].options.body).rootId,'c');
-  await click('取消');assert.equal(document.querySelector('#comment-input').value,'');assert.equal(document.querySelector('input[type=number]').value,'');
+  await click('回复');assert.match(document.body.textContent,/回复 阿禾/);assert.equal(document.querySelector('input[type=number]').value,'');
+  await input(document.querySelector('#comment-input'),'原卡回复');await click('添加当前视频时间');
+  override=(path,options)=>{if(options.method==='POST')throw new Error('断网未保存');};await click('发送回复');
+  assert.equal(document.querySelector('#comment-input').value,'原卡回复');assert.equal(document.querySelector('input[type=number]').value,'29');
+  assert.deepEqual(JSON.parse(writes()[0].options.body),{text:'原卡回复',timestampSec:29,rootId:'c',replyToId:'c'});
+  await click('取消回复');assert.equal(document.querySelector('#comment-input').value,'');assert.equal(document.querySelector('input[type=number]').value,'13');
+  await click('去掉时间点');
   override=null;await input(document.querySelector('#comment-input'),'无时间新讨论');await click('发送讨论');assert.deepEqual(JSON.parse(writes().at(-1).options.body),{text:'无时间新讨论',timestampSec:null,rootId:null});
   assert.equal(document.querySelector('#comment-input').rows,1);
  }finally{await unmount();}}
 });
-test('B replies stay inside root card with identity and actual posted time',async()=>{setup();data['videos/v/comments']=[comment,{...comment,id:'reply',authorName:'木棉',authorJerseyNumber:'07',rootId:'c',replyTargetName:'阿禾',text:'同卡回复'}];try{await mount(VideoDiscussion);assert.equal(document.querySelectorAll('.discussion-card').length,1);const reply=document.querySelector('.reply');assert.equal(reply.closest('.discussion-card'),document.querySelector('.discussion-card'));assert.ok(reply.parentElement.classList.contains('discussion-replies'));assert.equal(reply.parentElement.style.marginLeft,'');assert.match(reply.textContent,/木棉.*07.*回复 阿禾.*发表于/);assert.ok(reply.querySelector('.default-avatar'));}finally{await unmount();}});
+test('B replies stay inside root card with identity and actual posted time',async()=>{setup();data['videos/v/comments']=[comment,{...comment,id:'reply',authorId:'u',authorName:'木棉',authorJerseyNumber:'07',rootId:'c',replyTargetName:'阿禾',text:'同卡回复'}];try{await mount(VideoDiscussion);assert.equal(document.querySelectorAll('.discussion-card').length,1);const reply=document.querySelector('.reply');assert.equal(reply.closest('.discussion-card'),document.querySelector('.discussion-card'));assert.ok(reply.matches('.discussion-replies > ol > li > .reply'));assert.equal(reply.querySelector('time').dateTime,comment.createdAt);assert.match(reply.textContent,/木棉.*07.*回复 阿禾.*发表于/);assert.ok(reply.querySelector('.default-avatar'));}finally{await unmount();}});
 test('B profile return restores React state, cancel does not PATCH, success and later input truth',async()=>{setup('/me/edit');try{
  await mount(ProfileEditor);await input(document.querySelector('[name=discName]'),'返回保留');await unmount();await mount(ProfileEditor);assert.equal(document.querySelector('[name=discName]').value,'返回保留');
  let finish;override=(path,options)=>path==='me'&&options.method==='PATCH'?new Promise(resolve=>{finish=resolve;}):null;
@@ -145,7 +148,7 @@ test('B manual time editing confirms or cancels before changing the frozen annot
  }finally{await unmount();}
 });
 test('B unavailable reply keeps private draft and target while blocking silent top-level submission',async()=>{
- setup();try{await mount(VideoDiscussion);await click('回复');await input(document.querySelector('#comment-input'),'仅本人的未提交回复');await unmount();data['videos/v/comments']=[{...comment,text:null,status:'deleted'}];await mount(VideoDiscussion);assert.equal(document.querySelector('#comment-input').value,'仅本人的未提交回复');const composer=document.querySelector('[data-own-buffer]');assert.match(composer.textContent,/回复 当前不可用的讨论/);assert.ok(!composer.textContent.includes('阿禾'));await click('发送讨论');assert.equal(writes().length,0);await click('取消回复并清除草稿');assert.equal(document.querySelector('#comment-input').value,'');
+ setup();try{await mount(VideoDiscussion);await click('回复');await input(document.querySelector('#comment-input'),'仅本人的未提交回复');await unmount();data['videos/v/comments']=[{...comment,text:null,status:'deleted'}];await mount(VideoDiscussion);assert.equal(document.querySelector('#comment-input').value,'仅本人的未提交回复');const composer=document.querySelector('[data-own-buffer]');assert.match(composer.textContent,/回复 当前不可用的讨论/);assert.ok(!composer.textContent.includes('阿禾'));await click('发送回复');assert.equal(writes().length,0);await click('取消回复');assert.equal(document.querySelector('#comment-input').value,'');
  }finally{await unmount();}
 });
 test('B explicit new-version profile submit uses freshly read truth without replacing the owner input',async()=>{
@@ -157,16 +160,20 @@ test('B confirmed inactive account drops mounted input and cannot restore it on 
  }finally{await unmount();}
 });
 
-for (const [kind, path, submitLabel] of [['profile','/me/edit','保存资料'],['join','/join','保存资料并加入'],['bootstrap','/internal/bootstrap','初始化合成队伍']]) {
+for (const [kind, path, submitLabel, retryLabel] of [['profile','/me/edit','保存资料','保存资料'],['join','/join','保存资料并加入','核对上次入队请求']]) {
  test(`B fix1 ${kind} composes both restored fields and retries unknown exact body/key`, async()=>{
-  setup(path);const {JoinScreen,BootstrapScreen}=await import('../../app/components/legacy-screens.tsx');
-  if(kind!=='profile')data.bootstrap={siteUserId:'A',initialized:false,canBootstrap:true,me:{user:null,profile:null,membership:null,team:null}};
-  const screen=kind==='profile'?ProfileEditor:kind==='join'?()=>React.createElement(JoinScreen,{actorId:'A',token:'valid-synthetic-token',returnTo:'/growth'}):BootstrapScreen;
+  setup(path);const {JoinScreen}=await import('../../app/components/legacy-screens.tsx');
+  if(kind==='join'){
+   data.me={user:null,profile:null,membership:null,team:null};
+   data.bootstrap={siteUserId:'A',initialized:false,canBootstrap:true,me:data.me};
+  }
+  const screen=kind==='profile'?ProfileEditor:()=>React.createElement(JoinScreen,{actorId:'A',returnTo:'/growth'});
   override=(_path,options)=>{if(options.method==='PATCH'||options.method==='POST')throw new Error('lost response');return null;};
   try{await mount(screen);await input(document.querySelector('[name=discName]'),'RestoredName');await input(document.querySelector('[name=jerseyNumber]'),'19');await click(submitLabel);
+   if(kind==='join')await click('确认提交');
    const original=writes()[0];assert.equal(JSON.parse(original.options.body).discName,'RestoredName');assert.equal(JSON.parse(original.options.body).jerseyNumber,'19');
-   await unmount();await mount(screen);assert.equal(document.querySelector('[name=discName]').value,'RestoredName');assert.equal(document.querySelector('[name=jerseyNumber]').value,'19');assert.equal(writes().length,1);
-   await click(submitLabel);assert.equal(writes().length,2);assert.equal(writes()[1].options.body,original.options.body);assert.equal(writes()[1].options.headers['Idempotency-Key'],original.options.headers['Idempotency-Key']);
+   await unmount();if(kind==='join')clearNavigationActor('A');await mount(screen);assert.equal(document.querySelector('[name=discName]').value,'RestoredName');assert.equal(document.querySelector('[name=jerseyNumber]').value,'19');assert.equal(writes().length,1);
+   await click(retryLabel);assert.equal(writes().length,2);assert.equal(writes()[1].options.body,original.options.body);assert.equal(writes()[1].options.headers['Idempotency-Key'],original.options.headers['Idempotency-Key']);
   }finally{await unmount();}
  });
 }
@@ -360,17 +367,17 @@ test('B failed or stale private-note verification retains the exact unknown POST
   }finally{await unmount();}
  }
 });
-test('B shell uses one header tagline while keeping the wordmark branding',async()=>{
+test('B standalone shell keeps the Kapok wordmark and omits workspace controls',async()=>{
  setup('/me');const {Shell}=await import('../../app/components/shell.tsx');
- try{await mount(()=>React.createElement(Shell,{title:'我的',nav:false}));const header=document.querySelector('.topbar');assert.equal(header.textContent.match(/训练之后/g)?.length,1);assert.equal(header.querySelector('.wordmark span').textContent,'训练之后');}finally{await unmount();}
+ try{await mount(()=>React.createElement(Shell,{title:'我的',nav:false}));const header=document.querySelector('.topbar');assert.equal(header.querySelector('.wordmark').textContent,'Kapok.');assert.equal(header.querySelector('.workspace-crumb,.topbar-account'),null);}finally{await unmount();}
 });
 
 test('B8 official Bilibili frame is bounded and unloads synchronously on account lock',async()=>{
- setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1raQXYpEkG/?spm_id_from=333&p=2',durationSec:null};
+ setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/?spm_id_from=333&p=2',durationSec:null};
  try {
   await mount(VideoDiscussion);
   const frame=document.querySelector('iframe'); assert.ok(frame);
-  const url=new URL(frame.src); assert.equal(url.origin,'https://player.bilibili.com'); assert.equal(url.searchParams.get('bvid'),'BV1raQXYpEkG'); assert.equal(url.searchParams.get('p'),'2'); assert.equal(url.searchParams.get('autoplay'),'0'); assert.equal(url.searchParams.has('spm_id_from'),false);
+  const url=new URL(frame.src); assert.equal(url.origin,'https://player.bilibili.com'); assert.equal(url.searchParams.get('bvid'),'BV1KapokTest'); assert.equal(url.searchParams.get('p'),'2'); assert.equal(url.searchParams.get('autoplay'),'0'); assert.equal(url.searchParams.has('spm_id_from'),false);
   assert.equal(document.querySelector('video'),null);
   await act(async()=>window.dispatchEvent(new Event('blur')));
   assert.equal(frame.getAttribute('src'),'about:blank'); assert.equal(document.querySelector('iframe'),null);
@@ -381,7 +388,7 @@ test('B8 official Bilibili frame is bounded and unloads synchronously on account
 
 
 test('B8 focusing official iframe is not leaving the page; actual window departure still locks',async()=>{
- setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1raQXYpEkG/',durationSec:null};
+ setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  const original=document.hasFocus;
  try {
   await mount(VideoDiscussion); const frame=document.querySelector('iframe');
@@ -404,7 +411,7 @@ test('B8 link-only add form preserves failed inputs and retries the same request
  const Form=()=>React.createElement(AccountBoundary,{actorId:'A',load:'me'},()=>React.createElement(AddVideoForm,{actorId:'A',trainingId:'tr'}));
  try {
   await mount(Form);assert.equal(document.querySelector('input[type=file]'),null);assert.equal(document.querySelector('select'),null);
-  const url='https://www.bilibili.com/video/BV1raQXYpEkG/?spm_id_from=333';
+  const url='https://www.bilibili.com/video/BV1KapokTest/?spm_id_from=333';
   await input(document.querySelector('[name=url]'),url);await input(document.querySelector('[name=title]'),'链接验证');
   override=(path,options)=>{if(options.method==='POST')throw new Error('网络中断');};
   await act(async()=>document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));await flush();
@@ -425,8 +432,10 @@ test('B10 video dialog opens from heading, retains cancelled inputs, closes afte
  try{
   await mount(Surface);const dialog=document.querySelector('dialog');assert.equal(dialog.open,false);assert.equal(document.querySelector('[aria-label="添加视频"]').parentElement.querySelector('h2').textContent,'训练视频');
   await act(async()=>document.querySelector('[aria-label="添加视频"]').click());assert.equal(dialog.open,true);
-  await input(document.querySelector('[name=url]'),'https://b23.tv/vP9CEuO');await input(document.querySelector('[name=title]'),'弹窗新增');
+  assert.equal(document.activeElement,document.querySelector('[name=url]'));
+  await input(document.querySelector('[name=url]'),'https://b23.tv/Example01');await input(document.querySelector('[name=title]'),'弹窗新增');
   await act(async()=>document.querySelector('[aria-label="关闭添加视频"]').click());assert.equal(dialog.open,false);assert.equal(writes().length,0);
+  assert.equal(document.activeElement,document.querySelector('[aria-label="添加视频"]'));
   await act(async()=>document.querySelector('[aria-label="添加视频"]').click());assert.equal(document.querySelector('[name=title]').value,'弹窗新增');
   override=(path,options)=>options.method==='POST'?response({id:'new'}):null;
   await act(async()=>document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));await flush();assert.equal(dialog.open,false);assert.equal(JSON.parse(writes()[0].options.body).position,4);assert.equal(document.querySelector('[name=url]').value,'');
@@ -520,16 +529,14 @@ test('publish late authorization cannot cross replacement actor/permission verif
  }}finally{window.confirm=originalConfirm;}
 });
 
-test('training status dialog creates published training with captured input and no browser confirmation',async()=>{
- setup('/trainings/new','admin');const {AccountBoundary}=await import('../../app/components/secure-resource.tsx');const {TrainingForm}=await import('../../app/components/training-forms.tsx');const {navigation}=await import('../helpers/next-stubs.mjs');
+test('confirm publication sends the same-page form directly to the atomic endpoint',async()=>{
+ setup('/admin/trainings/new','admin');const {TrainingManagement}=await import('../../app/components/training-management.tsx');const {navigation}=await import('../helpers/next-stubs.mjs');
  const originalConfirm=window.confirm;window.confirm=()=>{throw new Error('browser confirmation must not be used');};
  try{
-  await mount(()=>React.createElement(AccountBoundary,{actorId:'A',load:'me'},()=>React.createElement(TrainingForm,{actorId:'A'})));
-  await input(document.querySelector('[name=title]'),'captured title');document.querySelector('[name=date]').value='2026-10-19';document.querySelector('[name=status]').value='published';
-  await click('保存训练');assert.equal(document.querySelector('dialog').open,true);assert.equal(writes().length,0);
-  document.querySelector('[name=title]').value='later field change';
-  override=(path,options)=>path==='trainings'&&options.method==='POST'?response({...JSON.parse(options.body),id:'new-training',version:1}):null;
-  await click('确认并保存');assert.equal(writes().length,1);assert.equal(writes()[0].options.method,'POST');assert.equal(JSON.parse(writes()[0].options.body).title,'captured title');assert.equal(JSON.parse(writes()[0].options.body).status,'published');assert.equal(navigation.at(-1),'/trainings/new-training');assert.equal(document.querySelector('dialog').open,false);
+  await mount(()=>React.createElement(TrainingManagement,{actorId:'A',mode:'new'}));
+  await input(document.querySelector('[name=title]'),'captured title');document.querySelector('[name=date]').value='2026-10-19';
+  override=(path,options)=>path==='trainings/publish'&&options.method==='POST'?response({training:{...JSON.parse(options.body),id:'new-training',status:'published',version:1},video:null}):null;
+  await click('确认发布');assert.equal(writes().length,1);assert.equal(writes()[0].path,'trainings/publish');assert.deepEqual(JSON.parse(writes()[0].options.body),{title:'captured title',date:'2026-10-19',description:''});assert.equal(navigation.at(-1),'/admin/trainings/new-training');assert.equal(document.querySelector('dialog'),null);
  }finally{window.confirm=originalConfirm;await unmount();}
 });
 
@@ -553,24 +560,25 @@ test('training status dialog cancel close escape and session lock discard intent
 
 test('Bilibili time clicks reload only on explicit navigation, preserve drafts/part, and discard intent on lock/source change',async()=>{
  setup('/videos/v?t=90');
- data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1raQXYpEkG/?p=2',durationSec:null};
+ data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/?p=2',durationSec:null};
  data['videos/v/comments']=[{...comment,timestampSec:90},{...comment,id:'c2',timestampSec:180}];
  const originalScroll=dom.window.HTMLElement.prototype.scrollIntoView; const scrolled=[];
  dom.window.HTMLElement.prototype.scrollIntoView=function(){scrolled.push(this);};
  try {
   await mount(()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:90}));
   let frame=document.querySelector('iframe');assert.equal(new URL(frame.src).searchParams.get('t'),'90');
-  await input(document.querySelector('#comment-input'),'保留的讨论草稿');
   await click('回复');
+  await input(document.querySelector('#comment-input'),'保留的讨论草稿');
   assert.equal(document.querySelector('iframe'),frame);
   await click('讨论时间点 03:00');
   const second=document.querySelector('iframe');assert.notEqual(second,frame);frame=second;
-  let url=new URL(frame.src);assert.equal(url.searchParams.get('t'),'180');assert.equal(url.searchParams.get('p'),'2');assert.equal(url.searchParams.get('bvid'),'BV1raQXYpEkG');
-  assert.equal(scrolled.at(-1),frame);assert.equal(document.querySelector('#comment-input').value,'保留的讨论草稿');assert.ok(button('取消回复并清除草稿'));
+  let url=new URL(frame.src);assert.equal(url.searchParams.get('t'),'180');assert.equal(url.searchParams.get('p'),'2');assert.equal(url.searchParams.get('bvid'),'BV1KapokTest');
+  assert.match(frame.closest('section').querySelector('[role=status]').textContent,/请求从 03:00 加载播放器/);
+  assert.equal(scrolled.at(-1),frame);assert.equal(document.querySelector('#comment-input').value,'保留的讨论草稿');assert.ok(button('取消回复'));
   await input(document.querySelector('#comment-input'),'继续输入不重载');assert.equal(document.querySelector('iframe'),frame);
   await click('讨论时间点 03:00');assert.notEqual(document.querySelector('iframe'),frame);frame=document.querySelector('iframe');assert.equal(new URL(frame.src).searchParams.get('t'),'180');
   await act(async()=>window.dispatchEvent(new Event('blur')));assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
-  data['videos/v']={...data['videos/v'],url:'https://www.bilibili.com/video/BV1raQXYpEkG/?p=3'};
+  data['videos/v']={...data['videos/v'],url:'https://www.bilibili.com/video/BV1KapokTest/?p=3'};
   await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
   frame=document.querySelector('iframe');url=new URL(frame.src);assert.equal(url.searchParams.get('t'),'90');assert.equal(url.searchParams.get('p'),'3');assert.equal(document.querySelector('#comment-input').value,'继续输入不重载');
   await click('讨论时间点 01:30');assert.notEqual(document.querySelector('iframe'),frame);frame=document.querySelector('iframe');
@@ -581,7 +589,7 @@ test('Bilibili time clicks reload only on explicit navigation, preserve drafts/p
 
 
 test('Bilibili invalid initial time is bounded and reports the error without a render loop',async()=>{
- setup('/videos/v?t=bad');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1raQXYpEkG/',durationSec:null};
+ setup('/videos/v?t=bad');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  try {
   await mount(()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:NaN}));
   assert.equal(new URL(document.querySelector('iframe').src).searchParams.get('t'),'0');
@@ -591,7 +599,7 @@ test('Bilibili invalid initial time is bounded and reports the error without a r
 
 
 test('Bilibili changed deep-link time cannot reopen a locked same snapshot before verification',async()=>{
- setup('/videos/v?t=90');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1raQXYpEkG/',durationSec:null};
+ setup('/videos/v?t=90');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  let target=90;const Screen=()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:target});
  try {
   await mount(Screen);const frame=document.querySelector('iframe');
@@ -609,7 +617,8 @@ test('saved note starts as a card, pencil opens editor and cancel restores persi
  setup('/growth');data.collections=[{id:'saved',sourceKind:'video',sourceId:'v',privateNote:'已保存的想法',timestampSec:null,version:1,createdAt:'2026-10-19',source:null}];
  try{await mount(CollectionList);assert.equal(document.querySelector('textarea'),null);assert.match(document.querySelector('.private-note').textContent,/已保存的想法/);
  assert.equal(document.querySelector('a[href="/reflections/new?collection=saved"]').textContent,'转为复盘');
- await click('编辑私人备注');await input(document.querySelector('textarea'),'未保存修改');assert.ok(button('转为复盘').disabled);await click('取消');
+ await click('编辑私人备注');assert.equal(document.activeElement,document.querySelector('textarea'));await input(document.querySelector('textarea'),'未保存修改');assert.ok(button('转为复盘').disabled);await click('取消');
+ assert.equal(document.activeElement,document.querySelector('[aria-label="编辑私人备注"]'));
  assert.equal(document.querySelector('textarea'),null);assert.match(document.querySelector('.private-note').textContent,/已保存的想法/);await click('编辑私人备注');assert.equal(document.querySelector('textarea').value,'已保存的想法');assert.equal(writes().length,0);
  }finally{await unmount();}
 });
@@ -669,7 +678,7 @@ test('confirmed PATCH replay showing newer owner note keeps input editable for e
 });
 
 test('new reflection route sanitizes collection IDs and gives collection precedence over external source hints',async()=>{
- const {setServerMe}=await import('../helpers/server-stubs.mjs');const NewReflection=(await import('../../app/reflections/new/page.tsx')).default;setServerMe(me);
+ const {setServerMe}=await import('../helpers/server-stubs.mjs');const {runWithSitesIdentity}=await import('../../lib/server/request-identity.ts');const Page=(await import('../../app/reflections/new/page.tsx')).default;const NewReflection=props=>runWithSitesIdentity(()=>Page(props));setServerMe(me);
  const converted=await NewReflection({searchParams:Promise.resolve({collection:'saved',training:'untrusted',video:'untrusted'})});
  assert.equal(converted.props.children.props.collectionId,'saved');assert.equal(converted.props.children.props.trainingId,undefined);assert.equal(converted.props.children.props.videoId,undefined);
  const normal=await NewReflection({searchParams:Promise.resolve({training:'tr',video:'v'})});assert.equal(normal.props.children.props.trainingId,'tr');assert.equal(normal.props.children.props.videoId,'v');

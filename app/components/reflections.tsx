@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { CalendarDays, ChevronRight, LockKeyhole, Pencil, UsersRound } from 'lucide-react';
 import type { Training, Video, CollectionReflectionSeed } from '../../lib/contracts/training';
 import type { BootstrapStatus } from '../../lib/contracts';
 import type { Reflection, ReflectionAuthor } from '../../lib/contracts/reflections';
-import { transferNavigationSource, useNavigationField } from '../../lib/client/navigation-state';
+import { transferNavigationSource } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { prepareDraftRequest, reconcileDraft, revision } from '../../lib/client/reflection-draft';
 import type { Draft } from '../../lib/client/reflection-draft';
@@ -14,6 +15,7 @@ import { draftKey, draftPrefix } from '../../lib/client/session-guard';
 import { SaveCollection } from './collections';
 import { DateGroup, RecordRow } from './presentation';
 import { SecureStatus, useSecureResource } from './secure-resource';
+import { ReflectionSharingControls } from './reflection-sharing-controls';
 const versions = (r: ReflectionAuthor) => ({
     expectedVersion: r.version,
     expectedSharingVersion: r.sharingVersion,
@@ -86,6 +88,29 @@ export function ReflectionEditor({
     const latestDraft = useRef<Draft | null>(null);
     const saving = useRef(false);
     const initialized = useRef(false);
+    const confirmation = useRef<HTMLDialogElement>(null);
+    const cancelSave = useRef<HTMLButtonElement>(null);
+    const confirmSave = useRef<HTMLButtonElement>(null);
+    const saveButton = useRef<HTMLButtonElement>(null);
+    const restoreSaveFocus = useRef(false);
+    const confirmationId = useId();
+    const confirmationDescriptionId = useId();
+    const subscribe = secure.subscribe;
+    useEffect(() => subscribe(() => {
+        // Native modals must be closed explicitly when the protected surface locks.
+        if (confirmation.current?.open) confirmation.current.close();
+        restoreSaveFocus.current = false;
+    }), [subscribe]);
+    useLayoutEffect(() => {
+        if (busy || !restoreSaveFocus.current) return;
+        restoreSaveFocus.current = false;
+        const button = saveButton.current;
+        if (!secure.locked && button && !button.disabled && (document.activeElement === document.body || document.activeElement === button)) button.focus();
+    }, [busy, secure.locked]);
+    function dismissConfirmation() {
+        confirmation.current?.close();
+        if (!secure.locked) saveButton.current?.focus();
+    }
     useEffect(
         () => {
             if (!secure.sessionEnded) return;
@@ -129,7 +154,7 @@ export function ReflectionEditor({
                             initial = local;
                             restored = true;
                             setStatus(local.pending ? '上次云保存结果待确认；将核对上次保存，当前输入仍在本机。' : '已恢复本机草稿 · 仅存此设备，尚未上云');
-                            if (saved && !local.pending && local.cloud?.version !== saved.version) {
+                            if (saved && !local.pending && (local.cloud?.version !== saved.version || local.cloud.sharingVersion !== saved.sharingVersion || local.cloud.generation !== saved.generation)) {
                                 setCloudConflict(saved);
                                 setError('云端记录已变化。本机稿仍保留，请先对照当前云端记录；可保留本机输入并基于当前云端版本继续，或放弃本机稿。');
                             }
@@ -167,8 +192,10 @@ export function ReflectionEditor({
             setStatus('未能保存到本机，请保留输入并尝试正式保存。');
         }
     }
-    async function save() {
-        if (!draft || saving.current || secure.locked) return;
+    const currentReflection = id ? secure.data as ReflectionAuthor | null : base;
+    const needsConfirmation = currentReflection?.scope === 'team' || currentReflection?.published === true;
+    async function save(confirmed = false) {
+        if (!draft || saving.current || secure.locked || (needsConfirmation && !confirmed)) return;
         if (!draft.pending && id && draft.cloud?.version !== base?.version) return;
         saving.current = true;
         setBusy(true);
@@ -195,6 +222,7 @@ export function ReflectionEditor({
             await secure.authorize();
             if (!secure.isCurrent(token)) return;
             setBase(result);
+            if (id) secure.setData(result);
             const reconciled = reconcileDraft(latestDraft.current ?? prepared, result);
             latestDraft.current = reconciled.draft;
             if (!reconciled.saved) {
@@ -207,6 +235,7 @@ export function ReflectionEditor({
             transferNavigationSource(actorId, `/reflections/${result.id}`);
             router.push(`/reflections/${result.id}?saved=1`);
         } catch (e) {
+            if (token !== null && !secure.isCurrent(token)) return;
             if (token !== null && secure.isCurrent(token) && e instanceof ApiError && !e.retryable && latestDraft.current) {
                 const retained = {
                     ...latestDraft.current,
@@ -223,42 +252,69 @@ export function ReflectionEditor({
                 if (target) {
                     try {
                         const latest = await api<ReflectionAuthor>(`reflections/${target}/edit`, undefined, actorId);
-                        if (secure.isCurrent(token)) setCloudConflict(latest);
+                        if (secure.isCurrent(token)) {
+                            setCloudConflict(latest);
+                            if (id) secure.setData(latest);
+                        }
                     } catch {/* Keep the safe conflict and local input until current state can be read. */ }
                 }
             }
             setError(errorMessage(e));
             setStatus(e instanceof ApiError && !e.retryable ? '未保存，当前输入保留在本机。' : '未确认云保存；本机稿与上次保存信息仍保留，可继续确认。');
+            if (e instanceof ApiError && ['FORBIDDEN', 'NOT_FOUND'].includes(e.code)) void secure.verify();
         } finally {
             saving.current = false;
             setBusy(false);
         }
     }
-    const saveDisabled = busy || (!draft?.pending && id ? draft?.cloud?.version !== base?.version : false);
+    const saveDisabled = busy || (!draft?.pending && (cloudConflict !== null || (!!id && draft?.cloud?.version !== base?.version)));
     const saveLabel = busy ? '正在保存到账号…' : draft?.pending ? '确认上次云保存结果' : '保存记录';
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
             {draft && <form className="reflection-editor" onSubmit={e => {
                 e.preventDefault();
+                if (saveDisabled || secure.locked || saving.current) return;
+                if (needsConfirmation) {
+                    if (confirmation.current && !confirmation.current.open) {
+                        confirmation.current.showModal();
+                        cancelSave.current?.focus();
+                    }
+                    return;
+                }
+                restoreSaveFocus.current = document.activeElement === saveButton.current;
                 void save();
             }}>
 
+                <p className="privacy-line"><LockKeyhole size={16} aria-hidden="true" />{needsConfirmation ? '保存前需确认收回分享' : '保存后仅自己可读'}</p>
                 {collectionId && <p className="notice">{secure.data && 'localDraft' in secure.data ? '原收藏当前不可用，已恢复此设备上的独立草稿；复盘仍需明确保存，默认仅自己可见。' : '从本人已保存的私人备注开始，关联仅在来源仍可访问时带入。原收藏会保留；这份复盘需明确保存到账号，保存后默认仅自己可见。'}</p>}
-                {id && <p className="notice">保存修改将停止全部分享并撤回动态，需要重新分享。</p>}
 
-                <p role="status" className="muted">{busy ? '正在保存到账号…' : status}</p>
+                <label className="reflection-title-field"><span className="sr-only">标题（可选，最多60字）</span>
+                    <input value={draft.title} placeholder="标题（选填）" maxLength={60} onChange={e => change('title', e.target.value)} />
+                </label>
 
-                <details open className="reflection-fields">
+                <label><span className="sr-only">复盘正文</span>
+                    <textarea
+                        className="reflection-input"
+                        required
+                        maxLength={5000}
+                        rows={6}
+                        placeholder="这次训练，你注意到了什么？"
+                        value={draft.text}
+                        onChange={e => change('text', e.target.value)}
+                    />
+                </label>
 
-                    <summary>标题、日期与关联</summary>
+                <p className="muted">{draft.text.length} / 5000字</p>
 
-                    <label>标题（可选，最多60字）
-                        <input value={draft.title} maxLength={60} onChange={e => change('title', e.target.value)} />
-                    </label>
+                <details className="reflection-fields">
 
+                    <summary><CalendarDays size={16} aria-hidden="true" />日期与关联 <span className="muted">{draft.videoId ? '已关联视频' : draft.trainingId ? '已关联训练' : '未关联训练'}</span></summary>
                     <label>记录日期
-                        <input type="date" required value={draft.date} onChange={e => change('date', e.target.value)} />
+                        <input type="date" required value={draft.date} onChange={e => change('date', e.target.value)} onInvalid={e => {
+                            const details = e.currentTarget.closest('details');
+                            if (details) details.open = true;
+                        }} />
                     </label>
 
                     <button
@@ -335,21 +391,6 @@ export function ReflectionEditor({
 
                 </details>
 
-                <label>复盘正文
-                    <textarea
-                        className="reflection-input"
-                        required
-                        maxLength={5000}
-                        rows={6}
-                        value={draft.text}
-                        onChange={e => change('text', e.target.value)}
-                    />
-                </label>
-
-                <p className="muted">{draft.text.length} / 5000字。可以只写一段文字，不必关联训练。</p>
-
-
-
                 {cloudConflict && <section className="notice">
 
                     <h2>当前云端版本</h2>
@@ -363,6 +404,7 @@ export function ReflectionEditor({
                     <button
                         type="button"
                         className="secondary"
+                        disabled={busy}
                         onClick={() => {
                             const latest = {
                                 ...draft,
@@ -386,8 +428,8 @@ export function ReflectionEditor({
                 </section>}
 
                 <div className="editor-save">
-                    <button disabled={saveDisabled}>{saveLabel}</button>
-                    <p className="muted">{busy ? '正在保存到账号…' : status}</p>
+                    <button ref={saveButton} disabled={saveDisabled} aria-haspopup={needsConfirmation ? 'dialog' : undefined}>{saveLabel}</button>
+                    <p role="status" className="muted">{busy ? '正在保存到账号…' : status}</p>
                 </div>
 
                 {error && <p role="alert" className="form-error">{error}</p>}
@@ -404,7 +446,29 @@ export function ReflectionEditor({
                     }}
                 >放弃本机稿</button>
                 {draft.pending && <p className="muted">上次保存待确认时，先核对结果再放弃；也可前往成长查看已保存记录，本机恢复信息会保留。</p>}
-
+                <dialog ref={confirmation} className="sharing-dialog" aria-labelledby={confirmationId} aria-describedby={confirmationDescriptionId} onCancel={e => {
+                    e.preventDefault();
+                    dismissConfirmation();
+                }} onKeyDown={e => {
+                    if (e.key !== 'Tab') return;
+                    const edge = e.shiftKey ? cancelSave.current : confirmSave.current;
+                    if (document.activeElement === edge) {
+                        e.preventDefault();
+                        (e.shiftKey ? confirmSave.current : cancelSave.current)?.focus();
+                    }
+                }}>
+                    <h2 id={confirmationId}>保存并收回分享？</h2>
+                    <p id={confirmationDescriptionId}>保存后，这篇复盘将仅自己可读，已发布的动态也会撤回。取消会保留本机稿，原有正文和分享状态不变。</p>
+                    <div className="sharing-actions">
+                        <button type="button" className="secondary" ref={cancelSave} onClick={dismissConfirmation}>取消</button>
+                        <button type="button" ref={confirmSave} onClick={() => {
+                            if (!confirmation.current?.open || secure.locked) return;
+                            dismissConfirmation();
+                            restoreSaveFocus.current = true;
+                            void save(true);
+                        }}>保存并收回分享</button>
+                    </div>
+                </dialog>
             </form>}
         </div>
     </>;
@@ -430,10 +494,19 @@ export function ReflectionRead({
         >
             {r && <>
                 {saved && r.isAuthor && <p role="status" className="notice success">已保存到账号。</p>}
-                <h2>{r.title || '训练复盘'}</h2>
-                <p>{r.date} · {r.author.discName} {r.author.jerseyNumber}</p>
-                <p className="preserve reflection-body">{r.text}</p>
-                {r.link ? <Link href={r.link.href}>关联：{r.link.title}</Link> : <p className="muted">未关联来源或来源当前不可用。</p>}
+                <article className="reflection-paper">
+                    <header>
+                        <p className="detail-meta"><time dateTime={r.date}>{r.date}</time> · {r.author.discName} {r.author.jerseyNumber}</p>
+                        <h2 className="detail-title">{r.title || '训练复盘'}</h2>
+                        <p className="privacy-line">{r.isAuthor && (r as ReflectionAuthor).scope === 'private' ? <LockKeyhole size={16} aria-hidden="true" /> : <UsersRound size={16} aria-hidden="true" />}{r.isAuthor ? scopeLabel(r as ReflectionAuthor) : '全队可读'}</p>
+                    </header>
+                    <p className="preserve reflection-body">{r.text}</p>
+                    {r.link ? <Link className="detail-row" href={r.link.href}>
+                        <span className="detail-tile"><CalendarDays size={20} aria-hidden="true" /></span>
+                        <span><strong>关联来源</strong><small>{r.link.title}</small></span>
+                        <ChevronRight size={18} aria-hidden="true" />
+                    </Link> : <p className="muted">未关联来源或来源当前不可用。</p>}
+                </article>
                 {r.isAuthor ? <AuthorActions
                     actorId={actorId}
                     reflection={r as ReflectionAuthor}
@@ -450,18 +523,14 @@ function AuthorActions({
     reflection: r,
     refresh,
     authorize,
-    isCurrent,
-    manage = false
+    isCurrent
 }: {
     actorId: string;
-    manage?: boolean;
     reflection: ReflectionAuthor;
     refresh: () => Promise<void>;
     authorize: () => Promise<number>;
     isCurrent: (token: number) => boolean;
 }) {
-    const scopeId = useId();
-    const [scope, setScope] = useNavigationField(actorId, 'sharing:' + r.id, r.scope);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     const [copyFeedback, setCopyFeedback] = useState<{ kind: 'neutral' | 'success' | 'error'; text: string } | null>(null);
@@ -489,105 +558,34 @@ function AuthorActions({
             setBusy(false);
         }
     }
-    return <section className="section">
-
-        <p className="status-label">{scopeLabel(r)}</p>
-
-        {!manage && <p>
-            <Link className="button secondary" href={`/reflections/${r.id}/edit`}>编辑记录</Link>
-        </p>}
-
-        {!manage && <p>
-            <Link className="button secondary" href={`/reflections/${r.id}/sharing`}>管理分享与发布</Link>
-        </p>}
-
-        {manage && <section className="panel">
-            <h2>阅读范围</h2>
-
-            <form onSubmit={e => {
-                e.preventDefault();
-                const explanation = scope === 'team' ? '全队现有及以后有效成员可阅读，并在你的队内公开档案列出；不会进入首页动态。' : '停止全部分享并撤回动态，仅自己可读。';
-                if (window.confirm(explanation)) void submit(
-                    `reflections/${r.id}/grants`,
-                    'PUT',
-                    {
-                        ...versions(r),
-                        scope
-                    }
-                );
-            }}>
-
-                <fieldset className="scope-choice" disabled={busy}>
-                    <legend>让谁读到这篇？</legend>
-                    <label className="permission"><input type="radio" name={scopeId} value="private" checked={scope === 'private'} onChange={() => setScope('private')} /><span>仅自己<small>默认私密，留给自己</small></span></label>
-                    <label className="permission"><input type="radio" name={scopeId} value="team" checked={scope === 'team'} onChange={() => setScope('team')} /><span>全队<small>包含当前及未来的有效成员</small></span></label>
-                </fieldset>
-                <button disabled={busy}>确认阅读范围</button>
-
-            </form>
-
-        </section>}
-
-        {manage && <section className="publication-panel">
-            <h2>是否出现在队内动态？</h2>
-            <p className="muted">阅读范围与动态发布分别确认。全队可读后，才可选择发布。</p>
-            <p className="small">{r.published ? '当前已发布到队内动态' : '当前尚未发布'}</p>
-            <button
-                className="secondary"
-                disabled={busy || r.scope !== 'team'}
-                onClick={() => {
-                    if (window.confirm(r.published ? '撤回动态，仍允许全队阅读。' : '将此复盘加入首页与动态列表；队内公开档案和阅读链接仍依全队授权。')) void submit(
-                        `reflections/${r.id}/publication`,
-                        'PUT',
-                        {
-                            ...versions(r),
-                            published: !r.published
-                        }
-                    );
-                }}
-            >{r.published ? '撤回动态，仍允许全队阅读' : '发布到动态'}</button>
-        </section>}
-
-        {manage && r.scope !== 'private' && <p>
-            <button
-                className="secondary"
-                disabled={busy}
-                onClick={() => {
-                    if (window.confirm('停止全部分享并撤回动态，仅自己可读？')) void submit(
-                        `reflections/${r.id}/grants`,
-                        'PUT',
-                        {
-                            ...versions(r),
-                            scope: 'private'
-                        }
-                    );
-                }}
-            >停止分享，仅自己</button>
-        </p>}
-
-        <p>
+    return <section className="section reflection-author-actions" aria-label="本人记录操作">
+        <div className="actions">
+            <Link className="button secondary" href={`/reflections/${r.id}/edit`}><Pencil size={16} aria-hidden="true" />编辑记录</Link>
+            <Link className="button" href={`/reflections/${r.id}/sharing`}>管理分享与发布</Link>
+        </div>
+        <div className="actions">
             <button
                 type="button"
                 className="secondary"
                 onClick={async () => {
                     setCopyFeedback({ kind: 'neutral', text: '正在复制阅读链接…' });
                     try {
+                        const token = await authorize();
                         await navigator.clipboard.writeText(window.location.origin + '/reflections/' + r.id);
-                        setCopyFeedback({ kind: 'success', text: '阅读链接已复制；链接不自动授予阅读权限。' });
+                        if (isCurrent(token)) setCopyFeedback({ kind: 'success', text: '阅读链接已复制；链接不自动授予阅读权限。' });
                     } catch {
                         setCopyFeedback({ kind: 'error', text: '未能复制，请使用浏览器地址栏复制阅读页地址。' });
                     }
                 }}
             >复制阅读链接</button>
-        </p>
-
-        <button
-            className="secondary danger"
-            disabled={busy}
-            onClick={() => {
-                if (window.confirm('删除这份复盘？将停止全部分享并撤回动态，可在7天内从本人回收站恢复为私密原稿。')) void submit(`reflections/${r.id}`, 'DELETE', versions(r));
-            }}
-        >删除记录</button>
+            <button
+                className="secondary danger"
+                disabled={busy}
+                onClick={() => {
+                    if (window.confirm('删除这份复盘？将停止全部分享并撤回动态，可在7天内从本人回收站恢复为私密原稿。')) void submit(`reflections/${r.id}`, 'DELETE', versions(r));
+                }}
+            >删除记录</button>
+        </div>
 
         {copyFeedback && <p role={copyFeedback.kind === 'error' ? 'alert' : 'status'} className={`notice ${copyFeedback.kind}`}>{copyFeedback.text}</p>}
 
@@ -687,18 +685,15 @@ export function ReflectionSharing({
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {secure.data && <>
-                <h2>{secure.data.title || '训练复盘'}</h2>
-                <p>链接不自动授予阅读权限。保存修改、删除或停止分享会撤销旧阅读范围及动态。</p>
-                <AuthorActions
-                    actorId={actorId}
-                    reflection={secure.data}
-                    manage
-                    refresh={secure.verify}
-                    authorize={secure.authorize}
-                    isCurrent={secure.isCurrent}
-                />
-            </>}
+            {secure.data && <ReflectionSharingControls
+                actorId={actorId}
+                reflection={secure.data}
+                refresh={secure.verify}
+                authorize={secure.authorize}
+                isCurrent={secure.isCurrent}
+                subscribe={secure.subscribe}
+                onVerified={secure.setData}
+            />}
         </div>
     </>;
 }

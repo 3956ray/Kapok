@@ -3,6 +3,7 @@ import type { Me, Principal } from '../contracts/index';
 import type { Announcement, ActivityItem, ActivityPage, PublicMember, PublicProfile, Reflection, ReflectionAuthor, ReflectionReader } from '../contracts/reflections';
 import { assertGuard, DomainError } from './domain.ts';
 import type { StoredResult } from './domain';
+import { accessMembershipFence } from './identity.ts';
 type Context = Me & {
     user: NonNullable<Me['user']>;
     membership: NonNullable<Me['membership']>;
@@ -90,8 +91,10 @@ export function createReflectionService({
             user: NonNullable<Me['user']>;
         };
     }
-    function ownerGuard(op: Op, owner: string) {
-        return assertGuard(db, op.opId, 'owner', "EXISTS(SELECT 1 FROM users WHERE id=? AND status='active')", [owner]);
+    function ownerGuard(op: Op, p: Principal | null, c: Awaited<ReturnType<typeof personal>>) {
+        const access = accessMembershipFence(p, c);
+        return assertGuard(db, op.opId, 'owner', `EXISTS(SELECT 1 FROM users WHERE id=? AND status='active') AND ${access.predicate}`,
+            [c.user.id, ...access.values]);
     }
     function memberGuard(op: Op, c: Context, admin = false) {
         return assertGuard(
@@ -172,25 +175,29 @@ export function createReflectionService({
         } catch {
             throw missing();
         }
+        const access = accessMembershipFence(p, c);
         const r = await q(
             `${select} WHERE r.id=? AND r.deleted_at IS NULL AND
-                        (r.owner_id=? OR (${reflectionShared}))`,
+                        (r.owner_id=? OR (${reflectionShared})) AND ${access.predicate}`,
             id,
             c.user.id,
-            c.user.id
+            c.user.id,
+            ...access.values
         ).first<Row>();
         if (!r) throw missing();
         return present(p, r, c.user.id);
     }
     async function getOwnReflection(p: Principal | null, id: string): Promise<ReflectionAuthor> {
         const c = await personal(p);
-        const r = await q(`${select} WHERE r.id=? AND r.owner_id=? AND r.deleted_at IS NULL`, id, c.user.id).first<Row>();
+        const access = accessMembershipFence(p, c);
+        const r = await q(`${select} WHERE r.id=? AND r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate}`, id, c.user.id, ...access.values).first<Row>();
         if (!r) throw missing();
         return (await present(p, r, c.user.id)) as ReflectionAuthor;
     }
     async function listMyReflections(p: Principal | null) {
         const c = await personal(p);
-        const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at IS NULL ORDER BY r.date DESC,r.id DESC`, c.user.id).all<Row>()).results;
+        const access = accessMembershipFence(p, c);
+        const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate} ORDER BY r.date DESC,r.id DESC`, c.user.id, ...access.values).all<Row>()).results;
         return Promise.all(rows.map(r => present(p, r, c.user.id) as Promise<ReflectionAuthor>));
     }
     async function association(p: Principal | null, trainingId: unknown, videoId: unknown) {
@@ -243,9 +250,10 @@ export function createReflectionService({
     }
     // Begin and finish share ONE D1 batch, with no externally visible pending phase.
     // An old prepared batch cannot acquire a newer version/generation; final zero effects roll back everything.
-    function begin(op: Op, owner: string, id: string, e: ReturnType<typeof expected>) {
+    function begin(op: Op, p: Principal | null, c: Awaited<ReturnType<typeof personal>>, id: string, e: ReturnType<typeof expected>) {
+        const owner = c.user.id;
         return [
-            ownerGuard(op, owner),
+            ownerGuard(op, p, c),
             q(
                 `UPDATE reflections SET gate='closed',sharing_version=sharing_version+1,active_op_id=?
                         WHERE id=? AND owner_id=? AND version=? AND sharing_version=? AND generation=? AND active_op_id IS NULL AND deleted_at IS NULL`,
@@ -317,7 +325,7 @@ export function createReflectionService({
             const committed = await commit(
                 op,
                 [
-                    ownerGuard(op, c.user.id),
+                    ownerGuard(op, p, c),
                     ...associationGuard(op, a),
                     q(
                         `INSERT INTO reflections(id,owner_id,team_id,title,text,date,training_id,video_id,last_committed_op_id,created_at,updated_at)
@@ -349,7 +357,7 @@ export function createReflectionService({
             await commit(
                 op,
                 [
-                    ...begin(op, c.user.id, id, e!),
+                    ...begin(op, p, c, id, e!),
                     ...associationGuard(op, a),
                     q(
                         `UPDATE reflections SET title=?,text=?,date=?,training_id=?,video_id=?,version=version+1,
@@ -407,7 +415,7 @@ export function createReflectionService({
         await commit(
             op,
             [
-                ...begin(op, c.user.id, id, e),
+                ...begin(op, p, c, id, e),
                 ...guards,
                 q(
                     `UPDATE reflections SET scope=?,coach_id=?,coach_epoch=?,author_epoch=?,published_at=?,
@@ -457,7 +465,7 @@ export function createReflectionService({
         await commit(
             op,
             [
-                ...begin(op, c.user.id, id, e),
+                ...begin(op, p, c, id, e),
                 memberGuard(op, member),
                 q(
                     `UPDATE reflections SET published_at=?,gate='open',active_op_id=NULL,last_committed_op_id=?
@@ -482,7 +490,8 @@ export function createReflectionService({
         const e = expected(raw);
         const op = await operation(c.user.id, 'reflection-delete', id, key, e);
         if (op.replay) {
-            const current = await q('SELECT deleted_at FROM reflections WHERE id=? AND owner_id=?', id, c.user.id).first<{
+            const access = accessMembershipFence(p, c);
+            const current = await q(`SELECT deleted_at FROM reflections WHERE id=? AND owner_id=? AND ${access.predicate}`, id, c.user.id, ...access.values).first<{
                 deleted_at: string | null;
             }>();
             if (!current) throw missing();
@@ -495,7 +504,7 @@ export function createReflectionService({
         await commit(
             op,
             [
-                ...begin(op, c.user.id, id, e),
+                ...begin(op, p, c, id, e),
                 q(
                     `UPDATE reflections SET deleted_at=?,scope='private',coach_id=NULL,coach_epoch=NULL,author_epoch=NULL,
                                 published_at=NULL,active_op_id=NULL,last_committed_op_id=?,version=version+1,generation=generation+1
@@ -526,7 +535,9 @@ export function createReflectionService({
     async function listDeletedReflections(p: Principal | null): Promise<DeletedReflection[]> {
         const c = await personal(p);
         const cutoff = new Date(clock().getTime() - 7 * 86400000).toISOString();
-        const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at>? AND EXISTS(SELECT 1 FROM users u WHERE u.id=r.owner_id AND u.status='active') ORDER BY r.deleted_at DESC,r.id DESC`, c.user.id, cutoff).all<Row>()).results;
+        const access = accessMembershipFence(p, c);
+        const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at>? AND EXISTS(SELECT 1 FROM users u WHERE u.id=r.owner_id AND u.status='active')
+            AND ${access.predicate} ORDER BY r.deleted_at DESC,r.id DESC`, c.user.id, cutoff, ...access.values).all<Row>()).results;
         return Promise.all(rows.map(async r => ({
             ...await present(p, r, c.user.id) as ReflectionAuthor,
             deletedAt: r.deleted_at!,
@@ -542,7 +553,7 @@ export function createReflectionService({
         const cutoff = new Date(clock().getTime() - 7 * 86400000).toISOString();
         if (!await q('SELECT id FROM reflections WHERE id=? AND owner_id=? AND deleted_at>?', id, c.user.id, cutoff).first()) throw missing();
         await commit(op, [
-            ownerGuard(op, c.user.id),
+            ownerGuard(op, p, c),
             q(`UPDATE reflections SET deleted_at=NULL,version=version+1,sharing_version=sharing_version+1,generation=generation+1,
                 scope='private',coach_id=NULL,coach_epoch=NULL,author_epoch=NULL,published_at=NULL,
                 gate='closed',active_op_id=NULL,last_committed_op_id=?,updated_at=?
@@ -689,12 +700,15 @@ export function createReflectionService({
         }
         const rows = (await q(
             `SELECT * FROM (
-                        SELECT 'reflection:'||r.id AS id,'reflection' AS kind,r.title,'/reflections/'||r.id AS href,r.published_at AS publishedAt,r.updated_at AS updatedAt
+                        SELECT 'reflection:'||r.id AS id,'reflection' AS kind,r.title,'/reflections/'||r.id AS href,r.published_at AS publishedAt,r.updated_at AS updatedAt,
+                               NULL AS publisherId,NULL AS publisherName
                         FROM reflections r WHERE r.team_id=? AND r.scope='team' AND r.published_at IS NOT NULL AND (${reflectionShared})
-                        UNION ALL SELECT 'video:'||v.id,'video',v.title,'/videos/'||v.id,e.published_at,v.updated_at
+                        UNION ALL SELECT 'video:'||v.id,'video',v.title,'/videos/'||v.id,e.published_at,v.updated_at,v.publisher_id,
+                               (SELECT p.disc_name FROM profiles p JOIN users pu ON pu.id=p.user_id
+                                WHERE p.user_id=v.publisher_id AND pu.status='active')
                         FROM video_events e JOIN videos v ON v.id=e.video_id JOIN trainings t ON t.id=v.training_id
                         WHERE v.team_id=? AND v.status='active' AND t.status='published'
-                        UNION ALL SELECT 'announcement:'||a.id,'announcement',a.title,'/announcements/'||a.id,a.published_at,a.updated_at
+                        UNION ALL SELECT 'announcement:'||a.id,'announcement',a.title,'/announcements/'||a.id,a.published_at,a.updated_at,NULL,NULL
                         FROM announcements a WHERE a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
                         ) WHERE (? IS NULL OR publishedAt<? OR (publishedAt=? AND id<?)) ORDER BY publishedAt DESC,id DESC LIMIT ?`,
             c.membership.teamId,
@@ -706,8 +720,10 @@ export function createReflectionService({
             after?.time ?? null,
             after?.id ?? null,
             limit + 1
-        ).all<ActivityItem>()).results;
-        const items = rows.slice(0, limit);
+        ).all<ActivityItem & { publisherId: string | null; publisherName: string | null }>()).results;
+        const items = rows.slice(0, limit).map(({ kind, publisherId, publisherName, ...item }): ActivityItem =>
+            kind === 'video' ? { ...item, kind, publisherId, publisherName } : { ...item, kind }
+        );
         const last = items.at(-1);
         return {
             items,

@@ -2,6 +2,7 @@ import type { Me, Principal } from '../contracts/index';
 import type { ManagedMember, PersonalExport } from '../contracts/data-rights';
 import { assertGuard, DomainError } from './domain.ts';
 import type { StoredResult } from './domain';
+import { accessMembershipFence, identityTuple } from './identity.ts';
 import { reflectionShared } from './reflections.ts';
 
 type Context = Me & {
@@ -45,9 +46,13 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
     async function exportOwnData(p: Principal | null): Promise<PersonalExport> {
         const c = await personal(p);
         // All sections are generated in ONE current-identity D1 snapshot. No stored file or old job is reused.
-        const owner = `WITH owner AS (SELECT u.id FROM users u JOIN auth_identities a ON a.user_id=u.id
-            WHERE u.id=? AND u.status='active' AND a.provider='site' AND a.subject=?) `;
-        const owned = (sql: string) => q(owner + sql, c.user.id, p!.subject);
+        const access = accessMembershipFence(p, c);
+        const owner = p?.provider === 'access'
+            ? `SELECT ? AS id WHERE ${access.predicate}`
+            : `SELECT u.id FROM users u JOIN auth_identities a ON a.user_id=u.id
+                WHERE u.id=? AND u.status='active' AND a.provider=? AND a.issuer=? AND a.subject=?`;
+        const owned = (sql: string) => q(`WITH owner AS (${owner}) ` + sql, c.user.id,
+            ...(p?.provider === 'access' ? access.values : identityTuple(p!)));
         const teamSource = (team: string) => `EXISTS(SELECT 1 FROM memberships rm WHERE rm.user_id=o.id
             AND rm.team_id=${team} AND rm.status='active')`;
         const videoSource = (video: string) => `EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id
@@ -92,12 +97,24 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
     const selectMember = `SELECT m.id,m.team_id AS teamId,m.role,m.status,m.epoch,m.version,
         m.user_id AS userId,p.disc_name AS discName,p.jersey_number AS jerseyNumber
         FROM memberships m JOIN users u ON u.id=m.user_id JOIN profiles p ON p.user_id=m.user_id`;
+    async function confirmMemberManager(p: Principal | null, c: Context, expectedVersion = c.membership.version, admin = true) {
+        const latest = await activeMember(p, admin);
+        if (latest.user.id !== c.user.id || latest.membership.id !== c.membership.id ||
+            latest.membership.epoch !== c.membership.epoch || latest.membership.version !== expectedVersion) {
+            throw new DomainError('FORBIDDEN', '成员权限已发生变化，请重新加载。', 403);
+        }
+    }
     async function listManagedMembers(p: Principal | null): Promise<ManagedMember[]> {
         const c = await activeMember(p, true);
-        return (await q(`${selectMember} WHERE m.team_id=? AND u.status='active'
-            AND EXISTS(SELECT 1 FROM memberships am JOIN users au ON au.id=am.user_id WHERE am.user_id=?
-                AND am.team_id=m.team_id AND am.role='admin' AND am.status='active' AND am.epoch=? AND au.status='active')
-            ORDER BY p.disc_name,m.id`, c.membership.teamId, c.user.id, c.membership.epoch).all<ManagedMember>()).results;
+        const members = (await q(`${selectMember} WHERE m.team_id=? AND u.status='active'
+            AND EXISTS(SELECT 1 FROM memberships am JOIN users au ON au.id=am.user_id
+                JOIN auth_identities a ON a.user_id=au.id WHERE am.id=? AND am.user_id=?
+                AND am.team_id=m.team_id AND am.role='admin' AND am.status='active' AND am.epoch=? AND am.version=?
+                AND au.status='active' AND a.provider=? AND a.issuer=? AND a.subject=?)
+            ORDER BY p.disc_name,m.id`, c.membership.teamId, c.membership.id, c.user.id,
+            c.membership.epoch, c.membership.version, ...identityTuple(p!)).all<ManagedMember>()).results;
+        await confirmMemberManager(p, c);
+        return members;
     }
     async function managedMember(id: string, teamId: string) {
         const row = await q(`${selectMember} WHERE m.user_id=? AND m.team_id=? AND u.status='active'`, id, teamId).first<ManagedMember>();
@@ -112,7 +129,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             throw new DomainError('INVALID_INPUT', '请选择有效角色与成员状态。');
         }
         const op = await operation(c.user.id, selfLeave ? 'member-leave' : 'member-update', target, key, { role, status, expected: e });
-        if (op.replay) return;
+        if (op.replay) return false;
         const old = await managedMember(target, c.membership.teamId);
         const epoch = e.epoch + (old.status !== 'active' && status === 'active' ? 1 : 0);
         try {
@@ -120,9 +137,9 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 assertGuard(db, op.opId, 'actor', `EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id
                     JOIN auth_identities a ON a.user_id=u.id WHERE m.user_id=? AND m.team_id=?
                     AND ${selfLeave ? "m.status IN ('active','paused')" : "m.status='active'"}
-                    AND m.epoch=? AND m.version=? AND u.status='active' AND a.provider='site' AND a.subject=?
+                    AND m.epoch=? AND m.version=? AND u.status='active' AND a.provider=? AND a.issuer=? AND a.subject=?
                     ${selfLeave ? '' : "AND m.role='admin'"})`,
-                [c.user.id, c.membership.teamId, c.membership.epoch, c.membership.version, p.subject]),
+                [c.user.id, c.membership.teamId, c.membership.epoch, c.membership.version, ...identityTuple(p)]),
                 assertGuard(db, op.opId, 'before', `EXISTS(SELECT 1 FROM memberships WHERE user_id=? AND team_id=?
                     AND version=? AND epoch=? AND status=? AND role=?)`,
                 [target, c.membership.teamId, e.version, e.epoch, old.status, old.role]),
@@ -145,6 +162,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 assertGuard(db, op.opId, 'audit', 'EXISTS(SELECT 1 FROM moderation_audit WHERE id=? AND actor_id=? AND target_id=?)',
                     [op.opId, c.user.id, old.id]),
             ], { id: target });
+            return true;
         } catch (error) {
             if (error instanceof DomainError) throw error;
             throw new DomainError('MEMBERSHIP_CONFLICT', '成员状态已变化，或此操作会移除最后一位有效管理员。请重新加载后确认；须先保留另一位有效管理员。', 409);
@@ -153,9 +171,20 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
     async function updateMembership(p: Principal | null, target: string, input: unknown, key: string) {
         const c = await activeMember(p, true);
         const raw = inputObject(input, ['role', 'status', 'expectedVersion', 'expectedEpoch']);
-        await mutateMembership(p!, c, target, raw, key, false);
+        const changed = await mutateMembership(p!, c, target, raw, key, false);
         // A completed key reads current state, never reapplies its historical role/status.
-        return managedMember(target, c.membership.teamId);
+        const member = await managedMember(target, c.membership.teamId);
+        if (changed && target === c.user.id) {
+            const identity = await q(`SELECT 1 FROM auth_identities a JOIN users u ON u.id=a.user_id
+                JOIN memberships m ON m.user_id=u.id WHERE a.provider=? AND a.issuer=? AND a.subject=?
+                AND u.id=? AND u.status='active' AND m.id=? AND m.version=? AND m.epoch=?`,
+            ...identityTuple(p!), c.user.id, c.membership.id, member.version, member.epoch).first();
+            if (!identity || member.version !== c.membership.version + 1 || member.epoch !== c.membership.epoch ||
+                member.role !== raw.role || member.status !== raw.status) {
+                throw new DomainError('FORBIDDEN', '成员权限已发生变化，请重新加载。', 403);
+            }
+        } else await confirmMemberManager(p, c);
+        return member;
     }
     async function leaveTeam(p: Principal | null, input: unknown, key: string) {
         const c = await personal(p);

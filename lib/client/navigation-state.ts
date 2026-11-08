@@ -28,13 +28,14 @@ function store(): Store | null {
     }
     return host[slot]!;
 }
-function validPath(path: string) { return /^\/(?:$|trainings(?:\/[\w-]+)?|videos\/[\w-]+|growth|me(?:\/(?:edit|data|recycle))?|members(?:\/[\w-]+)?|reflections\/(?:new|[\w-]+(?:\/(?:edit|sharing))?)|announcements\/[\w-]+|activity|admin\/(?:invites|announcements|members)|login|join(?:\/[\w-]+)?|internal\/bootstrap)$/.test(path); }
+function validPath(path: string) { return /^\/(?:$|home|trainings(?:\/[\w-]+)?|videos\/[\w-]+|growth|me(?:\/(?:edit|data|recycle))?|members(?:\/[\w-]+)?|reflections\/(?:new|[\w-]+(?:\/(?:edit|sharing))?)|announcements\/[\w-]+|activity|admin\/(?:invites|announcements|members|trainings(?:\/(?:new|(?!new(?:\/|$))[\w-]{1,80}(?:\/edit)?))?)|login|join(?:\/[\w-]+)?|internal\/bootstrap)$/.test(path); }
 function sourceHref() {
     const url = new URL(window.location.href);
-    const allowed = url.pathname.startsWith('/videos/') ? ['t'] : url.pathname === '/reflections/new' ? ['collection', 'training', 'video'] : url.pathname === '/activity' ? ['cursor'] : [];
+    const allowed = url.pathname.startsWith('/videos/') ? ['t'] : url.pathname === '/reflections/new' ? ['collection', 'training', 'video'] : url.pathname === '/activity' ? ['cursor'] : /^\/trainings\/[\w-]{1,80}$/.test(url.pathname) ? ['view'] : [];
+    if (url.searchParams.size !== 1) url.searchParams.delete('view');
     for (const key of [...url.searchParams.keys()]) {
         const value = url.searchParams.get(key)!;
-        if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1 || (key === 't' ? !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) : key === 'cursor' ? !/^[a-zA-Z0-9_+=/-]{1,512}$/.test(value) : !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) url.searchParams.delete(key);
+        if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1 || (key === 't' ? !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) : key === 'cursor' ? !/^[a-zA-Z0-9_+=/-]{1,512}$/.test(value) : key === 'view' ? value !== 'member' : !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) url.searchParams.delete(key);
     }
     if (url.pathname === '/reflections/new' && url.searchParams.has('collection')) { url.searchParams.delete('training'); url.searchParams.delete('video'); }
     if (!(url.pathname.startsWith('/videos/') && /^#comment-[a-zA-Z0-9_-]{1,80}$/.test(url.hash)) && !(url.pathname.startsWith('/announcements/') && url.hash === '#body')) url.hash = '';
@@ -125,7 +126,7 @@ export function pendingMutationKey(actor: string, method: string, path: string, 
     const id = mutationId(method, path, body);
     const existing = state.pending.get(id); if (existing) return existing;
     if (state.pending.size >= 20 || new TextEncoder().encode(id).byteLength > 32_768) throw new Error('尚有未确认的提交，请先回到原页面确认结果，再继续保存。');
-    const key = crypto.randomUUID(); state.pending.set(id, key); return key;
+    const key = candidate || crypto.randomUUID(); state.pending.set(id, key); return key;
 }
 export function acknowledgeMutation(actor: string, method: string, path: string, body: unknown) {
     const state = store(); if (state?.actor === actor) state.pending.delete(mutationId(method, path, body));

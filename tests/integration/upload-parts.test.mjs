@@ -1,3 +1,4 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -6,7 +7,7 @@ import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
 import { MEDIA_MAX_BYTES, MEDIA_PART_BYTES, MEDIA_TEAM_BYTES } from '../../lib/contracts/media.ts';
 import { sizedMP4 } from '../fixtures/mp4-sized.mjs';
-const owner = { subject: 'owner' };
+const owner = sitesPrincipal('owner');
 const reject = (promise, code) => assert.rejects(promise, error => error.code === code);
 const original = await readFile(new URL('../fixtures/synthetic-pass.mp4', import.meta.url));
 const stream = bytes => new Request('https://kapok.test', { method: 'PUT', body: bytes }).body;
@@ -15,9 +16,9 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for (const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql']) {
+    for (const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
         const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
-        for (const sql of migration.split(';').map(s => s.trim()).filter(Boolean)) await db.prepare(sql).run();
+        for (const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean)) await db.prepare(sql).run();
     }
     const s = createService({ db, bucket, bootstrapSiteUserId: owner.subject });
     await s.bootstrap(owner, { discName: '合成管理员', jerseyNumber: '01' }, 'boot');
@@ -87,9 +88,9 @@ test('HTTP part upload preserves Origin actor owner checks and accepts only boun
     const request = (actor, origin, part) => new Request('https://kapok.test/api/v1/uploads/' + u.id + '/content', { method: 'PUT', headers: { Origin: origin, 'X-Kapok-Actor': actor, 'X-Kapok-Part': part, 'Idempotency-Key': 'content' }, body: original });
     const path = ['uploads', u.id, 'content'];
     assert.equal((await dispatchApi(request('other', 'https://kapok.test', '1'), path, owner, s)).status, 409);
-    assert.equal((await dispatchApi(request('owner', 'https://other.test', '1'), path, owner, s)).status, 403);
-    assert.equal((await dispatchApi(request('owner', 'https://kapok.test', '1.5'), path, owner, s)).status, 400);
-    assert.equal((await dispatchApi(request('owner', 'https://kapok.test', '1'), path, owner, s)).status, 200);
+    assert.equal((await dispatchApi(request(await actorKey(owner), 'https://other.test', '1'), path, owner, s)).status, 403);
+    assert.equal((await dispatchApi(request(await actorKey(owner), 'https://kapok.test', '1.5'), path, owner, s)).status, 400);
+    assert.equal((await dispatchApi(request(await actorKey(owner), 'https://kapok.test', '1'), path, owner, s)).status, 200);
 });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 test('held part and held multipart completion cannot publish after cancel; quota waits for cleanup', async t => {
@@ -194,7 +195,7 @@ test('maximum 24-box completion and rejection cleanup stay below 50 storage call
             resumeMultipartUpload(...args) { const multipart = bucket.resumeMultipartUpload(...args); return { uploadId: multipart.uploadId, complete(parts) { calls++; return multipart.complete(parts); }, abort() { calls++; return multipart.abort(); } }; },
         });
         const service = createService({ db: countedDb, bucket: countedBucket });
-        const response = await dispatchApi(new Request('https://kapok.test/api/v1/uploads/' + u.id + '/complete', { method: 'POST', headers: { Origin: 'https://kapok.test', 'X-Kapok-Actor': owner.subject, 'Idempotency-Key': 'complete', 'Content-Type': 'application/json' }, body: '{}' }), ['uploads', u.id, 'complete'], owner, service);
+        const response = await dispatchApi(new Request('https://kapok.test/api/v1/uploads/' + u.id + '/complete', { method: 'POST', headers: { Origin: 'https://kapok.test', 'X-Kapok-Actor': await actorKey(owner), 'Idempotency-Key': 'complete', 'Content-Type': 'application/json' }, body: '{}' }), ['uploads', u.id, 'complete'], owner, service);
         const body = await response.json();
         if (invalid) assert.equal(body.error.code, 'UNSUPPORTED_CODEC');
         else assert.equal(body.data.mime, 'video/mp4');

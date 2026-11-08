@@ -12,7 +12,7 @@ export default async function AnnouncementPage({
     const {
         id
     } = await params;
-    return <Shell title="队伍公告" back="/activity">
+    return <Shell title="队伍公告" back="/activity" surface="index" eyebrow="队内动态" canCompose={isMember(context.me)}>
         {context.user && isMember(context.me) ? <AnnouncementRead key={context.user.userId + ':' + id} actorId={context.user.userId} id={id} /> : <AccessState context={context} returnTo={`/announcements/${id}`} />}
     </Shell>;
 }

@@ -1,13 +1,18 @@
 'use client';
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { BootstrapResult, InviteResult, JoinResult, Me, WriteResult } from '../../lib/contracts';
+import { useRouter } from 'next/navigation';
+import type { JoinInput, JoinResult, Me, WriteResult } from '../../lib/contracts';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
-import { acknowledgeMutation, clearNavigationRoute, currentRoute, navigationBuffer } from '../../lib/client/navigation-state';
+import { acknowledgeMutation, clearNavigationRoute, currentRoute, navigationBuffer, pendingMutationKey } from '../../lib/client/navigation-state';
+import { consumeRegistrationPrefill } from '../../lib/client/registration-prefill';
+import { registrationDraft } from '../../lib/client/registration-draft';
+import type { PendingRegistration } from '../../lib/client/registration-draft';
 import { useAccountSession } from './secure-resource';
+import { preserveTargetHash } from './navigation';
 
 type Fields = { discName: string; jerseyNumber: string };
-type FieldErrors = Partial<Record<keyof Fields | 'token', string>>;
+type FieldErrors = Partial<Record<keyof Fields, string>>;
 const message = (e: unknown) => e instanceof Error ? e.message : '暂时未能完成操作，请保留内容并重试。';
 function validate(fields: Fields): FieldErrors {
     return {
@@ -19,9 +24,13 @@ function focusError(form: HTMLFormElement, errors: FieldErrors) {
     const field = Object.keys(errors)[0];
     if (field) form.querySelector<HTMLElement>(`[name="${field}"]`)?.focus();
 }
+function fieldErrorsFor(error: ApiError): FieldErrors {
+    if (error.code === 'INVALID_INPUT') return { discName: error.message, jerseyNumber: error.message };
+    return {};
+}
 function showFieldError(error: unknown, form: HTMLFormElement, setErrors: (errors: FieldErrors) => void) {
     if (!(error instanceof ApiError)) return;
-    const fields = /INVITE/.test(error.code) ? { token: error.message } : error.code === 'INVALID_INPUT' ? { discName: error.message, jerseyNumber: error.message } : {};
+    const fields = fieldErrorsFor(error);
     if (Object.keys(fields).length) {
         setErrors(fields);
         focusError(form, fields);
@@ -37,6 +46,80 @@ function useSubmission() {
     const [errors, setErrors] = useState<FieldErrors>({});
     return { session, key, resetKey: () => { key.current = createRequestKey(); }, busy, submitting, setBusy, error, setError, errors, setErrors };
 }
+function useEnrollmentSubmission(actorId: string, fields: Fields, draft: ReturnType<typeof registrationDraft>, initial: PendingRegistration | null) {
+    const path = 'join';
+    const s = useSubmission();
+    const [pending, setPending] = useState(initial);
+    const rejectedField = useRef<{ form: HTMLFormElement; errors: FieldErrors; generation: number } | null>(null);
+    useLayoutEffect(() => {
+        if (s.busy || pending || !rejectedField.current) return;
+        const { form, errors, generation } = rejectedField.current;
+        rejectedField.current = null;
+        // React has removed the submitting fieldset's disabled state in this commit.
+        if (s.session.isCurrent(generation) && form.isConnected && !form.closest('[hidden], [inert]')) focusError(form, errors);
+    }, [pending, s.busy, s.session]);
+    async function submit(body: JoinInput, onResult: (result: JoinResult) => void, form: HTMLFormElement) {
+        if (s.submitting.current) return;
+        if (navigator.onLine === false) {
+            s.setError(pending ? '网络已断开，暂时无法核对上次提交。' : '网络已断开，尚未提交。连接恢复后可以重试。');
+            return;
+        }
+        s.setBusy(true);
+        s.setError('');
+        try {
+            const generation = await s.session.authorize();
+            if (pending) {
+                const current = await api<Me>('me', undefined, actorId);
+                if (!s.session.isCurrent(generation)) return;
+                if (current.membership || current.user?.status === 'deleted') {
+                    await s.session.verify('正在核对上次入队结果…');
+                    return;
+                }
+            }
+            const request = pending ?? { body, key: pendingMutationKey(actorId, 'POST', path, body, s.key.current(actorId, body)) };
+            draft.write({ fields, pending: request });
+            setPending(request);
+            try {
+                const value = await api<JoinResult>(path, { method: 'POST', actorId, ...request });
+                if (!s.session.isCurrent(generation)) return;
+                const confirmed = await api<Me>('me', undefined, actorId);
+                if (!s.session.isCurrent(generation)) return;
+                if (confirmed.user?.status !== 'active' || confirmed.user.id !== value.me.user?.id ||
+                    confirmed.membership?.status !== 'active' ||
+                    JSON.stringify(confirmed.membership) !== JSON.stringify(value.me.membership)) {
+                    throw new ApiError({ error: { code: 'FORBIDDEN', message: '成员权限已发生变化，请重新确认。', retryable: false }, requestId: '' });
+                }
+                acknowledgeMutation(actorId, 'POST', path, request.body);
+                draft.clear();
+                setPending(null);
+                onResult(value);
+            } catch (error) {
+                if (!s.session.isCurrent(generation)) return;
+                if (error instanceof ApiError && !error.retryable) {
+                    acknowledgeMutation(actorId, 'POST', path, request.body);
+                    draft.write({ fields, pending: null });
+                    setPending(null);
+                    const errors = fieldErrorsFor(error);
+                    if (Object.keys(errors).length) {
+                        rejectedField.current = { form, errors, generation };
+                        s.setErrors(errors);
+                    }
+                    s.setError(message(error));
+                    if (error.code === 'FORBIDDEN') await s.session.verify();
+                } else {
+                    s.setError('暂时无法确认是否加入成功。你的填写仍在，可以核对上次提交。');
+                    await s.session.verify('正在确认上次资料提交结果…');
+                }
+            }
+        } catch (error) {
+            s.setError(message(error));
+            if (pending) await s.session.verify('正在核对上次入队结果…');
+        } finally {
+            s.setBusy(false);
+        }
+    }
+    return { ...s, pending, submit };
+}
 function ProfileFields({ fields, setFields, errors }: {
     fields: Fields; setFields: Dispatch<SetStateAction<Fields>>; errors: FieldErrors;
 }) {
@@ -50,46 +133,83 @@ function ProfileFields({ fields, setFields, errors }: {
         {errors[name] && <p id={`${id}-${name}-error`} className="form-error">{errors[name]}</p>}
     </div>)}</>;
 }
-export function JoinForm({ actorId, token = '', returnTo }: { actorId: string; token?: string; returnTo: string }) {
-    const s = useSubmission();
-    const id = useId();
-    const [invite, setInvite] = useState(token);
-    const [fields, setFields] = useState<Fields>({ discName: '', jerseyNumber: '' });
+export function EnrollmentDestination({ returnTo, role }: { returnTo: string; role: NonNullable<Me['membership']>['role'] }) {
+    const router = useRouter();
+    const destination = role !== 'admin' && returnTo.startsWith('/admin/') ? '/' : returnTo;
+    useEffect(() => {
+        const target = preserveTargetHash(destination);
+        const current = window.location.pathname + window.location.search + window.location.hash;
+        if (target === current) router.refresh();
+        else router.replace(target);
+    }, [destination, router]);
+    return <p className="notice" role="status">已确认 Kapok 成员资格，正在继续…</p>;
+}
+
+export function JoinForm({ actorId, returnTo }: { actorId: string; returnTo: string }) {
+    const [draft] = useState(() => registrationDraft(actorId));
+    const [stored] = useState(() => {
+        const own = draft.read();
+        const prefill = consumeRegistrationPrefill(actorId);
+        if (own || !prefill) return own;
+        const restored = { fields: prefill, pending: null };
+        draft.write(restored);
+        return restored;
+    });
+    const [fields, setFields] = useState<Fields>(stored?.fields ?? { discName: '', jerseyNumber: '' });
+    const latestFields = useRef(fields);
+    const s = useEnrollmentSubmission(actorId, fields, draft, stored?.pending ?? null);
     const [done, setDone] = useState<JoinResult | null>(null);
-    if (done) {
-        const active = done.me.user?.status === 'active' && done.me.membership?.status === 'active';
-        return <section className={`notice ${active ? 'success' : ''}`} role="status">
-            <h2>{active ? '已加入队伍' : '原加入请求已完成，当前成员资格未生效'}</h2>
-            <p>{active ? `当前账号背号为 ${done.me.profile?.jerseyNumber}。` : '当前成员状态已变化；重试不会重新加入或恢复成员资格。请联系管理员确认。'}</p>
-            <a className="button" href={active ? done.returnTo : '/me'}>{active ? '继续原来的内容' : '查看当前账号状态'}</a>
-        </section>;
+    const form = useRef<HTMLFormElement>(null);
+    const dialog = useRef<HTMLDialogElement>(null);
+    const trigger = useRef<HTMLButtonElement>(null);
+    const cancel = useRef<HTMLButtonElement>(null);
+    const dialogTitle = useId();
+    const session = s.session;
+    useLayoutEffect(() => session.subscribe(ended => {
+        if (dialog.current?.open) dialog.current.close();
+        if (ended) draft.clear();
+    }), [draft, session]);
+    function closeConfirmation() {
+        dialog.current?.close();
+        trigger.current?.focus();
     }
-    return <form onSubmit={async event => {
+    function submit() {
+        if (!form.current) return;
+        void s.submit({ ...fields, intent: 'register', confirmed: true, returnTo: preserveTargetHash(returnTo) }, setDone, form.current);
+    }
+    if (done?.me.membership) return <EnrollmentDestination returnTo={done.returnTo} role={done.me.membership.role} />;
+    return <form ref={form} data-own-buffer noValidate onSubmit={event => {
         event.preventDefault();
-        if (s.busy || s.submitting.current) return;
-        const form = event.currentTarget;
-        const errors = { ...validate(fields), ...(invite.trim().length < 16 ? { token: '请填写有效邀请令牌。' } : {}) };
+        if (s.busy || s.submitting.current || dialog.current?.open) return;
+        if (s.pending) { submit(); return; }
+        const errors = validate(fields);
         s.setErrors(errors);
         if (Object.keys(errors).length) { focusError(event.currentTarget, errors); return; }
-        const body = { token: invite, ...fields, returnTo };
-        s.setError(''); s.setBusy(true);
-        try {
-            const generation = await s.session.authorize();
-            const result = await api<JoinResult>('join', { method: 'POST', actorId, body, key: s.key.current(actorId, body) });
-            if (s.session.isCurrent(generation)) { acknowledgeMutation(actorId, 'POST', 'join', body); setDone(result); }
-        } catch (e) {
-            s.setError(message(e));
-            showFieldError(e, form, s.setErrors);
-        } finally { s.setBusy(false); }
+        dialog.current?.showModal();
+        cancel.current?.focus();
     }}>
-        <label htmlFor={`${id}-token`}>邀请令牌</label>
-        <input id={`${id}-token`} name="token" value={invite} onChange={e => setInvite(e.target.value)} required maxLength={200} autoComplete="off" autoCapitalize="none" spellCheck={false}
-            aria-invalid={!!s.errors.token} aria-describedby={s.errors.token ? `${id}-token-error` : undefined} />
-        {s.errors.token && <p id={`${id}-token-error`} className="form-error">{s.errors.token}</p>}
-        <ProfileFields fields={fields} setFields={setFields} errors={s.errors} />
+        <fieldset disabled={s.busy || !!s.pending}>
+            <ProfileFields fields={fields} setFields={next => {
+                const edited = typeof next === 'function' ? next(latestFields.current) : next;
+                latestFields.current = edited;
+                setFields(edited);
+                draft.write({ fields: edited, pending: null });
+            }} errors={s.errors} />
+        </fieldset>
         {s.error && <p className="form-error" role="alert">{s.error}</p>}
-        <button disabled={s.busy}>{s.busy ? '正在加入…' : '保存资料并加入'}</button>
-        <p className="muted">仅提交成功后消耗邀请；失败时请保留输入重试。</p>
+        {s.pending && !s.busy && !s.error && <p role="status">上次提交的结果尚待确认。</p>}
+        {s.busy && <p role="status">正在核对注册状态，请稍候…</p>}
+        <button ref={trigger} type="submit" disabled={s.busy}>{s.pending ? '核对上次入队请求' : '保存资料并加入'}</button>
+        <dialog ref={dialog} className="registration-confirm" aria-labelledby={dialogTitle} onCancel={event => { event.preventDefault(); closeConfirmation(); }}>
+            <h2 id={dialogTitle}>确认加入 Kapok？</h2>
+            <p>盘名 {fields.discName.trim()}</p>
+            <p>背号 {fields.jerseyNumber.trim()}</p>
+            <p>队伍 Kapok。新账号的成员角色由系统分配。</p>
+            <div className="registration-confirm-actions">
+                <button ref={cancel} type="button" className="secondary" onClick={closeConfirmation}>返回修改</button>
+                <button type="button" onClick={() => { if (dialog.current?.open) { closeConfirmation(); submit(); } }}>确认提交</button>
+            </div>
+        </dialog>
     </form>;
 }
 export function ProfileForm({ me, actorId, onSaved, onCancel }: { me: Me; actorId: string; onSaved?: (me: Me) => void; onCancel?: () => void }) {
@@ -152,100 +272,5 @@ export function ProfileForm({ me, actorId, onSaved, onCancel }: { me: Me; actorI
         {saveStatus === 'edited' && !s.busy && <p className="muted" role="status">有尚未保存的修改。</p>}
         {saveStatus === 'conflict' && <button type="button" className="secondary" disabled={s.busy} onClick={() => void s.session.verify()}>重新载入当前资料（保留输入）</button>}
         {conflict && <p className="notice" role="status">上方输入与当前账号资料不同，仍未保存；当前账号资料为 {current.profile.discName} / {current.profile.jerseyNumber}。请核对后再保存。</p>}
-    </form>;
-}
-export function BootstrapForm({ actorId }: { actorId: string }) {
-    const s = useSubmission();
-    const [fields, setFields] = useState<Fields>({ discName: '合成领队', jerseyNumber: '01' });
-    const [result, setResult] = useState<BootstrapResult | null>(null);
-    const submitting = useRef(false);
-    if (result) return <>
-        <div className="notice success" role="status">
-            <h2>合成队伍已初始化</h2>
-            <p>当前账号已绑定首位管理员。</p>
-        </div>
-        <InviteOutput result={result} actorId={actorId} />
-        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Critical recovery uses document navigation if client routing is unavailable. */}
-        <a href="/">前往首页</a>
-    </>;
-    return <form onSubmit={async event => {
-        event.preventDefault();
-        if (submitting.current || s.busy) return;
-        const form = event.currentTarget;
-        const errors = validate(fields);
-        s.setErrors(errors);
-        if (Object.keys(errors).length) { focusError(event.currentTarget, errors); return; }
-        submitting.current = true;
-        s.setBusy(true); s.setError('');
-        try {
-            const generation = await s.session.authorize();
-            const value = await api<BootstrapResult>('internal/bootstrap', { method: 'POST', actorId, body: fields, key: s.key.current(actorId, fields) });
-            if (s.session.isCurrent(generation)) { acknowledgeMutation(actorId, 'POST', 'internal/bootstrap', fields); setResult(value); }
-        } catch (e) {
-            s.setError(message(e));
-            showFieldError(e, form, s.setErrors);
-            // Transport failure does not prove that the initialization transaction failed.
-            // Read current facts before allowing another explicit same-key submission.
-            if (!(e instanceof ApiError) || e.retryable) await s.session.verify('正在确认上次初始化结果…');
-        } finally { submitting.current = false; s.setBusy(false); }
-    }}>
-        <ProfileFields fields={fields} setFields={setFields} errors={s.errors} />
-        <p>将创建唯一的合成队伍、当前账号的管理员档案，以及一个7天有效、仅可使用一次的合成邀请。</p>
-        {s.error && <p className="form-error" role="alert">{s.error}</p>}
-        <button disabled={s.busy}>{s.busy ? '正在初始化…' : '初始化合成队伍'}</button>
-    </form>;
-}
-function InviteOutput({ result, actorId }: { result: InviteResult; actorId: string }) {
-    const s = useSubmission();
-    const [current, setCurrent] = useState(result);
-    const [copied, setCopied] = useState(false);
-    const link = current.inviteToken ? `/join/${current.inviteToken}` : null;
-    return <section className="panel">
-        <h2>合成邀请</h2>
-        <p>仅可使用一次，有效至 {new Date(current.expiresAt).toLocaleDateString('zh-CN')}。本环境仅供合成测试，请勿发给真实队员。</p>
-        {link ? <>
-            <label>邀请路径<input readOnly value={link} onFocus={e => e.target.select()} />
-            </label>
-            <button className="secondary" type="button" onClick={async () => {
-                try {
-                    const generation = await s.session.authorize();
-                    await navigator.clipboard.writeText(new URL(link, window.location.origin).href);
-                    if (s.session.isCurrent(generation)) setCopied(true);
-                } catch (e) { s.setError(message(e)); }
-            }}>复制邀请链接</button>{copied && <p role="status">已复制邀请链接。</p>}<p>
-                <a href={link}>查看邀请建档页</a>
-            </p>
-        </> : <>
-            <p>此请求已提交过，原令牌不会再次显示。可先撤销原邀请，再生成新令牌。</p>
-            <button className="secondary" type="button" disabled={s.busy} onClick={async () => {
-                const body = { revokeInviteId: current.inviteId };
-                s.setBusy(true); s.setError('');
-                try {
-                    const generation = await s.session.authorize();
-                    const value = await api<InviteResult>('admin/invites', { method: 'POST', actorId, body, key: s.key.current(actorId, body) });
-                    if (s.session.isCurrent(generation)) { acknowledgeMutation(actorId, 'POST', 'admin/invites', body); setCurrent(value); }
-                } catch (e) { s.setError(message(e)); } finally { s.setBusy(false); }
-            }}>{s.busy ? '正在撤销并重发…' : '撤销原邀请并生成新令牌'}</button>
-        </>}{s.error && <p className="form-error" role="alert">{s.error}</p>}
-    </section>;
-}
-export function InviteForm({ actorId }: { actorId: string }) {
-    const s = useSubmission();
-    const [result, setResult] = useState<InviteResult | null>(null);
-    if (result) return <>
-        <InviteOutput result={result} actorId={actorId} />
-        <button className="secondary" onClick={() => { s.resetKey(); setResult(null); }}>再创建一个合成邀请</button>
-    </>;
-    return <form onSubmit={async event => {
-        event.preventDefault();
-        if (s.busy || s.submitting.current) return;
-        s.setBusy(true); s.setError('');
-        try {
-            const generation = await s.session.authorize();
-            const value = await api<InviteResult>('admin/invites', { method: 'POST', actorId, body: {}, key: s.key.current(actorId, {}) });
-            if (s.session.isCurrent(generation)) { acknowledgeMutation(actorId, 'POST', 'admin/invites', {}); setResult(value); }
-        } catch (e) { s.setError(message(e)); } finally { s.setBusy(false); }
-    }}>
-        <p>创建一个7天有效、仅可使用一次的合成队员邀请。邀请不赋予管理员身份。</p>{s.error && <p className="form-error" role="alert">{s.error}</p>}<button disabled={s.busy}>{s.busy ? '正在创建…' : '创建合成邀请'}</button>
     </form>;
 }

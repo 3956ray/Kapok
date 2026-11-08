@@ -17,11 +17,18 @@ export type Video = {
     status: string;
     version: number;
     durationSec: number | null;
+    publisherId: string | null;
+    publisherName: string | null;
+};
+export type TrainingPublication = {
+    training: Training;
+    video: Video | null;
 };
 export type Comment = {
     id: string;
     videoId: string;
     rootId: string | null;
+    replyToId: string | null;
     authorId: string;
     authorName: string;
     authorJerseyNumber: string;

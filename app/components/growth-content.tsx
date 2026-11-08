@@ -28,8 +28,8 @@ function Tabs({ actorId, data }: { actorId: string; data: GrowthRows }) {
     ].sort((a, b) => b.date.localeCompare(a.date));
     const visible = rows.filter(row => tab === 'all' || (tab === 'reflections' ? row.kind === 'reflection' : row.kind === 'collection'));
     return <>
-        <div className="filter-tabs" aria-label="成长内容筛选">
-            {([['all', '全部'], ['reflections', '复盘'], ['collections', '收藏']] as const).map(([value, label]) => <button key={value} aria-pressed={tab === value} onClick={() => setTab(value)}>{label}</button>)}
+        <div className="filter-tabs" role="group" aria-label="成长内容筛选">
+            {([['all', '全部'], ['reflections', '复盘'], ['collections', '收藏']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={tab === value} onClick={() => setTab(value)}>{label}</button>)}
         </div>
         {rows.map(row => {
             const index = visible.indexOf(row);

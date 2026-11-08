@@ -12,7 +12,7 @@ export default async function MemberProfile({
     const {
         id
     } = await params;
-    return <Shell title="队友档案" back="/members">
+    return <Shell title="队内档案" back="/members" surface="index" eyebrow="队伍成员" canCompose={isMember(context.me)}>
         {context.user && isMember(context.me) ? <MemberDirectory key={context.user.userId + ':' + id} actorId={context.user.userId} id={id} /> : <AccessState context={context} returnTo={`/members/${id}`} />}
     </Shell>;
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `invites` ADD `recipient_email` text;

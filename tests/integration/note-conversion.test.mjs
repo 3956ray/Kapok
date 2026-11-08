@@ -1,10 +1,11 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
-const admin = { subject: 'admin' }, member = { subject: 'member' };
+const admin = sitesPrincipal('admin'), member = sitesPrincipal('member');
 const state = r => ({ expectedVersion: r.version, expectedSharingVersion: r.sharingVersion, expectedGeneration: r.generation });
 async function fixture(t) {
  const mf = new Miniflare({ modules:true, script:'export default {fetch(){return new Response("test")}}', compatibilityDate:'2026-05-22', d1Databases:['DB'] });
@@ -30,7 +31,7 @@ test('collection seed is an owner-only read, copies saved note only and preserve
   const seed=await readOnly.getCollectionReflectionSeed(member,collection.id);
   assert.deepEqual(seed,{text:'本人已保存备注 🥏\n第二行',trainingId:training.id,videoId:video.id});
   const response=await dispatchApi(new Request('https://k.test/api/v1/collections/'+collection.id+'/reflection-seed'),['collections',collection.id,'reflection-seed'],member,readOnly);
-  assert.equal(response.status,200);assert.match(response.headers.get('Cache-Control'),/private, no-store/);assert.equal(response.headers.get('X-Kapok-Actor'),'member');assert.deepEqual((await response.json()).data,seed);
+  assert.equal(response.status,200);assert.match(response.headers.get('Cache-Control'),/private, no-store/);assert.equal(response.headers.get('X-Kapok-Actor'),await actorKey(member));assert.deepEqual((await response.json()).data,seed);
   for(const target of [collection.id,'missing']) await assert.rejects(s.getCollectionReflectionSeed(admin,target),e=>e.code==='NOT_FOUND'&&e.message==='内容不可用或当前无权查看。');
   await assert.rejects(s.getCollectionReflectionSeed(null,collection.id),e=>e.code==='UNAUTHENTICATED');
   const unauth=await dispatchApi(new Request('https://k.test/'),['collections',collection.id,'reflection-seed'],null,s);assert.equal(unauth.status,401);assert.match(unauth.headers.get('Cache-Control'),/no-store/);

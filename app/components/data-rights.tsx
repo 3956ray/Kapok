@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { ChevronRight, Download, LockKeyhole, RotateCcw } from 'lucide-react';
 import type { Me } from '../../lib/contracts';
 import type { DeletedReflection, ManagedMember } from '../../lib/contracts/data-rights';
+import type { ReflectionAuthor } from '../../lib/contracts/reflections';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError } from '../../lib/client/api';
 import { downloadOwnData } from '../../lib/client/data-export';
@@ -15,20 +17,25 @@ import { SecureStatus, useSecureResource } from './secure-resource';
 type Pending = { path: string; method: 'POST' | 'PATCH'; body: unknown; key: string };
 const message = (e: unknown) => e instanceof Error ? e.message : '暂时未能完成，请保留当前请求并重试。';
 const uncertain = (e: unknown) => !(e instanceof ApiError) || e.retryable;
+const needsRefresh = (e: unknown) => e instanceof ApiError && ['MEMBERSHIP_CONFLICT', 'VERSION_CONFLICT', 'FORBIDDEN', 'NOT_FOUND'].includes(e.code);
+const roleLabel = { member: '队员', coach: '教练', admin: '管理员' };
+const statusLabel = { active: '有效成员', paused: '队内访问已暂停', left: '已离队' };
 
 export function PersonalData({ actorId }: { actorId: string }) {
     const secure = useSecureResource<Me>(actorId, 'me');
     const [pending, setPending] = useNavigationField<LeaveRequest | null>(actorId, 'leave-pending', null);
-    const [busy, setBusy] = useState(false);
+    const busy = useRef(false);
+    const [action, setAction] = useState<'export' | 'leave' | null>(null);
     const [confirmed, setConfirmed] = useState(false);
+    const [exportFeedback, setExportFeedback] = useState<{ error: boolean; text: string } | null>(null);
     const [error, setError] = useState('');
     const [status, setStatus] = useState('');
     const errorId = useId();
     async function download() {
-        if (busy) return;
-        setBusy(true);
-        setError('');
-        setStatus('');
+        if (busy.current) return;
+        busy.current = true;
+        setAction('export');
+        setExportFeedback(null);
         try {
             await downloadOwnData(actorId, secure.authorize, secure.isCurrent, data => {
                 const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' }));
@@ -41,62 +48,87 @@ export function PersonalData({ actorId }: { actorId: string }) {
                     URL.revokeObjectURL(url);
                 }
             });
-            setStatus('已请求浏览器下载本人 JSON。请确认设备中的文件并自行保管。');
+            setExportFeedback({ error: false, text: '已请求浏览器下载本人 JSON。请确认设备中的文件并自行保管。' });
         } catch (e) {
-            setError(message(e));
+            setExportFeedback({ error: true, text: `数据导出暂未完成。没有生成可下载文件。${message(e)}` });
+            if (needsRefresh(e)) await secure.verify();
         } finally {
-            setBusy(false);
+            busy.current = false;
+            setAction(null);
         }
     }
     async function leave() {
-        if (busy || !confirmed || !secure.data?.membership) return;
-        setBusy(true);
+        if (busy.current || !confirmed || !secure.data?.membership) return;
+        busy.current = true;
+        setAction('leave');
+        const membership = secure.data.membership;
         setError('');
         setStatus('');
+        let sent = false;
         try {
             await submitLeaveRequest(actorId, {
                 confirmed,
-                membership: secure.data.membership,
+                membership,
                 pending,
             }, {
                 authorize: secure.authorize,
                 isCurrent: secure.isCurrent,
-                setPending,
+                setPending: request => { if (request) sent = true; setPending(request); },
                 setConfirmed,
                 refresh: secure.verify,
                 showStatus: setStatus,
             });
         } catch (e) {
             if (!uncertain(e)) setPending(null);
-            setError(message(e));
+            setConfirmed(false);
+            setError(sent && uncertain(e) ? '退出请求结果暂未确认。请核对当前成员状态，仍有访问权限时可确认上次请求。' : message(e));
+            if ((sent && uncertain(e)) || needsRefresh(e)) await secure.verify();
         } finally {
-            setBusy(false);
+            busy.current = false;
+            setAction(null);
         }
     }
+    const membership = secure.data?.membership;
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
-        <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            <section className="panel">
-                <h2>导出本人数据</h2>
-                <p>每次下载重新核验账号及当前来源权限，包含本人资料、复盘、收藏引用、私人备注、秒数和本人评论。不会复制他人正文或分享对象。</p>
-                <p className="muted">当前无权读取的来源仅保留引用与不可用标记。文件下载后由你自行保管，本服务不保留导出副本。</p>
-                <button disabled={busy || secure.locked} onClick={() => void download()}>{busy ? '正在处理…' : '下载本人 JSON'}</button>
-            </section>
-            <Link className="row-link" href="/me/recycle">本人复盘回收站 →</Link>
-            {secure.data?.membership && <section className="panel danger-zone">
-                <h2>退出队伍</h2>
-                <p>当前状态：{secure.data.membership.status === 'active' ? '有效成员' : secure.data.membership.status === 'paused' ? '队内访问已暂停' : '已离队'}。</p>
-                <p>退出保留账号、本人私稿、备注和导出，关闭队内来源与成员资料读取，同时撤销本人对外分享。重新加入也不会恢复旧分享。</p>
-                <p className="muted">最后一位有效管理员须先保留另一位有效管理员。退出队伍与注销账号是两件事。</p>
-                {(secure.data.membership.status !== 'left' || pending) && <>
-                    <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} aria-describedby={error ? errorId : undefined} />我已理解退出及撤销分享的后果</label>
-                    <button className="secondary danger" disabled={busy || !confirmed || secure.locked} onClick={() => void leave()}>{busy ? '正在确认…' : pending ? '重新确认上次退出请求' : '确认退出队伍'}</button>
-                </>}
-                {secure.data.membership.status !== 'active' && <p><Link href="/join">通过有效合成邀请重新加入</Link></p>}
+        <div className="account-stack" data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
+            {secure.data?.profile ? <>
+                <section className="panel account-private">
+                    <p className="workspace-overline">个人记录</p>
+                    <h2><LockKeyhole size={18} aria-hidden="true" />只属于你的记录</h2>
+                    <p>私人复盘与备注仅你可读，队伍管理员也无法阅读。</p>
+                </section>
+                <section className="panel" aria-busy={action === 'export'}>
+                    <h2>导出本人数据</h2>
+                    <p>下载本人资料、复盘、收藏引用、私人备注、秒数和本人评论。当前无权读取的来源仅保留引用与不可用标记。</p>
+                    <p className="muted">请自行保管下载的文件。</p>
+                    <button disabled={!!action || secure.locked} onClick={() => void download()}><Download size={17} aria-hidden="true" />{action === 'export' ? '正在导出…' : exportFeedback?.error ? '重新导出' : '下载本人 JSON'}</button>
+                    {exportFeedback && <p className={exportFeedback.error ? 'notice error' : 'notice success'} role={exportFeedback.error ? 'alert' : 'status'}>{exportFeedback.text}</p>}
+                </section>
+                <Link className="detail-row" href="/me/recycle">
+                    <span className="detail-tile"><RotateCcw size={18} aria-hidden="true" /></span>
+                    <span><strong>本人复盘回收站</strong><small>在 7 天内恢复为私密原稿</small></span>
+                    <ChevronRight size={18} aria-hidden="true" />
+                </Link>
+                {membership && <section className="panel danger-zone account-leave" aria-busy={action === 'leave'}>
+                    <div className="account-card-heading"><h2>退出队伍</h2><span className="status-label">{statusLabel[membership.status]}</span></div>
+                    <p>离队会关闭队内访问并撤销对外分享。账号、本人私稿和备注会保留。请在退出前先导出需要保留的记录。</p>
+                    {membership.role === 'admin' && <p className="muted">最后一位有效管理员须先交接管理职责。</p>}
+                    {(membership.status !== 'left' || pending) && <>
+                        <label><input type="checkbox" checked={confirmed} disabled={!!action} onChange={e => setConfirmed(e.target.checked)} aria-describedby={error ? errorId : undefined} />我已理解退出及撤销分享的后果</label>
+                        <button className="secondary danger" disabled={!!action || !confirmed || secure.locked} onClick={() => void leave()}>{action === 'leave' ? '正在确认…' : pending ? '重新确认上次退出请求' : '确认退出队伍'}</button>
+                    </>}
+                    {error && <p id={errorId} className="notice error" role="alert">{error}</p>}
+                    {status && <p className="notice success" role="status">{status}</p>}
+                </section>}
+                <p className="small">账号注销与恢复暂未开放。如需核实账号状态，请联系队伍管理员。</p>
+            </> : secure.data && <section className="notice" role="status">
+                <h2>当前账号无法访问个人数据页</h2>
+                {membership && <p>当前队内状态为{statusLabel[membership.status]}。</p>}
+                {error && <p role="alert">{error}</p>}
+                {status && <p role="status">{status}</p>}
+                <Link className="button secondary" href="/me">返回我的账户</Link>
             </section>}
-            <p className="muted">账号注销与恢复、到期自动清理、独立备份与恢复演练尚待交付。当前不承诺自动清理或备份时限。</p>
-            {error && <p id={errorId} className="form-error" role="alert">{error}</p>}
-            {status && <p className="notice" role="status">{status}</p>}
         </div>
     </>;
 }
@@ -104,43 +136,61 @@ export function PersonalData({ actorId }: { actorId: string }) {
 export function ReflectionRecycle({ actorId }: { actorId: string }) {
     const secure = useSecureResource<DeletedReflection[]>(actorId, 'me/recycle');
     const [pending, setPending] = useNavigationField<Pending | null>(actorId, 'recycle-pending', null);
+    const submitting = useRef(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    async function restore(r: DeletedReflection) {
-        if (busy) return;
+    const [status, setStatus] = useState('');
+    async function restore(r?: DeletedReflection) {
+        if (submitting.current) return;
+        const request: Pending | undefined = pending ?? (r && {
+            path: `reflections/${r.id}/restore`, method: 'POST', key: crypto.randomUUID(),
+            body: { expectedVersion: r.version, expectedSharingVersion: r.sharingVersion, expectedGeneration: r.generation },
+        });
+        if (!request) return;
+        submitting.current = true;
         setBusy(true);
         setError('');
+        setStatus('');
         try {
             const token = await secure.authorize();
-            const request = pending ?? {
-                path: `reflections/${r.id}/restore`, method: 'POST', key: crypto.randomUUID(),
-                body: { expectedVersion: r.version, expectedSharingVersion: r.sharingVersion, expectedGeneration: r.generation },
-            };
             setPending(request);
-            await api(request.path, { ...request, actorId });
+            const restored = await api<ReflectionAuthor>(request.path, { ...request, actorId });
             if (!secure.isCurrent(token)) return;
             setPending(null);
+            setStatus(restored.scope === 'private' && !restored.published
+                ? '已恢复为私密复盘。你可以在成长记录查看。'
+                : '已确认上次恢复请求。当前阅读范围与发布状态以成长记录为准。');
             await secure.verify();
         } catch (e) {
             if (!uncertain(e)) setPending(null);
             setError(message(e));
+            if (needsRefresh(e)) await secure.verify();
         } finally {
+            submitting.current = false;
             setBusy(false);
         }
     }
+    const pendingInList = secure.data?.some(r => pending?.path === `reflections/${r.id}/restore`);
     return <>
-        <p>本人删除的复盘在删除后 7 天内可恢复，截止时刻之后不可恢复。恢复仅回到本人私密原稿，原阅读范围与动态发布全部保持撤销。</p>
-        <p className="muted">到期自动物理清理尚待交付，当前不承诺清理时限。</p>
+        <section className="panel account-private">
+            <h2><LockKeyhole size={18} aria-hidden="true" />恢复为私密原稿</h2>
+            <p>删除后的 7 天内可恢复本人复盘。恢复后仅你可读，原阅读权限和动态发布仍保持撤销。</p>
+        </section>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
-        <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {secure.data?.length === 0 && <p className="notice">当前没有可恢复的本人复盘。</p>}
+        <div className="account-stack" data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked} aria-busy={busy}>
+            {status && <p className="notice success" role="status">{status}</p>}
+            {error && <p className="notice error" role="alert">{error}</p>}
+            {pending && !pendingInList && <div className="notice">
+                <p>上次恢复请求的结果暂未确认。</p>
+                <button className="secondary" disabled={busy || secure.locked} onClick={() => void restore()}>{busy ? '正在确认…' : '重新确认上次恢复请求'}</button>
+            </div>}
+            {secure.data?.length === 0 && <p className="panel" role="status">当前没有可恢复的本人复盘。</p>}
             {secure.data?.map(r => <article className="panel" key={r.id}>
                 <h2>{r.title.trim() || '未命名复盘'}</h2>
-                <p>{r.date} · 恢复截止 {new Date(r.recoverUntil).toLocaleString('zh-CN')}</p>
+                <p className="detail-meta"><time dateTime={r.date}>{r.date}</time> · 恢复截止 <time dateTime={r.recoverUntil}>{new Date(r.recoverUntil).toLocaleString('zh-CN')}</time></p>
                 <details><summary>查看本人原稿</summary><p className="reflection-body">{r.text}</p></details>
                 <button className="secondary" disabled={busy || secure.locked || !!pending && pending.path !== `reflections/${r.id}/restore`} onClick={() => void restore(r)}>{busy ? '正在确认…' : pending ? '重新确认上次恢复请求' : '仅恢复为私密原稿'}</button>
             </article>)}
-            {error && <p className="form-error" role="alert">{error}</p>}
         </div>
     </>;
 }
@@ -154,24 +204,35 @@ function MemberForm({ actorId, member, busy, pending, submit }: {
 }) {
     const id = useId();
     const [confirmed, setConfirmed] = useState(false);
-    const [role, setRole] = useNavigationField(actorId, 'member-role:' + member.userId, member.role);
-    const [status, setStatus] = useNavigationField(actorId, 'member-status:' + member.userId, member.status);
-    return <form className="panel" onSubmit={event => {
+    const memberVersion = `${member.userId}:${member.epoch}:${member.version}`;
+    const [role, setRole] = useNavigationField(actorId, 'member-role:' + memberVersion, member.role);
+    const [status, setStatus] = useNavigationField(actorId, 'member-status:' + memberVersion, member.status);
+    const canSubmit = confirmed && !busy && (pending || role !== member.role || status !== member.status);
+    return <form className="panel account-member" aria-label={`管理 ${member.discName}，背号 ${member.jerseyNumber}`} onSubmit={event => {
         event.preventDefault();
-        if (confirmed && !busy) submit(member, role, status);
+        if (!canSubmit) return;
+        setConfirmed(false);
+        submit(member, role, status);
     }}>
-        <ProfileSummary name={member.discName} number={member.jerseyNumber} />
-        <label htmlFor={`${id}-role`}>队内角色</label>
-        <select id={`${id}-role`} value={role} disabled={busy || pending} onChange={e => { setRole(e.target.value as ManagedMember['role']); setConfirmed(false); }}>
-            <option value="member">队员</option><option value="coach">教练</option><option value="admin">管理员</option>
-        </select>
-        <label htmlFor={`${id}-status`}>成员状态</label>
-        <select id={`${id}-status`} value={status} disabled={busy || pending} onChange={e => { setStatus(e.target.value as ManagedMember['status']); setConfirmed(false); }}>
-            <option value="active">有效</option><option value="paused">暂停队内访问</option><option value="left">离队 / 移除</option>
-        </select>
-        <p id={`${id}-consequence`} className="muted">暂停/离队会撤销此人的对外分享，并关闭队内访问。恢复成员身份不会恢复旧分享。再次启用会产生新的成员世代。管理员可管理队伍，但不能查看他人私稿。</p>
-        <label><input type="checkbox" checked={confirmed} disabled={busy} aria-describedby={`${id}-consequence`} onChange={e => setConfirmed(e.target.checked)} />确认对 {member.discName} 的角色及成员状态变更</label>
-        <button disabled={busy || !confirmed}>{busy ? '正在确认…' : pending ? '重新确认上次请求' : '确认成员变更'}</button>
+        <div className="account-card-heading">
+            <ProfileSummary name={member.discName} number={member.jerseyNumber} role={roleLabel[member.role]} />
+            <span className="status-label">{statusLabel[member.status]}</span>
+        </div>
+        <div className="account-member-fields">
+            <label>队内角色
+                <select value={role} disabled={busy || pending} onChange={e => { setRole(e.target.value as ManagedMember['role']); setConfirmed(false); }}>
+                    <option value="member">队员</option><option value="coach">教练</option><option value="admin">管理员</option>
+                </select>
+            </label>
+            <label>成员状态
+                <select value={status} disabled={busy || pending} onChange={e => { setStatus(e.target.value as ManagedMember['status']); setConfirmed(false); }}>
+                    <option value="active">有效</option><option value="paused">暂停队内访问</option><option value="left">离队 / 移除</option>
+                </select>
+            </label>
+        </div>
+        <p id={`${id}-consequence`} className="muted">{pending ? '上次请求的结果暂未确认。可确认同一次请求。' : '暂停或移除会关闭队内访问，并撤销此人的对外分享。恢复成员身份后，旧分享仍保持撤销。'}</p>
+        <label><input type="checkbox" checked={confirmed} disabled={busy} aria-describedby={`${id}-consequence`} onChange={e => setConfirmed(e.target.checked)} />{pending ? '确认核对上次请求' : `确认将 ${member.discName}（#${member.jerseyNumber}）设为${roleLabel[role]}，状态为${statusLabel[status]}`}</label>
+        <button disabled={!canSubmit}>{pending ? '重新确认上次请求' : '确认成员变更'}</button>
     </form>;
 }
 
@@ -179,12 +240,16 @@ export function MemberManagement({ actorId }: { actorId: string }) {
     const secure = useSecureResource<ManagedMember[]>(actorId, 'admin/members');
     const [search, setSearch] = useNavigationField(actorId, 'managed-member-search', '');
     const [pending, setPending] = useNavigationField<Pending | null>(actorId, 'member-management-pending', null);
+    const submitting = useRef(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    const [status, setStatus] = useState('');
     async function update(m: ManagedMember, role: string, status: string) {
-        if (busy) return;
+        if (submitting.current) return;
+        submitting.current = true;
         setBusy(true);
         setError('');
+        setStatus('');
         try {
             const token = await secure.authorize();
             const request = pending ?? {
@@ -195,24 +260,31 @@ export function MemberManagement({ actorId }: { actorId: string }) {
             await api(request.path, { ...request, actorId });
             if (!secure.isCurrent(token)) return;
             setPending(null);
+            setStatus('成员变更已确认。下方显示当前成员状态。');
             await secure.verify();
         } catch (e) {
             if (!uncertain(e)) setPending(null);
             setError(message(e));
+            if (needsRefresh(e)) await secure.verify();
         } finally {
+            submitting.current = false;
             setBusy(false);
         }
     }
+    const matching = secure.data?.filter(m => m.discName.includes(search) || m.jerseyNumber.includes(search));
     return <>
-        <p>仅当前有效管理员可变更队内角色与状态。最后一位有效管理员不能被降级、暂停或移除；须先保留另一位有效管理员。</p>
-        <p className="small">教练仍是队内角色。复盘阅读范围只有仅自己与全队。</p>
+        <section className="panel account-private">
+            <h2>成员访问权限</h2>
+            <p>最后一位有效管理员须先交接管理职责，才能降级、暂停或移除。管理员无法查看他人的私人复盘和备注。</p>
+        </section>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
-        <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>
-            {secure.data && <label>查找成员<input type="search" placeholder="输入盘名或背号" value={search} onChange={event => setSearch(event.target.value)} /></label>}
-            {secure.data?.length === 0 && <p className="panel">队伍暂时没有可管理的成员。</p>}
-            {!!secure.data?.length && !secure.data.some(m => m.discName.includes(search) || m.jerseyNumber.includes(search)) && <p className="panel">没有匹配的成员。</p>}
-            {secure.data?.filter(m => m.discName.includes(search) || m.jerseyNumber.includes(search)).map(m => <MemberForm actorId={actorId} key={`${m.id}-${m.version}-${secure.authorizationStamp}`} member={m} busy={busy || secure.locked || !!pending && pending.path !== `admin/members/${m.userId}`} pending={pending?.path === `admin/members/${m.userId}`} submit={(member, role, status) => void update(member, role, status)} />)}
-            {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="account-stack" data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked} aria-busy={busy}>
+            {secure.data && <label className="member-search">查找成员<input type="search" placeholder="输入盘名或背号" value={search} onChange={event => setSearch(event.target.value)} /></label>}
+            {status && <p className="notice success" role="status">{status}</p>}
+            {error && <p className="notice error" role="alert">{error}</p>}
+            {secure.data?.length === 0 && <p className="panel" role="status">队伍暂时没有可管理的成员。</p>}
+            {!!secure.data?.length && !matching?.length && <p className="panel" role="status">没有匹配的成员。</p>}
+            {matching?.map(m => <MemberForm actorId={actorId} key={`${m.id}-${m.epoch}-${m.version}-${secure.authorizationStamp}`} member={m} busy={busy || secure.locked || !!pending && pending.path !== `admin/members/${m.userId}`} pending={pending?.path === `admin/members/${m.userId}`} submit={(member, role, status) => void update(member, role, status)} />)}
         </div>
     </>;
 }

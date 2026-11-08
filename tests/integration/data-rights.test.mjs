@@ -1,3 +1,4 @@
+import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -5,10 +6,10 @@ import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
 
-const admin = { subject: 'admin' };
-const author = { subject: 'author' };
-const member = { subject: 'member' };
-const coach = { subject: 'coach' };
+const admin = sitesPrincipal('admin');
+const author = sitesPrincipal('author');
+const member = sitesPrincipal('member');
+const coach = sitesPrincipal('coach');
 const content = { title: '本人标题', text: '本人复盘正文', date: '2026-10-16' };
 const state = r => ({
     expectedVersion: r.version,
@@ -88,11 +89,11 @@ test('fresh own export omits other bodies, email and grant internals; unavailabl
     assert.equal(data.collections.find(c => c.sourceId === other.id).privateNote, '本人备注');
     assert.equal(data.comments[0].text, '本人评论');
     assert.equal(JSON.stringify(await s.exportOwnData(admin)).includes(content.text), false);
-    await denied(s.exportOwnData({ subject: 'outsider' }), 'FORBIDDEN');
+    await denied(s.exportOwnData(sitesPrincipal('outsider')), 'FORBIDDEN');
     const own = await dispatchApi(new Request('https://kapok.test/api/v1/me/export'), ['me', 'export'], author, s);
     assert.equal(own.status, 200);
     assert.match(own.headers.get('Cache-Control'), /no-store/);
-    assert.equal(own.headers.get('X-Kapok-Actor'), author.subject);
+    assert.equal(own.headers.get('X-Kapok-Actor'), await actorKey(author));
     const guessed = await dispatchApi(new Request('https://kapok.test/api/v1/me/' + ids.author + '/export'), ['me', ids.author, 'export'], member, s);
     assert.equal(guessed.status, 404);
     const anonymous = await dispatchApi(new Request('https://kapok.test/api/v1/me/export'), ['me', 'export'], null, s);

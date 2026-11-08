@@ -1,7 +1,7 @@
 'use client';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Pencil } from 'lucide-react';
+import { Bookmark, LockKeyhole, Pencil } from 'lucide-react';
 import type { Collection } from '../../lib/contracts/training';
 import { acknowledgeMutation, clearFormUI, useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
@@ -21,11 +21,13 @@ function CollectionEditor({ actorId, sourceKind, sourceId, timestampSec, private
     const [error, setError] = useState('');
     const [done, setDone] = useState(false);
     const key = useRef(createRequestKey());
-    if (done) return <p className="notice success" role="status">{privateNote ? '私人备注已保存到账号。' : '已加入本人成长。'}<Link href="/growth">管理私人备注</Link>
-    </p>;
+    if (done) return <div className="notice success collection-saved">
+        <p role="status">{privateNote ? '私人备注已保存到账号。' : '已加入本人成长。'}</p>
+        <Link href="/growth">管理私人备注</Link>
+    </div>;
     return <section className={privateNote ? 'private-note' : 'collection-action'}>
-        {privateNote && <><h2>留给自己</h2><p className="small">私人备注仅自己可见，保存后可在成长中回看。</p></>}
-        {!privateNote && <button type="button" className="secondary" onClick={() => setOpen(!open)}>{open ? '收起收藏表单' : '加入成长'}</button>}
+        {privateNote && <><h2><Bookmark size={18} aria-hidden="true" />收藏与私人备注</h2><p className="privacy-line"><LockKeyhole size={16} aria-hidden="true" />仅自己可见，可在成长中回看。</p></>}
+        {!privateNote && <button type="button" className="secondary" aria-expanded={open} onClick={() => setOpen(!open)}><Bookmark size={16} aria-hidden="true" />{open ? '收起收藏表单' : '加入成长'}</button>}
         <form data-buffer-id={`collection-new:${sourceKind}:${sourceId}`} hidden={!privateNote && !open} onSubmit={async e => {
             e.preventDefault();
             if (busy) return;
@@ -55,9 +57,9 @@ function CollectionEditor({ actorId, sourceKind, sourceId, timestampSec, private
                 if (session.isCurrent(generation)) { acknowledgeMutation(actorId, 'POST', 'collections', body); clearFormUI(actorId, `collection-new:${sourceKind}:${sourceId}`); setDone(true); setNote(''); }
             } catch (e) { setError(message(e)); } finally { setBusy(false); }
         }}>
-            <label>私人备注（可选）<textarea name="note" maxLength={2000} rows={3} value={note} onChange={e => setNote(e.target.value)} disabled={busy} />
+            <label>私人备注（可选）<textarea name="note" maxLength={2000} rows={3} value={note} onChange={e => setNote(e.target.value)} disabled={busy} placeholder="为什么想回看这一刻？" />
             </label>
-            <p className="muted">仅自己可见。收藏不会改变原内容的可见范围；重复收藏请到成长页管理已有备注。</p>
+            <p className="small">{typeof timestampSec === 'number' ? `收藏时间点 ${timestampSec} 秒。` : '收藏来源，随时回看。'}已有备注可在成长中编辑。</p>
             {error && <p role="alert" className="form-error">{error}</p>}
             {error && <Link href="/growth">到成长管理私人备注</Link>}
             <button disabled={busy}>{busy ? '正在保存…' : privateNote ? '保存私人备注' : '保存收藏'}</button>
@@ -85,6 +87,18 @@ export function CollectionCard({ actorId, item }: { actorId: string; item: Colle
     const note = buffer ?? item.privateNote;
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    const editButton = useRef<HTMLButtonElement>(null);
+    const noteInput = useRef<HTMLTextAreaElement>(null);
+    const focusEditor = useRef(false);
+    useLayoutEffect(() => {
+        if (!focusEditor.current) return;
+        const target = editing ? noteInput.current : editButton.current;
+        if (target && !target.closest('[hidden]') && !target.disabled) {
+            focusEditor.current = false;
+            const active = document.activeElement;
+            if (active === document.body || target.closest('.collection-card')?.contains(active)) target.focus();
+        }
+    }, [editing]);
     useEffect(() => {
         if (!pending || item.version <= pending.expectedVersion || item.privateNote !== pending.privateNote.trim()) return;
         // A PATCH receipt alone cannot confirm the note; only the fresh owner snapshot can.
@@ -127,20 +141,20 @@ export function CollectionCard({ actorId, item }: { actorId: string; item: Colle
         } finally { setBusy(false); }
     }
     return <article className="panel collection-card">
-        <p className="muted">{item.createdAt.slice(0, 10)} · {item.sourceKind === 'comment' ? '讨论收藏' : item.sourceKind === 'reflection' ? '队友复盘收藏' : '视频收藏'}{item.timestampSec !== null ? ` · ${item.timestampSec}秒` : ''}</p>
+        <p className="detail-meta"><time dateTime={item.createdAt}>{item.createdAt.slice(0, 10)}</time> · {item.sourceKind === 'comment' ? '讨论收藏' : item.sourceKind === 'reflection' ? '队友复盘收藏' : '视频收藏'}{item.timestampSec !== null ? ` · ${item.timestampSec}秒` : ''}</p>
         {item.source ? <>
             <h2>
                 <Link href={item.source.href}>{item.source.title}</Link>
             </h2>{item.source.text && <p className="preserve">{item.source.text}</p>}</> : <h2>来源暂不可用</h2>}
         <section className="private-note">
-            <div className="note-card-heading"><h3>本人私人备注</h3>
-                {!editing && <button type="button" className="secondary note-edit" aria-label="编辑私人备注" onClick={() => { setError(''); setEditing(true); }}><Pencil size={18} aria-hidden="true" /><span className="sr-only">编辑私人备注</span></button>}
+            <div className="note-card-heading"><h3><LockKeyhole size={16} aria-hidden="true" />本人私人备注</h3>
+                {!editing && <button ref={editButton} type="button" className="secondary note-edit" aria-label="编辑私人备注" onClick={() => { focusEditor.current = true; setError(''); setEditing(true); }}><Pencil size={18} aria-hidden="true" /><span className="sr-only">编辑私人备注</span></button>}
             </div>
-            {editing ? <form data-own-buffer data-buffer-id={item.id} onSubmit={e => { e.preventDefault(); void submit(pending ?? { privateNote: note, expectedVersion: item.version }); }}>
-                <label>本人私人备注<textarea name="note" maxLength={2000} rows={3} value={note} onChange={e => setBuffer(e.target.value)} disabled={busy || pending !== null} /></label>
+            {editing ? <form data-own-buffer data-buffer-id={item.id} aria-busy={busy} onSubmit={e => { e.preventDefault(); focusEditor.current = true; void submit(pending ?? { privateNote: note, expectedVersion: item.version }); }}>
+                <label><span className="sr-only">本人私人备注</span><textarea ref={noteInput} name="note" maxLength={2000} rows={3} value={note} onChange={e => setBuffer(e.target.value)} disabled={busy || pending !== null} /></label>
                 <div className="actions">
                     <button disabled={busy}>{busy ? '正在保存…' : pending ? '确认保存备注结果' : '保存备注'}</button>
-                    <button className="secondary" type="button" disabled={busy || pending !== null} onClick={() => { setBuffer(null); setEditing(false); setError(''); clearFormUI(actorId, item.id); }}>取消</button>
+                    <button className="secondary" type="button" disabled={busy || pending !== null} onClick={() => { focusEditor.current = true; setBuffer(null); setEditing(false); setError(''); clearFormUI(actorId, item.id); }}>取消</button>
                     <button className="secondary" type="button" disabled>转为复盘</button>
                 </div>
                 <p className="muted">{pending ? '上次保存尚待确认，输入仍保留。请先确认保存结果。' : '请先保存备注，再转为复盘；取消会放弃本次修改。'}</p>

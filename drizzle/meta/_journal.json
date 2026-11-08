@@ -43,6 +43,41 @@
       "when": 1792293074440,
       "tag": "0005_two_scope_reflections",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793982300023,
+      "tag": "0006_identity_namespace",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793985652194,
+      "tag": "0007_email_bound_invites",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794028642706,
+      "tag": "0008_fixed_team_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794075984044,
+      "tag": "0009_kapok_team_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794113775085,
+      "tag": "0010_training_publication",
+      "breakpoints": true
     }
   ]
 }
