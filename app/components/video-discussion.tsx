@@ -1,10 +1,11 @@
 'use client';
+import { ReflectionIcon } from './reflection-icon';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode } from 'react';
 import type { Comment, Training, Video } from '../../lib/contracts/training';
 import type { BootstrapStatus } from '../../lib/contracts';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
-import { ArrowRight, ArrowUpRight, Bookmark, Clock, ExternalLink, Film, Play, Send } from 'lucide-react';
+import { ArrowUpRight, Bookmark, Clock, ExternalLink, Film, Play, Send } from 'lucide-react';
 import { AccountBoundary, useAccountSession } from './secure-resource';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { bilibiliPlayerUrl } from '../../lib/client/bilibili';
@@ -508,7 +509,7 @@ function Discussion({ actorId, userId, admin, video, comments, initialSeconds, e
             <summary><Bookmark size={16} aria-hidden="true" />收藏与备注</summary>
             <SaveCollection actorId={actorId} sourceKind="video" sourceId={video.id} privateNote timestampSec={seconds === '' ? null : Number(seconds)} />
         </details>
-        <Link className="video-reflection-link" href={`/reflections/new?training=${video.trainingId}&video=${video.id}`}>写复盘<ArrowRight size={14} aria-hidden="true" /></Link>
+        <Link className="video-reflection-link" href={`/reflections/new?training=${video.trainingId}&video=${video.id}`}><ReflectionIcon size={16} aria-hidden="true" />写复盘</Link>
     </div>;
     const detail = <header className="video-detail-header">
         {!slots && <h2>{video.title}</h2>}

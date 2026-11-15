@@ -1,4 +1,5 @@
 'use client';
+import { ReflectionIcon } from './reflection-icon';
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
@@ -25,7 +26,7 @@ export function LearningBookmark({ actorId, sourceKind, sourceId, showReflection
             return item ? <CollectionCard compact actorId={actorId} item={item} /> :
                 <CollectionEditor actorId={actorId} sourceKind={sourceKind} sourceId={sourceId} privateNote refreshOnSave />;
         }}</AccountBoundary>
-        {showReflection && <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}>写复盘</Link>}
+        {showReflection && <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}><ReflectionIcon size={16} aria-hidden="true" />写复盘</Link>}
     </div>;
 }
 
@@ -298,13 +299,13 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
                 <div className="actions">
                     <button disabled={busy}>{busy ? '正在保存…' : pending ? '确认保存备注结果' : '保存备注'}</button>
                     <button className="secondary" type="button" disabled={busy || pending !== null} onClick={() => { focusEditor.current = true; setBuffer(null); setEditing(false); setError(''); clearFormUI(actorId, item.id); }}>取消</button>
-                    <button className="secondary" type="button" disabled>转为复盘</button>
+                    <button className="secondary" type="button" disabled><ReflectionIcon size={16} aria-hidden="true" />转为复盘</button>
                 </div>
                 <p className="muted">{pending ? '上次保存尚待确认，输入仍保留。请先确认保存结果。' : '请先保存备注，再转为复盘；取消会放弃本次修改。'}</p>
             </form> : <>
                 <p className="preserve">{item.privateNote.trim() ? item.privateNote : '暂无私人备注'}</p>
                 {item.privateNote.trim() && <p className="muted" role="status">当前备注已保存在账号中。</p>}
-                {item.privateNote.trim() ? <Link className="button secondary" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}>转为复盘</Link> : <><button type="button" className="secondary" disabled>转为复盘</button><p className="muted">先添加并保存私人备注，才能转为复盘。</p></>}
+                {item.privateNote.trim() ? <Link className="button secondary" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}><ReflectionIcon size={16} aria-hidden="true" />转为复盘</Link> : <><button type="button" className="secondary" disabled><ReflectionIcon size={16} aria-hidden="true" />转为复盘</button><p className="muted">先添加并保存私人备注，才能转为复盘。</p></>}
             </>}
             {error && <p role="alert" className="form-error">{error}</p>}
         </section>

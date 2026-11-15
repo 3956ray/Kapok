@@ -1,4 +1,5 @@
 'use client';
+import { ReflectionIcon } from './reflection-icon';
 import { useCallback } from 'react';
 import Link from 'next/link';
 import type { ReflectionAuthor } from '../../lib/contracts/reflections';
@@ -43,7 +44,7 @@ function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthR
         {!visible.length && <section className="panel">
             <h2>{tab === 'collections' ? '还没有收藏' : tab === 'reflections' ? '还没有复盘' : '还没有成长记录'}</h2>
             <p>{tab === 'collections' ? '收藏学习资料、专题合集或训练视频，留下自己的备注。' : '从一段想法开始，保存后再决定是否分享。'}</p>
-            <Link className="button secondary" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab === 'collections' ? '去看训练' : '写复盘'}</Link>
+            <Link className="button secondary" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab !== 'collections' && <ReflectionIcon size={16} aria-hidden="true" />}{tab === 'collections' ? '去看训练' : '写复盘'}</Link>
         </section>}
     </>;
 }

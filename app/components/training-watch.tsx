@@ -1,7 +1,8 @@
 'use client';
+import { ReflectionIcon } from './reflection-icon';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { BootstrapStatus } from '../../lib/contracts';
 import type { Training, Video } from '../../lib/contracts/training';
 import { api, ApiError } from '../../lib/client/api';
@@ -162,7 +163,7 @@ function WatchContent({ actorId, legacyVideoId, selectedVideoId, initialSeconds,
 function ReflectionLink({ linkRef, trainingId, videoId, onClick }: { linkRef: React.RefObject<HTMLAnchorElement | null>; trainingId: string; videoId?: string; onClick: () => void }) {
     const query = new URLSearchParams({ training: trainingId });
     if (videoId) query.set('video', videoId);
-    return <Link ref={linkRef} className="video-reflection-link training-title-action" href={'/reflections/new?' + query.toString()} onClick={onClick} aria-label="写复盘" title="写复盘"><Pencil size={18} aria-hidden="true" /></Link>;
+    return <Link ref={linkRef} className="video-reflection-link training-title-action" href={'/reflections/new?' + query.toString()} onClick={onClick} aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /></Link>;
 }
 
 function VideoRail({ videos, selectedId, onSelect }: { videos: Video[]; selectedId: string; onSelect: (id: string) => void }) {

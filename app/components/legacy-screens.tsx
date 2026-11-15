@@ -1,4 +1,5 @@
 'use client';
+import { ReflectionIcon } from './reflection-icon';
 import { Fragment, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { BookOpen, Bookmark, CalendarDays, ChevronRight, LockKeyhole, Megaphone, Pencil, Sprout, Trash2, UsersRound } from 'lucide-react';
@@ -90,7 +91,7 @@ export function HomeScreen({ actorId }: { actorId: string }) {
                     <p className="workspace-overline">PRIVATE JOURNAL</p>
                     <h3>今天，有哪一刻想再想想？</h3>
                     <p>不必写成总结。先记下一个观察就好。</p>
-                    <Link href="/reflections/new" className="writing-link"><Pencil size={16} aria-hidden="true" />开始写复盘</Link>
+                    <Link href="/reflections/new" className="writing-link"><ReflectionIcon size={16} aria-hidden="true" />开始写复盘</Link>
                 </div>
             </section>
             <section className="section home-quick-links">
