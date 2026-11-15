@@ -313,3 +313,22 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
         }}>删除收藏</button>}
     </article>;
 }
+
+export function ReflectionBookmark({ actorId, sourceId, trigger }: { actorId: string; sourceId: string; trigger: HTMLElement }) {
+    const [open, setOpen] = useState(false);
+    const panelId = useId();
+    return <AccountBoundary<Collection[]> actorId={actorId} load="collections">{items => {
+        const saved = items.find(item => item.sourceKind === 'reflection' && item.sourceId === sourceId);
+        const label = saved ? '已收藏，查看私人备注' : '收藏复盘';
+        return <>
+            {createPortal(<button type="button" className="reflection-title-bookmark" aria-label={label} title={label}
+                aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(value => !value)}>
+                <Bookmark size={18} aria-hidden="true" fill={saved ? 'currentColor' : 'none'} />
+            </button>, trigger)}
+            <div id={panelId} hidden={!open} className="reflection-bookmark-panel">
+                {saved ? <CollectionCard compact actorId={actorId} item={saved} /> :
+                    <CollectionEditor actorId={actorId} sourceKind="reflection" sourceId={sourceId} privateNote refreshOnSave />}
+            </div>
+        </>;
+    }}</AccountBoundary>;
+}

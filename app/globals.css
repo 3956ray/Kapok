@@ -962,3 +962,14 @@ main a.topic-featured-card:hover { background:var(--selected); }
   box-shadow: 0 6px 24px #0002;
   pointer-events: none;
 }
+
+.content-action { display:inline-flex; align-items:center; gap:5px; min-height:36px; padding:6px 10px; font-size:13px; border-radius:8px; }
+.content-action svg { flex-shrink:0; }
+.content-action-warning { color:#88513d; border-color:#d8bcb0; }
+.learning-reading-actions { gap:8px; }
+.reflection-title-row { display:flex; align-items:flex-start; gap:12px; }
+.reflection-title-row .detail-title { flex:1; min-width:0; overflow-wrap:anywhere; }
+.reflection-title-actions { flex:none; }
+.reflection-title-bookmark { display:grid; place-items:center; width:44px; height:44px; min-height:44px; padding:0; border:1px solid #dbcac0; border-radius:50%; background:#efe6df; color:#694f43; }
+.reflection-title-bookmark:hover { border-color:currentColor; }
+.reflection-bookmark-panel:not([hidden]) { margin-block:16px; }

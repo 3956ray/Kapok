@@ -3,7 +3,7 @@ import { LearningBookmark } from './collections';
 
 import Link from 'next/link';
 import { useCallback, useId, useRef, useState } from 'react';
-import { ArrowRight, Bookmark, ExternalLink, FileText, Film, Pencil } from 'lucide-react';
+import { ArrowRight, Bookmark, ExternalLink, FileText, Film, Pencil, EyeOff, Undo2, Share2 } from 'lucide-react';
 import { api, ApiError } from '../../lib/client/api';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { confirmedRejection, learningMutation, learningRecovery, sendLearning, type LearningMutation } from '../../lib/client/learning-images';
@@ -182,7 +182,8 @@ function ActivityControls({ post, initial, actorId, epoch, membershipEpoch, disa
     }
 
     return <section className="learning-actions" aria-label="队内动态分享">
-        <button className="secondary" type="button" disabled={disabled || busy || (outdated && !pending)} onClick={change}>
+        <button className={shared ? "secondary content-action content-action-warning" : "secondary content-action"} type="button" disabled={disabled || busy || (outdated && !pending)} onClick={change}>
+            {shared ? <Undo2 size={15} aria-hidden="true" /> : <Share2 size={15} aria-hidden="true" />}
             {busy ? '正在确认动态…' : pending ? '确认动态操作结果' : shared ? '撤回动态' : '分享到队内动态'}
         </button>
         {busy || pending ? <span role="status">{busy ? '正在确认队内动态状态。' : '动态操作结果待确认，重试沿用原请求。'}</span> :
@@ -290,12 +291,12 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
         {pending && action !== 'inclusion-retry' && <p role="status" className="notice">上次操作结果待确认。重试会沿用原请求。</p>}
         {status && <div className="notice" role="alert"><p>{status}</p><button className="secondary" onClick={() => void session.verify()}>重新确认状态</button></div>}
         <div className="learning-actions learning-reading-actions">
-            {post.isAuthor && <Link className="button secondary" href={'/learn/posts/' + post.id + '/edit'}>编辑内容</Link>}
-            {draft && <LearningConfirm label={action === 'withdraw' ? '确认撤回结果' : '撤回内容'} title="撤回这份资料？" confirm="确认撤回"
+            {post.isAuthor && <Link className="button secondary content-action" href={'/learn/posts/' + post.id + '/edit'}><Pencil size={15} aria-hidden="true" />编辑内容</Link>}
+            {draft && <LearningConfirm compact icon={<Undo2 size={15} aria-hidden="true" />} label={action === 'withdraw' ? '确认撤回结果' : '撤回内容'} title="撤回这份资料？" confirm="确认撤回"
                 disabled={busy || (!!pending && action !== 'withdraw')} onConfirm={() => mutate('withdraw')}>
                 <p>队友将无法打开此资料。你可在我的创作中继续编辑并重新发布。</p>
             </LearningConfirm>}
-            {admin && <LearningConfirm label={action === 'hide' ? '确认隐藏结果' : '隐藏内容'} title="隐藏这份资料？" confirm="确认隐藏"
+            {admin && <LearningConfirm compact icon={<EyeOff size={15} aria-hidden="true" />} label={action === 'hide' ? '确认隐藏结果' : '隐藏内容'} title="隐藏这份资料？" confirm="确认隐藏"
                 disabled={busy || (!!pending && action !== 'hide')} onConfirm={() => mutate('hide')}>
                 <p>隐藏后队友无法阅读，作者仍可编辑私稿。隐藏状态会阻止作者重新发布。</p>
             </LearningConfirm>}

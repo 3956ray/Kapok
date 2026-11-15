@@ -586,3 +586,31 @@ test('account loss closes shared edit confirmation and fences its actions', asyn
         assert.equal(writes().length, 0);
     } finally { await unmount(); }
 });
+
+test('reader bookmark sits in the title row, opens notes and reflects confirmed collection state', async () => {
+    setup();
+    data['reflections/r'] = { ...reflection, isAuthor: false, scope: 'team' };
+    data.collections = [];
+    override = (path, options) => {
+        if (path === 'collections' && options.method === 'POST') {
+            data.collections = [{ id: 'saved-r', sourceKind: 'reflection', sourceId: 'r', privateNote: '', version: 1, timestampSec: null, source: null }];
+            return response({ id: 'saved-r' });
+        }
+    };
+    try {
+        await mount(h(ReflectionRead, { actorId: 'A', id: 'r', saved: false }));
+        let icon = document.querySelector('.reflection-title-row button[aria-label="收藏复盘"]');
+        assert.ok(icon);
+        assert.equal(buttons('加入成长').length, 0);
+        assert.equal(icon.getAttribute('aria-expanded'), 'false');
+        await act(async () => icon.click()); await flush();
+        assert.equal(document.querySelector('.reflection-bookmark-panel').hidden, false);
+        await click('保存收藏');
+        icon = document.querySelector('.reflection-title-row button[aria-label="已收藏，查看私人备注"]');
+        assert.ok(icon);
+        assert.equal(icon.querySelector('svg').getAttribute('fill'), 'currentColor');
+        assert.equal(writes().filter(c => c.path === 'collections').length, 1);
+        await act(async () => icon.click()); await flush();
+        assert.equal(document.querySelector('.reflection-bookmark-panel').hidden, true);
+    } finally { await unmount(); }
+});

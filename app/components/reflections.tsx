@@ -13,7 +13,7 @@ import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { prepareDraftRequest, reconcileDraft, revision } from '../../lib/client/reflection-draft';
 import type { Draft } from '../../lib/client/reflection-draft';
 import { draftKey, draftPrefix } from '../../lib/client/session-guard';
-import { SaveCollection } from './collections';
+import { ReflectionBookmark } from './collections';
 import { DateGroup, RecordRow } from './presentation';
 import { SecureStatus, useSecureResource } from './secure-resource';
 import { ReflectionSharingControls } from './reflection-sharing-controls';
@@ -500,6 +500,7 @@ export function ReflectionRead({
 }) {
     const secure = useSecureResource<Reflection>(actorId, `reflections/${id}`);
     const r = secure.data;
+    const [bookmarkTrigger, setBookmarkTrigger] = useState<HTMLSpanElement | null>(null);
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} retry={() => void secure.verify()} />
         <div
@@ -513,9 +514,12 @@ export function ReflectionRead({
                 <article className="reflection-paper">
                     <header>
                         <p className="detail-meta"><time dateTime={r.date}>{r.date}</time> · {r.author.discName} {r.author.jerseyNumber}</p>
-                        <h2 className="detail-title">{r.title || '训练复盘'}</h2>
+                        <div className="reflection-title-row"><h2 className="detail-title">{r.title || '训练复盘'}</h2>
+                            {!r.isAuthor && <span ref={setBookmarkTrigger} className="reflection-title-actions" />}
+                        </div>
                         <p className="privacy-line">{r.isAuthor && (r as ReflectionAuthor).scope === 'private' ? <LockKeyhole size={16} aria-hidden="true" /> : <UsersRound size={16} aria-hidden="true" />}{r.isAuthor ? scopeLabel(r as ReflectionAuthor) : '全队可读'}</p>
                     </header>
+                    {!r.isAuthor && bookmarkTrigger && <ReflectionBookmark key={r.id} actorId={actorId} sourceId={r.id} trigger={bookmarkTrigger} />}
                     <p className="preserve reflection-body">{r.text}</p>
                     {r.link ? <Link className="detail-row" href={r.link.href}>
                         <span className="detail-tile"><CalendarDays size={20} aria-hidden="true" /></span>
@@ -529,7 +533,7 @@ export function ReflectionRead({
                     refresh={secure.verify}
                     authorize={secure.authorize}
                     isCurrent={secure.isCurrent}
-                /> : <SaveCollection actorId={actorId} sourceKind="reflection" sourceId={r.id} />}
+                /> : null}
             </>}
         </div>
     </>;

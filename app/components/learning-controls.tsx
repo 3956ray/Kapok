@@ -50,8 +50,8 @@ export function useLearningAction(onLock?: (ended: boolean) => void) {
 }
 
 // The existing in-page confirmation pattern shares the production dialog styling.
-export function LearningConfirm({ label, title, confirm, children, onConfirm, disabled }: {
-    label: string; title: string; confirm: string; children: ReactNode; onConfirm: () => void; disabled?: boolean;
+export function LearningConfirm({ label, title, confirm, children, onConfirm, disabled, icon, compact }: {
+    label: string; title: string; confirm: string; children: ReactNode; onConfirm: () => void; disabled?: boolean; icon?: ReactNode; compact?: boolean;
 }) {
     const id = useId();
     const dialog = useRef<HTMLDialogElement>(null);
@@ -59,8 +59,8 @@ export function LearningConfirm({ label, title, confirm, children, onConfirm, di
     const session = useAccountSession();
     useLayoutEffect(() => session.subscribe(() => dialog.current?.close()), [session]);
     return <>
-        <button ref={trigger} className="secondary" type="button" aria-haspopup="dialog" disabled={disabled}
-            onClick={() => dialog.current?.showModal()}>{label}</button>
+        <button ref={trigger} className={compact ? "secondary content-action content-action-warning" : "secondary"} type="button" aria-haspopup="dialog" disabled={disabled}
+            onClick={() => dialog.current?.showModal()}>{icon}{label}</button>
         <dialog ref={dialog} className="add-video-dialog" aria-labelledby={id} onClose={() => {
             if (!trigger.current?.closest('[hidden]')) trigger.current?.focus();
         }}>
