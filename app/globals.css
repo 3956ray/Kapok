@@ -837,6 +837,7 @@ html:has(.video-workspace) { overflow:hidden; }
 .learning-tabs a[aria-current="page"] { border-bottom:2px solid var(--primary); }
 .learning-tabs { margin-right:auto; }
 .learning-filters { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:12px; margin:0 0 12px; }
+.learning-filters.learning-browse-filters { grid-template-columns:minmax(0,2fr) repeat(2,minmax(0,1fr)); }
 .learning-filters label,.learning-form label { display:grid; gap:4px; min-width:0; }
 .learning-filters :is(input,select),.learning-form :is(input,textarea,select) { width:100%; min-width:0; }
 .learning-filters select { color:var(--text); }
@@ -855,6 +856,8 @@ a.learning-row:hover { background:var(--selected); border-radius:inherit; }
 .learning-empty { text-align:center; }
 .learning-empty h2 { margin-block:8px; }
 .learning-form fieldset { min-inline-size:0; padding:0; margin:0 0 18px; border:0; display:grid; gap:14px; }
+.learning-category-actions { align-items:flex-end; }
+.learning-category-actions label { flex:1 1 180px; }
 .learning-form legend { font-weight:650; margin-bottom:10px; }
 .learning-form :is(input,select,textarea) { max-width:100%; }
 .learning-form input[type="file"] { padding-inline:8px; overflow:hidden; }
@@ -864,22 +867,24 @@ a.learning-row:hover { background:var(--selected); border-radius:inherit; }
 .learning-image-row p { margin:4px 0 8px; }
 .learning-image-row .learning-actions { margin-top:10px; }
 .learning-image-row button { padding:7px 12px; min-height:44px; }
-.learning-reading,.learning-editor { max-width:790px; }
+.learning-editor { max-width:790px; }
 .learning-article figure { margin:18px 0; }
 .learning-article figure img { display:block; width:auto; height:auto; max-width:100%; max-height:75vh; border-radius:12px; }
 .learning-byline { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .learning-byline .default-avatar { width:36px; height:36px; font-size:16px; }
-.learning-summary { font-size:1.08rem; color:var(--muted); }
 .learning-body { white-space:pre-wrap; line-height:1.8; max-width:66ch; }
+.learning-body a { display:inline; min-height:0; overflow-wrap:anywhere; text-decoration:underline; }
 .learning-media { display:grid; gap:8px; justify-items:start; margin-bottom:16px; }
 .learning-media iframe { width:100%; aspect-ratio:16/9; border:0; border-radius:12px; background:var(--text); }
 .learning-association { margin-block:14px; }
 @media (max-width:440px) {
-  .learning-form,.learning-article { padding-inline:14px; }
+  .learning-form { padding-inline:14px; }
   .learning-row,.learning-image-row { padding:10px; gap:8px; }
   .learning-row > .learning-actions { grid-column:2 / -1; }
   .learning-thumb { width:40px; }
   .learning-filters { grid-template-columns:minmax(0,1fr); }
+  .learning-filters.learning-browse-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .learning-title-filter { grid-column:1 / -1; }
 }
 
 /* Learning collections and featured topics */
@@ -924,10 +929,36 @@ main a.topic-featured-card:hover { background:var(--selected); }
   .topic-featured-card .topic-art { grid-column:auto; min-height:60px; padding:6px; }
 }
 
+.learning-watch .learning-article { margin-block:12px; overflow-wrap:anywhere; }
+.learning-watch .learning-byline { margin:5px 0; color:var(--muted); font-size:13px; }
+.learning-watch .learning-byline .default-avatar { width:28px; height:28px; font-size:12px; }
+.learning-reading-actions { margin-block:10px; }
+.learning-reading-actions > * { min-width:0; max-width:100%; }
+.learning-reading-actions .topic-post-add { margin-block:0; }
+.learning-watch iframe.bilibili-player { border:0; }
 .learning-discussion .discussion-text { white-space:pre-wrap; }
-.learning-discussion .discussion-composer { display:grid; gap:12px; }
-.learning-discussion .discussion-composer > button { justify-self:start; gap:6px; }
-.learning-discussion .discussion-context { margin-bottom:0; }
+.learning-discussion .discussion-heading > small { min-width:0; overflow-wrap:anywhere; }
+.learning-discussion-composer { display:grid; }
+.learning-discussion-composer .composer-row textarea { min-width:0; }
+.learning-discussion-composer .composer-row .learning-confirm-delete { flex-basis:auto; }
 .learning-discussion-time { align-items:end; }
+.learning-discussion-time label { display:grid; gap:4px; }
 .learning-discussion-time input { max-width:10rem; }
-.learning-discussion-player .youtube-player-slot { position:relative; min-height:200px; overflow:hidden; }
+
+/* Transient collection feedback stays outside the action row layout. */
+.topic-add-toast {
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  margin: 0;
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: #234d3c;
+  color: #fff;
+  box-shadow: 0 6px 24px #0002;
+  pointer-events: none;
+}

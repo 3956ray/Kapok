@@ -1,5 +1,7 @@
 # Kapok 完整交接
 
+> 2026-11-16：最新学习库交互更新已部署，见 [发布记录](docs/RELEASE-2026-11-16.md)。
+
 > 2026-11-15：学习库与账号更新的当前状态见 [发布记录](docs/RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
 
 站点：[kapok.party](https://kapok.party)。源码：[3956ray/Kapok](https://github.com/3956ray/Kapok)。项目代号 KPK，当前阶段 CP03。线上运行在 Cloudflare Workers 与 D1，使用 Cloudflare Access 邮箱验证码。项目负责人控制部署、真实数据和验收。

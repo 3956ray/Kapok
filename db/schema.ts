@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { learningCategories, learningImageTypes } from '../lib/contracts/learning';
+import { learningCategoryMax, learningImageTypes } from '../lib/contracts/learning';
 import { sqliteTable, text, integer, uniqueIndex, check, primaryKey, foreignKey, unique, index, real, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
@@ -170,18 +170,25 @@ export const initialAdminGrants = sqliteTable('initial_admin_grants', {
   opId: text('op_id').references(() => operations.id),
 });
 
+export const learningCategoryNames = sqliteTable('learning_categories', {
+    teamId: text('team_id').notNull().references(() => teams.id),
+    name: text('name').notNull(),
+}, t => [
+    primaryKey({ columns: [t.teamId, t.name] }),
+    check('learning_category_length', sql`instr(${t.name}, char(0)) = 0 AND length(${t.name}) BETWEEN 1 AND ${sql.raw(String(learningCategoryMax))}`),
+]);
+
 function learningContentColumns() {
     return {
         kind: text('kind', { enum: ['article', 'video'] }).notNull(),
-        category: text('category', { enum: learningCategories }).notNull(),
+        category: text('category').notNull(),
         title: text('title').notNull(), summary: text('summary').notNull(), body: text('body').notNull(),
         videoSource: text('video_source', { enum: ['youtube', 'bilibili'] }), videoUrl: text('video_url'),
     };
 }
-function learningContentChecks(name: string, t: { kind: AnySQLiteColumn; category: AnySQLiteColumn; videoSource: AnySQLiteColumn; videoUrl: AnySQLiteColumn }) {
+function learningContentChecks(name: string, t: { kind: AnySQLiteColumn; videoSource: AnySQLiteColumn; videoUrl: AnySQLiteColumn }) {
     return [
         check(name + '_kind', sql`${t.kind} IN ('article','video')`),
-        check(name + '_category', sql`${t.category} IN ('战术','基本功','基本概念')`),
         check(name + '_video', sql`(${t.kind}='article' AND ${t.videoSource} IS NULL AND ${t.videoUrl} IS NULL)
             OR (${t.kind}='video' AND ${t.videoSource} IS NOT NULL AND ${t.videoSource} IN ('youtube','bilibili') AND ${t.videoUrl} IS NOT NULL)`),
     ];

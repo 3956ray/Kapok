@@ -35,6 +35,7 @@ const migrations = [
   "0015_learning_discussion.sql",
   "0016_learning_private_sources.sql",
   "0017_learning_activity.sql",
+  "0018_learning_categories.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {

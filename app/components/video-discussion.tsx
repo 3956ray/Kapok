@@ -28,6 +28,13 @@ const unavailable = '当前不可用的讨论';
 type WatchSlots = { stage: HTMLElement; note: HTMLElement; providerLink: HTMLElement; noteTrigger: HTMLElement; dock: HTMLElement; isLegacyVideo: boolean };
 type SourceUnavailable = (videoId: string, scope: 'video' | 'training') => void;
 
+export function WatchMediaIdentity({ source, title }: { source: 'youtube' | 'bilibili'; title: string }) {
+    return <div className="training-stage-identity">
+        <span className="training-stage-provider"><Film size={16} aria-hidden="true" />{source === 'youtube' ? 'YouTube' : 'B 站'}</span>
+        <strong title={title} className="training-stage-video-title">{title}</strong>
+    </div>;
+}
+
 export function useVideoViewport(boundary: RefObject<HTMLElement | null>, enabled = true) {
     useEffect(() => {
         const workspace = boundary.current?.closest<HTMLElement>('.video-workspace');
@@ -441,10 +448,7 @@ function Discussion({ actorId, userId, admin, video, comments, initialSeconds, e
         if (youtube) titleSourceUrl = parseYouTubeSource(video.url)?.url;
         else if (embedUrl && !showBilibiliDetailLinks) titleSourceUrl = video.url;
     }
-    const stageIdentity = slots && video.source !== 'upload' ? <div className="training-stage-identity">
-        <span className="training-stage-provider"><Film size={16} aria-hidden="true" />{video.source === 'youtube' ? 'YouTube' : 'B 站'}</span>
-        <strong title={video.title} className="training-stage-video-title">{video.title}</strong>
-    </div> : undefined;
+    const stageIdentity = slots && video.source !== 'upload' ? <WatchMediaIdentity source={video.source} title={video.title} /> : undefined;
     const stage = <section className="video-stage" aria-label="视频播放器">
         {video.source === 'upload' ?
             <video

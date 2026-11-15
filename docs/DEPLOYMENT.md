@@ -1,5 +1,7 @@
 # Kapok 部署、恢复与验收
 
+> 2026-11-16：最新学习库交互更新已部署，见 [发布记录](RELEASE-2026-11-16.md)。
+
 > 2026-11-15：学习库与账号更新的部署状态见 [发布记录](RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
 
 线上入口 [kapok.party](https://kapok.party)。从 Cloudflare Dashboard 查看当前部署版本与 Worker、Access 应用及 D1 的绑定。部署负责人保存所用 Git 提交、实际构建 SHA-256、Cloudflare Worker 版本、迁移记录及验收结果。

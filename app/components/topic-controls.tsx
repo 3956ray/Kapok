@@ -72,8 +72,8 @@ export function TopicWriteStatus({ action, retry }: { action: ReturnType<typeof 
     </>;
 }
 
-export function TopicDialog({ title, label, disabled, children }: {
-    title: string; label: string; disabled?: boolean;
+export function TopicDialog({ title, label, disabled, icon, children }: {
+    title: string; label: string; disabled?: boolean; icon?: ReactNode;
     children: (close: () => void) => ReactNode;
 }) {
     const id = useId();
@@ -90,10 +90,11 @@ export function TopicDialog({ title, label, disabled, children }: {
         setOpened(false);
     }), [session]);
     return <>
-        <button className="secondary" type="button" ref={trigger} aria-haspopup="dialog" disabled={disabled} onClick={() => {
-            setOpened(true);
-            dialog.current?.showModal();
-        }}>{label}</button>
+        <button className={icon ? "training-title-action" : "secondary"} type="button" ref={trigger} aria-haspopup="dialog"
+            aria-label={icon ? label : undefined} title={icon ? label : undefined} disabled={disabled} onClick={() => {
+                setOpened(true);
+                dialog.current?.showModal();
+            }}>{icon ?? label}</button>
         <dialog className="add-video-dialog topic-dialog" ref={dialog} aria-labelledby={id} onClose={() => {
             setOpened(false);
             if (!trigger.current?.closest('[hidden]')) trigger.current?.focus();

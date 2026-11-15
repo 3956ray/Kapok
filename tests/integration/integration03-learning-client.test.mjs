@@ -56,6 +56,7 @@ function harness(t, { draft = null, snapshot = null, choices = [], associationFa
     let root;
     let custom;
     let publication = snapshot;
+    const categories = new Set(['战术', '基本功', '基本概念']);
     const reservations = new Map();
     const committed = new Map();
     let nextId = 0;
@@ -64,6 +65,11 @@ function harness(t, { draft = null, snapshot = null, choices = [], associationFa
     function dispatch(call) {
         const { route, method, body, key } = call;
         if (route === 'bootstrap') return response({ actorId: actor, me });
+        if (route === 'learning/categories') {
+            if (method === 'GET') return response([...categories]);
+            categories.add(body.name);
+            return response(body.name);
+        }
         if (route === 'learning/collections/editable') return response(choices);
         if (route === 'learning/mine') return response(draft ? [draft] : []);
         if (method === 'GET' && route === base) return response(publication ? [publication] : []);
@@ -539,4 +545,85 @@ test('native selection applies the configured MIME, size and six-image bounds wi
     assert.match(document.body.textContent, /最多 2 MiB/);
     assert.match(document.body.textContent, /最多 6 张图片/);
     assert.equal(app.calls.some(call => call.method !== 'GET'), false);
+});
+
+
+test('category creation can retry with the same key and retains the post form without publishing', async t => {
+    const app = harness(t);
+    let fail = true;
+    app.override((call, next) => {
+        if (call.method === 'POST' && call.route === 'learning/categories' && fail) {
+            fail = false;
+            return error('RESULT_UNKNOWN', 503, true);
+        }
+        return next();
+    });
+    await app.render(LearningEditing, {}, newPath);
+    await text('title', '训练笔记');
+    await text('body', '合成正文');
+    await click('新增分类');
+    const category = '体能  恢复';
+    await text('category-name', '  ' + category + '  ');
+    await click('添加分类');
+    assert.match(document.body.textContent, /RESULT_UNKNOWN/);
+    assert.equal(document.querySelector('[name="category-name"]').value, '  ' + category + '  ');
+    assert.equal(document.querySelector('[name="title"]').value, '训练笔记');
+    assert.equal(document.querySelector('[name="body"]').value, '合成正文');
+    await click('添加分类');
+    const categorySelect = () => document.querySelectorAll('.learning-filters select')[1];
+    assert.equal(categorySelect().value, category);
+    const attempts = app.calls.filter(call => call.route === 'learning/categories' && call.method === 'POST');
+    assert.deepEqual(attempts.map(call => call.body), [{ name: category }, { name: category }]);
+    assert.ok(attempts[0].key);
+    assert.equal(attempts[0].key, attempts[1].key);
+    assert.equal(app.calls.some(call => call.route.startsWith(base) && call.method === 'POST'), false);
+    await app.unmount();
+    await app.render(LearningEditing, {}, newPath);
+    await change(categorySelect(), '战术');
+    await change(categorySelect(), category);
+    await click('保存草稿');
+    const save = app.calls.find(call => call.route === base && call.method === 'POST');
+    assert.equal(save.body.category, category);
+    assert.equal(app.draft().category, category);
+});
+
+
+test('browse keeps the shared category dropdown and quick filters synchronized', async t => {
+    const app = harness(t);
+    const posts = [
+        { ...empty(), id: 'custom', title: '自定义分类资料', category: '全部', author },
+        { ...empty(), id: 'default', title: '战术资料', category: '战术', author },
+    ];
+    app.override((call, next) => {
+        if (call.method === 'GET' && call.route === 'learning/categories') return response(['战术', '基本功', '基本概念', '全部', '体能  恢复', '查看全部内容']);
+        if (call.method === 'GET' && call.route === base) return response(posts);
+        return next();
+    });
+    await app.render(LearningBrowse, {}, '/learn');
+    const group = document.querySelector('[aria-label="主题筛选"]');
+    const allLabel = '查看全部内容';
+    const category = document.querySelectorAll('.learning-browse-filters select')[1];
+    const defaultLabel = '战术';
+    const titles = () => [...document.querySelectorAll('.learning-row strong')].map(node => node.textContent);
+    assert.deepEqual([...group.querySelectorAll('button')].map(node => node.textContent), [allLabel, '战术', '基本功', '基本概念']);
+    assert.equal(category.options[0].textContent, allLabel);
+    assert.equal([...category.options].filter(option => option.textContent.trim() === allLabel).length, 1);
+    assert.ok([...category.options].some(option => option.value === '体能  恢复'));
+    assert.equal(category.value, '');
+    assert.deepEqual(titles(), ['自定义分类资料', '战术资料']);
+    await change(category, '全部');
+    assert.equal(category.value, '全部');
+    assert.equal(group.querySelector('[aria-pressed="true"]'), null);
+    assert.deepEqual(titles(), ['自定义分类资料']);
+    await click(defaultLabel, group);
+    assert.equal(button(defaultLabel, group).getAttribute('aria-pressed'), 'true');
+    assert.equal(category.value, defaultLabel);
+    assert.deepEqual(titles(), ['战术资料']);
+    await click(allLabel, group);
+    assert.equal(button(allLabel, group).getAttribute('aria-pressed'), 'true');
+    assert.equal(category.value, '');
+    assert.deepEqual(titles(), ['自定义分类资料', '战术资料']);
+    await change(category, defaultLabel);
+    assert.equal(button(defaultLabel, group).getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(titles(), ['战术资料']);
 });

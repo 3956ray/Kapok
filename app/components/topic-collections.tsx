@@ -3,8 +3,8 @@ import { LearningBookmark } from './collections';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, BookOpen, FileText, Film } from 'lucide-react';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowRight, BookOpen, FileText, Film, FolderPlus } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../lib/client/api';
 import { learningRecovery, type LearningMutation } from '../../lib/client/learning-images';
 import { useNavigationField } from '../../lib/client/navigation-state';
@@ -294,11 +294,16 @@ function TopicChoiceForm({ choices, apply, close }: { choices: TopicChoice[]; ap
     </>;
 }
 
-export function AddPostToTopic({ actorId, epoch, postId, disabled }: {
+export function useAddPostToTopic({ actorId, epoch, postId, disabled }: {
     actorId: string; epoch: string; postId: string; disabled?: boolean;
 }) {
     const [status, setStatus] = useState('');
     const action = useTopicWrite(actorId, epoch, 'post:' + postId);
+    useEffect(() => {
+        if (!status) return;
+        const timer = window.setTimeout(() => setStatus(''), 3000);
+        return () => window.clearTimeout(timer);
+    }, [status]);
     function apply(result: TopicAddResult) { setStatus(topicAddFeedback(result)); }
     function add(id: string) {
         setStatus('');
@@ -308,13 +313,16 @@ export function AddPostToTopic({ actorId, epoch, postId, disabled }: {
             return { path: path + '/items', method: 'POST', body: { expectedVersion: draft.version, items: [{ kind: 'post', id: postId }] } };
         }, apply);
     }
-    return <div className="topic-post-add">
-        <TopicDialog label="加入合集" title="加入合集" disabled={disabled || action.busy || !!action.pending || action.needsRefresh}>
+    return {
+        trigger: <TopicDialog label="加入合集" title="加入合集" icon={<FolderPlus size={18} aria-hidden="true" />}
+            disabled={disabled || action.busy || !!action.pending || action.needsRefresh}>
             {close => <AccountBoundary<TopicChoice[]> actorId={actorId} load={topicsEndpoint + '/editable'}>
                 {choices => <TopicChoiceForm choices={choices} apply={add} close={close} />}
             </AccountBoundary>}
-        </TopicDialog>
-        {status && <p className="notice" role="status">{status}</p>}
-        <TopicWriteStatus action={action} retry={() => action.write<TopicAddResult>(null, apply)} />
-    </div>;
+        </TopicDialog>,
+        feedback: (status || action.error || action.pending || action.needsRefresh) ? <div className="topic-post-add">
+            {status && <p className="topic-add-toast" role="status">{status}</p>}
+            <TopicWriteStatus action={action} retry={() => action.write<TopicAddResult>(null, apply)} />
+        </div> : null,
+    };
 }

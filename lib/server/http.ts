@@ -1,4 +1,4 @@
-import { learningJsonBytes } from '../contracts/learning.ts';
+import { learningCategoryPath, learningJsonBytes } from '../contracts/learning.ts';
 import type { Principal } from '../contracts/index';
 import { DomainError } from './domain.ts';
 import type { Service } from './domain';
@@ -96,6 +96,8 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       else if (path.length === 5 && method === 'PATCH' && action === 'items' && path[4] === 'order') data = await service.orderTopicItems(principal, id, await body(), key);
       else throw new DomainError('NOT_FOUND', '未找到此功能。', 404);
     }
+    else if (route === learningCategoryPath && method === 'GET') data = await service.listLearningCategories(principal);
+    else if (route === learningCategoryPath && method === 'POST') data = await service.createLearningCategory(principal, await body(), key);
     else if (route === 'learning/posts' && method === 'GET') data = await service.listLearningPosts(principal);
     else if (route === 'learning/posts' && method === 'POST') data = await service.saveLearningPost(principal, null, await body(), key);
     else if (route === 'learning/mine' && method === 'GET') data = await service.listMyLearningPosts(principal);

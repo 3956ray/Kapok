@@ -1,6 +1,8 @@
 'use client';
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { Play } from 'lucide-react';
+import { WatchMediaIdentity } from './video-discussion';
 import { useAccountSession } from './secure-resource';
 import type { BootstrapStatus } from '../../lib/contracts';
 import type { LearningImage, LearningVideo } from '../../lib/contracts/learning';
@@ -76,7 +78,7 @@ export function LearningConfirm({ label, title, confirm, children, onConfirm, di
 }
 
 const ignorePlayable = () => {};
-export function LearningMedia({ video, title, player }: { video: LearningVideo; title: string; player?: Ref<YouTubeControls> }) {
+export function LearningMedia({ video, title, player, watch = false }: { video: LearningVideo; title: string; player?: Ref<YouTubeControls>; watch?: boolean }) {
     const account = useAccountSession();
     const [loaded, setLoaded] = useState(false);
     const [error, setError] = useState(false);
@@ -87,16 +89,25 @@ export function LearningMedia({ video, title, player }: { video: LearningVideo; 
         setError(false);
     }), [account]);
     const embed = video.source === 'bilibili' ? bilibiliPlayerUrl(video.url) : null;
+    const waitingIdentity = watch ? <WatchMediaIdentity source={video.source} title={title} /> : undefined;
     if (video.source === 'youtube') return parseYouTubeSource(video.url)
-        ? <YouTubePlayer url={video.url} waitingTitle={title} setPlayable={ignorePlayable} ref={player ?? null} />
+        ? <YouTubePlayer url={video.url} waitingTitle={title} waitingIdentity={waitingIdentity} hideExternalLink={watch} setPlayable={ignorePlayable} ref={player ?? null} />
         : <p className="muted">保存时确认 YouTube 来源，之后可载入播放器。</p>;
-    return <div className="learning-media">
-        {loaded && embed ? <iframe ref={frame} data-kapok-player="bilibili" title={title + ' · B 站播放器'} src={embed} allowFullScreen
+    const loadLabel = error ? '重新载入 B 站视频' : '载入 B 站视频';
+    return <div className={watch ? 'external-video-player' : 'learning-media'}>
+        {loaded && embed ? <iframe ref={frame} data-kapok-player="bilibili" className={watch ? "video-player bilibili-player" : undefined} title={title + ' · B 站播放器'} src={embed} allowFullScreen
             referrerPolicy="no-referrer" allow="fullscreen; picture-in-picture; encrypted-media"
             onError={() => { if (!frame.current?.closest('[hidden]')) { setLoaded(false); setError(true); } }} />
-            : embed ? <button type="button" className="secondary" onClick={() => setLoaded(true)}>{error ? '重新载入 B 站视频' : '载入 B 站视频'}</button>
+            : embed ? <>
+                {waitingIdentity}
+                <button type="button" className={watch ? 'training-stage-play' : 'secondary'}
+                    aria-label={watch ? `${loadLabel}：${title}` : undefined} onClick={() => setLoaded(true)}>
+                    {watch && <span className="training-stage-play-icon"><Play size={21} aria-hidden="true" /></span>}
+                    {loadLabel}
+                </button>
+            </>
             : <p className="muted">保存时确认 B 站来源，之后可载入播放器。</p>}
-        {embed && <a href={video.url} target="_blank" rel="noreferrer">在 B 站打开</a>}
+        {embed && !watch && <a href={video.url} target="_blank" rel="noreferrer">在 B 站打开</a>}
     </div>;
 }
 

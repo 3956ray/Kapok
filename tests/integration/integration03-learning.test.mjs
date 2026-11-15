@@ -18,7 +18,7 @@ const version = ({ version }) => ({ expectedVersion: version });
 const publicationVersion = ({ version, membershipEpoch }) => ({ expectedVersion: version, expectedMembershipEpoch: membershipEpoch });
 const draft = (service, id, actor = author) => service.getLearningPost(actor, id, 'draft');
 
-async function fixture(t, { before0013 = false, learningPolicy } = {}) {
+async function fixture(t, { before0013 = false, before0018 = false, learningPolicy } = {}) {
     const mf = new Miniflare({
         modules: true, script: 'export default {fetch(){return new Response("test")}}',
         compatibilityDate: '2026-05-22', d1Databases: ['DB'], r2Buckets: ['BUCKET'],
@@ -30,7 +30,7 @@ async function fixture(t, { before0013 = false, learningPolicy } = {}) {
         const sql = await readFile(new URL(file, directory), 'utf8');
         await db.batch(sql.split('--> statement-breakpoint').map(s => s.trim()).filter(Boolean).map(s => db.prepare(s)));
     };
-    for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql') && (!before0013 || file < '0013')).sort()) await migrate(file);
+    for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql') && (!before0013 || file < '0013') && (!before0018 || file < '0018')).sort()) await migrate(file);
     const make = (overrides = {}) => createService({ db, bucket, accessInitialAdminEmail: admin.verifiedEmail, learningPolicy, ...overrides });
     const s = make();
     for (const [p, discName, jerseyNumber] of [[admin, '管理员', '01'], [author, '作者', '02'], [reader, '读者', '03']]) {
@@ -547,3 +547,82 @@ for (const [action, triggerEvent] of [
         });
     }
 }
+
+
+test('shared categories trim, preserve case, enforce length and membership, and deduplicate concurrent D1 writes', async t => {
+    const { db, s, make, rows } = await fixture(t);
+    const path = 'learning/categories';
+    const defaults = ['战术', '基本功', '基本概念'];
+    assert.equal((await api(s, null, 'GET', path)).status, 401);
+    assert.equal((await api(s, outsider, 'POST', path, { payload: { name: '体能' }, key: 'outsider' })).status, 403);
+    assert.deepEqual(await s.listLearningCategories(reader), defaults);
+    for (const name of ['', '　 ', '🏐'.repeat(33)]) {
+        await denied(s.createLearningCategory(author, { name }, 'invalid'), 'INVALID_INPUT');
+    }
+    await denied(s.saveLearningPost(author, null, { ...input, category: '未登记' }, 'unknown-category'), 'INVALID_INPUT');
+    const name = '🏐'.repeat(32);
+    const responses = await Promise.all([
+        api(s, author, 'POST', path, { payload: { name: '　' + name + ' ' }, key: 'create-category' }),
+        api(s, reader, 'POST', path, { payload: { name }, key: 'create-category' }),
+    ]);
+    for (const response of responses) {
+        assert.equal(response.status, 200);
+        assert.match(response.headers.get('Cache-Control'), /private, no-store/);
+        assert.equal((await response.json()).data, name);
+    }
+    assert.equal(await s.createLearningCategory(author, { name }, 'create-category'), name);
+    await denied(s.createLearningCategory(author, { name: 'X' }, 'create-category'), 'IDEMPOTENCY_CONFLICT');
+    for (const name of ['Path', 'path', defaults[0]]) {
+        assert.equal(await s.createLearningCategory(reader, { name }, 'category-' + name.replace(defaults[0], 'default')), name);
+    }
+    assert.deepEqual((await rows('learning_categories')).map(row => row.name).sort(), ['Path', 'path', name].sort());
+    assert.deepEqual((await (await api(make(), reader, 'GET', path)).json()).data, [...defaults, 'Path', 'path', name]);
+    const saved = await s.saveLearningPost(author, null, { ...input, category: name }, 'with-category');
+    await s.publishLearningPost(author, saved.id, publicationVersion(saved), 'publish-category');
+    assert.equal((await make().getLearningPost(reader, saved.id)).category, name);
+
+    const { membership } = await s.me(reader);
+    const racingDb = {
+        prepare: db.prepare.bind(db),
+        async batch(statements) {
+            await db.prepare("UPDATE memberships SET status='paused', epoch=epoch+1 WHERE id=?").bind(membership.id).run();
+            return db.batch(statements);
+        },
+    };
+    await denied(make({ db: racingDb }).createLearningCategory(reader, { name: '撤权竞态' }, 'revoked'), 'VERSION_CONFLICT');
+    assert.ok(!(await rows('learning_categories')).some(row => row.name === '撤权竞态'));
+    await denied(s.listLearningCategories(reader), 'FORBIDDEN');
+});
+
+test('0018 preserves legacy drafts, publications, images, comment replies and referenced data in a D1 batch', async t => {
+    const { db, s, migrate, rows } = await fixture(t, { before0018: true });
+    const saved = await s.saveLearningPost(author, null, input, 'old-content');
+    const published = await s.publishLearningPost(author, saved.id, publicationVersion(saved), 'old-publish');
+    await s.saveLearningPost(author, saved.id, { ...input, body: '私人新版', ...version(published) }, 'private-edit');
+    const { user, membership } = await s.me(author);
+    const at = '2026-11-16T00:00:00.000Z';
+    const sql = (query, ...bindings) => db.prepare(query).bind(...bindings);
+    await db.batch([
+        sql("INSERT INTO learning_images(id,post_id,object_key,status,digest,mime_type,bytes,width,height,created_at) VALUES('image',?,'key','ready','digest','image/png',4,2,2,?)", saved.id, at),
+        sql("INSERT INTO learning_draft_images(post_id,image_id,position,alt) VALUES(?,'image',0,'草稿图片')", saved.id),
+        sql("INSERT INTO learning_publication_images(post_id,image_id,position,alt) VALUES(?,'image',0,'发布图片')", saved.id),
+        sql("INSERT INTO learning_comments(id,post_id,team_id,author_id,text,created_at,updated_at) VALUES('root',?,?,?,'根评论',?,?)", saved.id, membership.teamId, user.id, at, at),
+        sql("INSERT INTO learning_comments(id,post_id,team_id,author_id,root_id,reply_to_id,text,created_at,updated_at) VALUES('reply',?,?,?,'root','root','回复',?,?)", saved.id, membership.teamId, user.id, at, at),
+        sql("INSERT INTO learning_comment_moderation (id,comment_id,actor_id,action,reason,created_at) SELECT id,'root',?,'report','合成',? FROM operations WHERE key='old-publish'", user.id, at),
+        sql("INSERT INTO topic_learning_associations (post_id,published_version,status) VALUES(?,?,'pending')", saved.id, published.version),
+        sql("INSERT INTO learning_activity_events (sequence,id,post_id,author_epoch,shared_at,revoked_at) VALUES(101,'old-event',?,?,?,?)", saved.id, membership.epoch, at, at),
+        sql("INSERT INTO learning_activity_events (sequence,id,post_id,author_epoch,shared_at) VALUES(102,'removed-event',?,?,?)", saved.id, membership.epoch, at),
+        sql("DELETE FROM learning_activity_events WHERE sequence=102"),
+    ]);
+    const tables = ['learning_posts', 'learning_post_publications', 'learning_images', 'learning_draft_images', 'learning_publication_images',
+        'learning_comments', 'learning_comment_moderation', 'topic_learning_associations', 'learning_activity_events'];
+    const before = await Promise.all(tables.map(table => rows(table)));
+    before.forEach(result => assert.ok(result.length > 0));
+    await migrate('0018_learning_categories.sql');
+    assert.deepEqual(await Promise.all(tables.map(table => rows(table))), before);
+    assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results, []);
+    await sql("INSERT INTO learning_activity_events (id,post_id,author_epoch,shared_at) VALUES('next-event',?,?,?)", saved.id, membership.epoch, at).run();
+    assert.equal((await rows('learning_activity_events')).at(-1).sequence, 103);
+    assert.equal((await draft(s, saved.id)).body, '私人新版');
+    assert.equal((await s.getLearningPost(reader, saved.id)).body, input.body);
+});

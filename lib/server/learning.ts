@@ -1,7 +1,7 @@
 import type { LearningAssociation } from '../contracts/topic-collections';
 import type { Me, Principal } from '../contracts/index';
 import {
-    learningBounds, learningCategories, learningDefaults, learningImageAltMax, type LearningDraft, type LearningDraftOverview, type LearningImage,
+    isDefaultLearningCategory, learningBounds, learningCategories, learningCategoryMax, learningDefaults, learningImageAltMax, normalizeLearningCategory, type LearningDraft, type LearningDraftOverview, type LearningImage,
     type LearningImageReferenceInput,
     type LearningPolicy, type LearningPost, type LearningPostFields, type LearningPostHide, type LearningPostOverview, type LearningPostStatus,
 } from '../contracts/learning.ts';
@@ -168,6 +168,38 @@ export function createLearningService(deps: LearningDependencies & {
         if (!row) throw learningMissing();
         return { ...publicOverview(row, c), body: row.body };
     }
+    async function listLearningCategoryNames(c: LearningContext): Promise<string[]> {
+        const member = learningMemberFence(c);
+        const { results } = await q(`SELECT lc.name FROM teams t
+            LEFT JOIN learning_categories lc ON lc.team_id=t.id
+            WHERE t.id=? AND ${member.sql} ORDER BY lc.name`, c.membership.teamId, ...member.values).all<{ name: string | null }>();
+        if (!results.length) throw learningConflict();
+        return [...new Set([...learningCategories, ...results.flatMap(({ name }) => name === null ? [] : [name])])];
+    }
+
+    async function listLearningCategories(p: Principal | null): Promise<string[]> {
+        return listLearningCategoryNames(await bindLearningMember(activeMember, p));
+    }
+
+    async function createLearningCategory(p: Principal | null, input: unknown, key: string): Promise<string> {
+        const c = await bindLearningMember(activeMember, p);
+        const name = normalizeLearningCategory(learningObject(input, ['name']).name);
+        if (!name) throw new DomainError('INVALID_INPUT', `分类名称须为 1–${learningCategoryMax} 个字符。`);
+        const op = await operation(c.user.id, 'learning-category-create', c.membership.teamId, key, { name });
+        if (!op.replay) {
+            const write = [learningMemberGuard(db, op, c, 'before')];
+            if (!isDefaultLearningCategory(name)) {
+                write.push(q('INSERT INTO learning_categories(team_id,name) VALUES(?,?) ON CONFLICT(team_id,name) DO NOTHING',
+                    c.membership.teamId, name));
+            }
+            write.push(learningMemberGuard(db, op, c, 'after'));
+            await commitLearning(op, write, name);
+        }
+        const member = learningMemberFence(c);
+        if (!await q(`SELECT 1 WHERE ${member.sql}`, ...member.values).first()) throw learningConflict();
+        return name;
+    }
+
     async function listLearningPosts(p: Principal | null): Promise<LearningPostOverview[]> {
         const c = await bindLearningMember(activeMember, p);
         const member = learningMemberFence(c);
@@ -212,8 +244,14 @@ export function createLearningService(deps: LearningDependencies & {
         const c = await bindLearningMember(activeMember, p);
         const r = learningObject(input, ['kind', 'category', 'title', 'summary', 'body', 'video', 'collectionTargetId', 'images', ...(id ? ['expectedVersion'] : [])]);
         const kind = r.kind === 'article' || r.kind === 'video' ? r.kind : null;
-        const category = learningCategories.find(item => item === r.category);
+        const category = normalizeLearningCategory(r.category);
         if (!kind || !category || (r.collectionTargetId != null && !isId(r.collectionTargetId))) throw invalid();
+        if (!isDefaultLearningCategory(category)) {
+            const member = learningMemberFence(c);
+            const known = await q(`SELECT 1 FROM learning_categories WHERE team_id=? AND name=? AND ${member.sql}`,
+                c.membership.teamId, category, ...member.values).first();
+            if (!known) throw invalid();
+        }
         const refs = attachments(r.images, !!id && kind === 'article');
         const expectedVersion = id ? version(r.expectedVersion) : null;
         const title = field(r.title, policy.maxTitle, true).trim();
@@ -374,7 +412,7 @@ export function createLearningService(deps: LearningDependencies & {
     }
 
     return {
-        getLearningPost, listLearningPosts, listMyLearningPosts, saveLearningPost, publishLearningPost, withdrawLearningPost, hideLearningPost,
+        listLearningCategories, createLearningCategory, getLearningPost, listLearningPosts, listMyLearningPosts, saveLearningPost, publishLearningPost, withdrawLearningPost, hideLearningPost,
         ...createLearningImages(deps, policy),
     };
 }

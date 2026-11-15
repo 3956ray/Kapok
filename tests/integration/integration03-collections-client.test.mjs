@@ -22,10 +22,9 @@ dom.window.HTMLDialogElement.prototype.close = function () {
     this.dispatchEvent(new Event('close'));
 };
 const { createRoot } = await import('react-dom/client');
-const { LearningBrowse, LearningMine } = await import('../../app/components/learning-posts.tsx');
-const { TopicEditing, TopicReading, AddPostToTopic } = await import('../../app/components/topic-collections.tsx');
+const { LearningBrowse, LearningMine, LearningReading } = await import('../../app/components/learning-posts.tsx');
+const { TopicEditing, TopicReading } = await import('../../app/components/topic-collections.tsx');
 const { ManageFeaturedTopics, HomeFeaturedTopics } = await import('../../app/components/topic-featured.tsx');
-const { AccountBoundary } = await import('../../app/components/secure-resource.tsx');
 
 const base = 'learning/collections';
 const featured = 'learning/featured';
@@ -47,7 +46,7 @@ const snapshot = (draft, version = 2) => ({ id: draft.id, title: draft.title, su
 const ref = ({ id, kind }) => ({ kind, id });
 const keyOf = item => item.kind + ':' + item.id;
 
-function fixture(t, { draft = initial(), published = null, sources = [article, video, rejected], role = 'member', options = null } = {}) {
+function fixture(t, { draft = initial(), published = null, sources = [article, video, rejected], role = 'member', options = null, learningPost = null } = {}) {
     localStorage.clear();
     navigation.length = 0;
     let root;
@@ -66,6 +65,8 @@ function fixture(t, { draft = initial(), published = null, sources = [article, v
     function dispatch({ route, method, body, key }) {
         if (route === 'bootstrap') return response({ actorId: currentActor, me });
         if (route === 'learning/mine') return response([]);
+        if (learningPost && route === 'learning/posts/' + learningPost.id) return response(learningPost);
+        if (learningPost && route === 'learning/posts/' + learningPost.id + '/comments') return response([]);
         if (route === base + '/editable') return response(draft ? [draft] : []);
         if (route === base + '/sources') return response(sources);
         if (method === 'GET' && route === base) return response(list());
@@ -321,23 +322,23 @@ test('published sources and search retain their navigation context; clipboard fa
 });
 
 test('my collection group and post detail add read the owner choices and post only a typed draft reference', async t => {
-    const app = fixture(t);
+    const learningPost = { ...article, kind: 'article', body: '合成正文', images: [], video: null,
+        isAuthor: false, publishedVersion: 2, publishedAt: '2026-01-01' };
+    const app = fixture(t, { learningPost });
     await app.render(LearningMine, {}, '/learn/mine');
     await click('我整理的');
     assert.match(visible(), /合集一/);
     assert.ok(document.querySelector('a[href="' + edit + '"]'));
     await app.unmount();
-    function PostActions({ actorId }) {
-        return h(AccountBoundary, { actorId, load: 'bootstrap' }, () => h(AddPostToTopic, {
-            actorId, epoch: JSON.stringify(['u', 't', 1]), postId: article.id,
-        }));
-    }
-    await app.render(PostActions, {}, '/learn/posts/typed');
+    await app.render(LearningReading, { id: article.id }, '/learn/posts/typed');
     await click('加入合集');
     await change(openDialog().querySelector('select'), 'c1');
     await click('加入合集草稿', openDialog());
     assert.deepEqual(app.writes()[0].body, { expectedVersion: 1, items: [ref(article)] });
     assert.match(visible(), /已加入合集草稿 1 项/);
+    assert.ok(document.querySelector('.topic-add-toast[role="status"]'));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3100)); });
+    assert.equal(document.querySelector('.topic-add-toast'), null);
     assert.equal(app.published(), null);
     app.setDraft(null);
     await click('加入合集');

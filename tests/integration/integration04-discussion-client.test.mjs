@@ -43,10 +43,20 @@ const write = value => act(async () => {
 });
 
 test('learning discussion isolates drafts by direct target, post and account and confirms uncertain writes with the original key', async t => {
-    const root = createRoot(document.querySelector('#root'));
+    const host = document.querySelector('#root');
+    const root = createRoot(host);
+    host.className = 'video-workspace';
+    const originalViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+    const viewport = Object.assign(new window.EventTarget(), { height: 500, scale: 1, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport });
     const previousFetch = globalThis.fetch;
     t.after(async () => {
         await act(async () => root.unmount());
+        assert.equal(host.hasAttribute('data-video-keyboard'), false);
+        assert.equal(host.style.getPropertyValue('--video-viewport-height'), '');
+        if (originalViewport) Object.defineProperty(window, 'visualViewport', originalViewport);
+        else delete window.visualViewport;
+        host.removeAttribute('class');
         globalThis.fetch = previousFetch;
         localStorage.clear();
     });
@@ -69,11 +79,14 @@ test('learning discussion isolates drafts by direct target, post and account and
             status: code, headers: { 'X-Kapok-Actor': requestActor },
         });
         if (path === 'bootstrap') return respond({ actorId: requestActor, me: { user: { id: requestActor === actor ? 'reader' : 'other', status: 'active' }, membership: member } });
-        if (path === 'learning/collections/editable') return respond([]);
+        if (path === 'learning/collections/editable' || path === 'collections') return respond([]);
         const match = path.match(/^learning\/posts\/(p|q)(\/comments)?$/);
         if (!match) throw new Error('Unexpected endpoint ' + path);
         const [, id, route] = match;
-        if (!route) return respond({ id, kind: 'article', title: '合成资料', body: '合成正文', category: '战术', author, video: null, images: [], publishedVersion: 1 });
+        if (!route) return respond({ id, kind: id === 'p' ? 'article' : 'video', title: '合成资料', body: '合成正文',
+            category: '战术', author, video: id === 'p' ? null : { source: 'bilibili', url: 'https://www.bilibili.com/video/BV1xx411c7mD' },
+            images: id === 'p' ? [{ id: 'image', href: '/api/v1/learning/posts/p/images/image', alt: '合成正文图片', width: 100, height: 200 }] : [],
+            publishedVersion: 1, publishedAt: '2026-11-15T00:00:00Z' });
         if (options.method === 'GET') return respond(id === 'p' && requestActor === actor ? comments : initial);
         const body = JSON.parse(options.body);
         const key = options.headers['Idempotency-Key'];
@@ -89,8 +102,28 @@ test('learning discussion isolates drafts by direct target, post and account and
     };
 
     await render('p');
+    const scroll = surface().querySelector('.video-discussion-scroll');
+    assert.equal(composer().parentElement, scroll.nextElementSibling);
+    assert.ok(composer().parentElement.matches('.video-discussion-dock'));
+    assert.ok(scroll.querySelector('.learning-article img[alt="合成正文图片"]'));
+    assert.equal(scroll.querySelector('.video-stage'), null);
+    assert.equal(composer().querySelector('.composer-time-toggle'), null);
+    const noteTrigger = button('收藏与私人备注');
+    const note = document.getElementById(noteTrigger.getAttribute('aria-controls'));
+    assert.equal(note.hidden, true);
+    await click('收藏与私人备注');
+    assert.equal(note.hidden, false);
+    assert.ok(note.querySelector('textarea[name="note"]'));
+    await click('收藏与私人备注');
+    assert.equal(scroll.querySelectorAll('a[href^="/reflections/new"]').length, 1);
+    assert.equal(scroll.querySelector('[aria-label="写复盘"]').getAttribute('href'), '/reflections/new?sourceKind=learning_post&sourceId=p');
+    assert.equal(host.style.getPropertyValue('--video-viewport-height'), '500px');
+    viewport.height = window.innerHeight;
+    viewport.dispatchEvent(new Event('resize'));
+    assert.equal(host.hasAttribute('data-video-keyboard'), false);
     await write('独立根输入');
     await click('回复 作者');
+    assert.equal(document.activeElement, textarea());
     await write('根串输入');
     await click('发送回复');
     assert.equal(textarea().value, '根串输入');
@@ -118,8 +151,39 @@ test('learning discussion isolates drafts by direct target, post and account and
 
     await render('q');
     assert.equal(textarea().value, '');
+    const videoScroll = surface().querySelector('.video-discussion-scroll');
+    assert.ok(videoScroll.querySelector('.video-stage .training-stage-video-title'));
+    const videoHeading = videoScroll.querySelector('.training-watch-title');
+    assert.ok(videoScroll.querySelector('.video-stage').compareDocumentPosition(videoHeading) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+    const timeToggle = button('讨论时间点选项');
+    const timeTools = document.getElementById(timeToggle.getAttribute('aria-controls'));
+    assert.equal(timeTools.hidden, true);
+    await click('讨论时间点选项');
+    assert.equal(timeTools.hidden, false);
+    const timeInput = timeTools.querySelector('input');
     await write('其他资料输入');
+    for (const invalid of ['-1', '1.5']) {
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(timeInput, invalid);
+            timeInput.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        assert.equal(timeInput.checkValidity(), false);
+        await click('讨论时间点选项');
+        assert.equal(timeTools.hidden, true);
+        assert.equal(timeInput.disabled, true);
+        const requestCount = requests.length;
+        await click('发送讨论');
+        assert.equal(requests.length, requestCount);
+        assert.equal(timeTools.hidden, false);
+        assert.equal(timeInput.value, invalid);
+        assert.match(composer().querySelector('[role="alert"]').textContent, /有效的非负整数秒数/);
+    }
+    await click('载入 B 站视频：合成资料');
+    const frame = videoScroll.querySelector('iframe[data-kapok-player="bilibili"]');
+    assert.ok(frame);
     await render('p');
+    assert.equal(frame.isConnected, false);
+    assert.equal(composer().querySelector('.composer-time-toggle'), null);
     assert.equal(textarea().value, '独立根输入');
     late = true;
     await click('发送讨论');

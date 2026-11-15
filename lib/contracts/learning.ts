@@ -15,7 +15,19 @@ export const learningJsonBytes = 160000;
 export const learningImageAltMax = 240;
 export const learningImageDimensions = { maxEdge: 8192, maxPixels: 16_777_216 } as const;
 
-export type LearningCategory = typeof learningCategories[number];
+export type LearningCategory = string;
+export const learningCategoryMax = 32;
+export const learningCategoryPath = 'learning/categories';
+
+export function normalizeLearningCategory(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const name = value.trim();
+    return name && !/[\u0000\uD800-\uDFFF]/u.test(name) && [...name].length <= learningCategoryMax ? name : null;
+}
+
+export function isDefaultLearningCategory(name: string): boolean {
+    return learningCategories.some(category => category === name);
+}
 export type LearningImageType = typeof learningImageTypes[number];
 export type LearningPostKind = 'article' | 'video';
 export type LearningPostStatus = 'draft' | 'published' | 'withdrawn' | 'hidden';

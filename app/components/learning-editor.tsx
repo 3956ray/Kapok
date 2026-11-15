@@ -10,7 +10,7 @@ import {
     type ImageOrder, type LearningMutation, type QueuedLearningImage,
 } from '../../lib/client/learning-images';
 import {
-    learningCategories, learningDefaults, learningImageAltMax, learningImageTypes,
+    learningCategoryMax, learningCategoryPath, learningDefaults, learningImageAltMax, learningImageTypes, normalizeLearningCategory,
     type LearningDraft, type LearningImageReservation, type LearningPostFields, type LearningPostInput,
 } from '../../lib/contracts/learning';
 import type { LearningAssociation, TopicChoice } from '../../lib/contracts/topic-collections';
@@ -62,20 +62,21 @@ export function LearningEditing({ actorId, id }: { actorId: string; id?: string 
         const epoch = learningEpoch(account);
         const fromNew = !id ? newEditorRecovery(actorId, epoch).read()?.id : null;
         const target = id ?? (fromNew && /^[a-zA-Z0-9_-]{1,80}$/.test(fromNew) ? fromNew : null);
-        const [draft, choices] = await Promise.all([
+        const [draft, choices, categories] = await Promise.all([
             target ? getDraft(target, actorId, signal) : null,
             api<TopicChoice[]>('learning/collections/editable', undefined, actorId, signal).catch(error => {
                 if (signal.aborted || (error instanceof ApiError && ['ACCOUNT_CHANGED', 'AUTHENTICATION_REQUIRED', 'SESSION_UNVERIFIED'].includes(error.code))) throw error;
                 return null;
             }),
+            api<string[]>(learningCategoryPath, undefined, actorId, signal),
         ]);
-        return { draft, choices, epoch };
+        return { draft, choices, categories, epoch };
     }, [actorId, id]);
     return <AccountBoundary actorId={actorId} load={load}>{data => <Editor {...data} actorId={actorId} routeId={id} />}</AccountBoundary>;
 }
 
-function Editor({ draft, choices, epoch, actorId, routeId }: {
-    draft: LearningDraft | null; choices: TopicChoice[] | null; epoch: string; actorId: string; routeId?: string;
+function Editor({ draft, choices, categories, epoch, actorId, routeId }: {
+    draft: LearningDraft | null; categories: string[]; choices: TopicChoice[] | null; epoch: string; actorId: string; routeId?: string;
 }) {
     const router = useRouter();
     const newRecovery = newEditorRecovery(actorId, epoch);
@@ -86,6 +87,10 @@ function Editor({ draft, choices, epoch, actorId, routeId }: {
         return stored && 'fields' in stored ? stored : workFrom(draft);
     });
     const latest = useRef(work);
+    const [addedCategories, setAddedCategories] = useState<string[]>([]);
+    const [categoryName, setCategoryName] = useState('');
+    const [addingCategory, setAddingCategory] = useState(false);
+    const categoryRequest = useRef<{ name: string; request: LearningMutation } | null>(null);
     const [accepted, setAccepted] = useState<LearningDraft | null>(null);
     const [files, setFiles] = useState<Map<string, File>>(() => new Map());
     const [activeImage, setActiveImage] = useState<string | null>(null);
@@ -102,6 +107,10 @@ function Editor({ draft, choices, epoch, actorId, routeId }: {
         if (!ended) return;
         selectionEpoch.current++;
         setFiles(new Map());
+        setAddedCategories([]);
+        setCategoryName('');
+        setAddingCategory(false);
+        categoryRequest.current = null;
         setWork(workFrom(null));
         latest.current = workFrom(null);
     });
@@ -227,6 +236,25 @@ function Editor({ draft, choices, epoch, actorId, routeId }: {
 
     function report(error: unknown) {
         setStatus({ message: error instanceof Error ? error.message : '操作结果尚未确认，请重试原操作。', error: true });
+    }
+
+    function addCategory() {
+        const name = normalizeLearningCategory(categoryName);
+        if (!name) { report(new Error(`分类名称须为 1–${learningCategoryMax} 个字符。`)); return; }
+        void run(async (signal, current) => {
+            setStatus(null);
+            const request = categoryRequest.current?.name === name
+                ? categoryRequest.current.request
+                : learningMutation(learningCategoryPath, 'POST', { name });
+            categoryRequest.current = { name, request };
+            const category = await sendLearning<string>(request, actorId, signal);
+            if (!current()) return;
+            categoryRequest.current = null;
+            setAddedCategories(previous => [...previous, category]);
+            edit({ category });
+            setCategoryName('');
+            setAddingCategory(false);
+        }, report);
     }
 
     function submit(intent: 'save' | 'publish' | 'inclusion', retryKey?: string) {
@@ -494,9 +522,21 @@ function Editor({ draft, choices, epoch, actorId, routeId }: {
                     <label>内容类型<select value={fields.kind} onChange={event => edit({ kind: event.target.value as Input['kind'] })}>
                         <option value="article">图文</option><option value="video">视频</option>
                     </select></label>
-                    <label>分类<select value={fields.category} onChange={event => edit({ category: event.target.value as Input['category'] })}>
-                        {learningCategories.map(category => <option key={category}>{category}</option>)}
+                    <label>分类<select value={fields.category} onChange={event => edit({ category: event.target.value })}>
+                        {[...new Set([...categories, ...addedCategories, fields.category])].map(category => <option key={category} value={category}>{category}</option>)}
                     </select></label>
+                </div>
+                <div className="learning-actions learning-category-actions">
+                    {addingCategory ? <>
+                        <label>分类名称<input name="category-name" value={categoryName} onChange={event => setCategoryName(event.target.value)}
+                            onKeyDown={event => {
+                                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                                event.preventDefault();
+                                addCategory();
+                            }} /></label>
+                        <button type="button" onClick={addCategory}>添加分类</button>
+                        <button type="button" className="secondary" onClick={() => setAddingCategory(false)}>取消新增分类</button>
+                    </> : <button className="secondary" type="button" onClick={() => setAddingCategory(true)}>新增分类</button>}
                 </div>
                 <label>标题<input ref={editTitle} name="title" value={fields.title} maxLength={learningDefaults.maxTitle} required onChange={event => edit({ title: event.target.value })} /></label>
                 <label>摘要（选填）<input name="summary" value={fields.summary} maxLength={learningDefaults.maxSummary} onChange={event => edit({ summary: event.target.value })} /></label>

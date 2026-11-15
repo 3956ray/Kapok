@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useId, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { MessageCircle, Send } from 'lucide-react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { Clock, MessageCircle, Send } from 'lucide-react';
 import { api, ApiError } from '../../lib/client/api';
 import { confirmedRejection, learningMutation, learningRecovery, sendLearning, type LearningMutation } from '../../lib/client/learning-images';
 import type { LearningVideo } from '../../lib/contracts/learning';
@@ -20,8 +20,8 @@ const actionLabels = { root: '发送讨论', reply: '发送回复', edit: '保�
 const timeLabel = (seconds: number) => Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
 const unavailable = (error: unknown) => error instanceof ApiError && ['NOT_FOUND', 'FORBIDDEN'].includes(error.code);
 
-export function LearningDiscussion({ actorId, epoch, userId, admin, postId, initial, video, player, playerSurface }: Owner & {
-    postId: string; initial: LearningComment[]; video: LearningVideo | null;
+export function LearningDiscussion({ actorId, epoch, userId, admin, postId, initial, video, player, playerSurface, children }: Owner & {
+    children: ReactNode; postId: string; initial: LearningComment[]; video: LearningVideo | null;
     player: RefObject<YouTubeControls | null>; playerSurface: RefObject<HTMLDivElement | null>;
 }) {
     const title = useId();
@@ -132,46 +132,58 @@ export function LearningDiscussion({ actorId, epoch, userId, admin, postId, init
         </article>;
     }
 
-    return <section className="video-discussion-list learning-discussion" aria-labelledby={title}>
-        <h2 id={title}>讨论</h2>
-        {roots.length === 0 && <p className="muted">还没有讨论。可以先留一条观察。</p>}
-        {roots.map(root => <div className="discussion-card panel" key={root.id}>
-            {row(root, root)}
-            {replies.get(root.id)?.length ? <div className="discussion-replies">
-                <ol>{replies.get(root.id)?.map(reply => <li key={reply.id}>{row(reply, root)}</li>)}</ol>
-            </div> : null}
-        </div>)}
-        {status && <p role="status" className="notice">{status}</p>}
-        {loadError && <p role="alert">{loadError}</p>}
-        <DiscussionComposer key={scope} form={composer} choice={choice} target={target}
-            targetAvailable={choice.mode !== 'reply' || (!!target && target.status === 'active' &&
-                (!target.rootId || comments.some(comment => comment.id === target.rootId && comment.status === 'active')))}
-            actorId={actorId} epoch={epoch} path={path} video={video} player={player} busy={busy}
-            cancel={() => select({ mode: 'root' })}
-            reload={() => void run(refresh, error => setLoadError(error instanceof Error ? error.message : '暂未能刷新讨论。'))}
-            submit={(request, rejected, saved, failed) => {
-                setStatus('');
-                void run(async (signal, current) => {
-                    try {
-                        await sendLearning<{ id: string }>(request, actorId, signal);
-                    } catch (error) {
-                        if (current() && confirmedRejection(error)) {
-                            rejected();
-                            if (error instanceof ApiError && error.code === 'NOT_FOUND') {
-                                try { await refresh(signal, current); } catch { /* Refresh rechecks the source boundary. */ }
-                            } else if (unavailable(error)) void session.verify();
+    return <div className="video-discussion-layout training-watch-layout">
+        <div className="video-discussion-scroll" role="region" aria-label="学习资料与讨论" tabIndex={0}>
+            <div className="video-content">
+                {children}
+                <section className="video-discussion-list learning-discussion" aria-labelledby={title}>
+                    <header className="training-discussion-heading">
+                        <h2 id={title}>{video ? '视频讨论' : '讨论'}</h2>
+                    </header>
+                    {roots.length ? <div className="training-discussion-threads">
+                        {roots.map(root => <div className="discussion-card panel" key={root.id}>
+                            {row(root, root)}
+                            {replies.get(root.id)?.length ? <div className="discussion-replies">
+                                <ol>{replies.get(root.id)?.map(reply => <li key={reply.id}>{row(reply, root)}</li>)}</ol>
+                            </div> : null}
+                        </div>)}
+                    </div> : <p className="panel">还没有讨论。可以先留一条观察。</p>}
+                </section>
+            </div>
+        </div>
+        <div className="video-discussion-dock">
+            {status && <p role="status" className="notice">{status}</p>}
+            {loadError && <p role="alert" className="notice">{loadError}</p>}
+            <DiscussionComposer key={scope} form={composer} choice={choice} target={target}
+                targetAvailable={choice.mode !== 'reply' || (!!target && target.status === 'active' &&
+                    (!target.rootId || comments.some(comment => comment.id === target.rootId && comment.status === 'active')))}
+                actorId={actorId} epoch={epoch} path={path} video={video} player={player} busy={busy}
+                cancel={() => select({ mode: 'root' })}
+                reload={() => void run(refresh, error => setLoadError(error instanceof Error ? error.message : '暂未能刷新讨论。'))}
+                submit={(request, rejected, saved, failed) => {
+                    setStatus('');
+                    void run(async (signal, current) => {
+                        try {
+                            await sendLearning<{ id: string }>(request, actorId, signal);
+                        } catch (error) {
+                            if (current() && confirmedRejection(error)) {
+                                rejected();
+                                if (error instanceof ApiError && error.code === 'NOT_FOUND') {
+                                    try { await refresh(signal, current); } catch { /* Refresh rechecks the source boundary. */ }
+                                } else if (unavailable(error)) void session.verify();
+                            }
+                            throw error;
                         }
-                        throw error;
-                    }
-                    await refresh(signal, current);
-                    if (!current()) return;
-                    saved();
-                    setStatus(({ edit: '讨论已修改。', delete: '讨论已删除。', report: '已提交举报。',
-                        hide: '讨论已隐藏。', restore: '讨论已恢复。' } as Partial<Record<Choice['mode'], string>>)[choice.mode] ?? '讨论已发送。');
-                    setChoice({ mode: 'root' });
-                }, failed);
-            }} />
-    </section>;
+                        await refresh(signal, current);
+                        if (!current()) return;
+                        saved();
+                        setStatus(({ edit: '讨论已修改。', delete: '讨论已删除。', report: '已提交举报。',
+                            hide: '讨论已隐藏。', restore: '讨论已恢复。' } as Partial<Record<Choice['mode'], string>>)[choice.mode] ?? '讨论已发送。');
+                        setChoice({ mode: 'root' });
+                    }, failed);
+                }} />
+        </div>
+    </div>;
 }
 
 function DiscussionComposer({ form, choice, target, targetAvailable, actorId, epoch, path, video, player, busy, cancel, reload, submit }: {
@@ -192,6 +204,8 @@ function DiscussionComposer({ form, choice, target, targetAvailable, actorId, ep
     });
     const [input, setInput] = useState(() => recovery.read() ?? empty());
     const [error, setError] = useState('');
+    const timeToolsId = useId();
+    const [showTimeTools, setTimeToolsOpen] = useState(() => !!input.seconds);
     const staleTime = !!input.seconds && input.mediaUrl !== video?.url;
     const staleVersion = !!target && mode !== 'reply' && input.version !== target.version;
     const invalidTarget = !targetAvailable || (mode !== 'root' && (!target || target.status === 'deleted'));
@@ -211,6 +225,7 @@ function DiscussionComposer({ form, choice, target, targetAvailable, actorId, ep
             if (invalidTarget || staleTime || staleVersion) return;
             const seconds = input.seconds === '' ? null : Number(input.seconds);
             if (seconds !== null && (!Number.isSafeInteger(seconds) || seconds < 0)) {
+                setTimeToolsOpen(true);
                 setError('请输入有效的非负整数秒数。');
                 return;
             }
@@ -235,7 +250,7 @@ function DiscussionComposer({ form, choice, target, targetAvailable, actorId, ep
         }, failure => setError(failure instanceof Error ? failure.message : '尚未确认请求结果，请重试。'));
     }
 
-    return <form ref={form} tabIndex={-1} className="discussion-composer" data-own-buffer aria-busy={busy} onSubmit={send}>
+    return <form ref={form} tabIndex={-1} className="discussion-composer learning-discussion-composer" data-own-buffer aria-busy={busy} onSubmit={send}>
         {mode !== 'root' && <div className="discussion-context">
             <div className="discussion-context-copy">
                 <strong>{mode === 'reply' ? '回复 ' : actionLabels[mode] + ' · '}{target?.author.discName ?? '讨论已不可用'}</strong>
@@ -247,14 +262,33 @@ function DiscussionComposer({ form, choice, target, targetAvailable, actorId, ep
         {staleVersion && !input.pending && <p className="notice">讨论已更新。
             <button type="button" className="secondary" disabled={busy} onClick={() => update({ ...input, version: target?.version })}>采用当前版本</button>
         </p>}
-        {deleting ? <p>确认删除这条讨论？已有回复会保留。</p> : <label>
-            {writing ? '讨论内容' : '操作原因'}
-            <textarea name="discussion-text" rows={3} required maxLength={writing ? learningCommentTextLimit : learningCommentReasonLimit}
-                disabled={locked} value={input.text} onChange={event => update({ ...input, text: event.target.value })} />
-        </label>}
-        {writing && video && <div className="learning-actions learning-discussion-time">
+        {deleting && <p>确认删除这条讨论？已有回复会保留。</p>}
+        <div className="composer-row">
+            {!deleting && <div className="composer-field">
+                <textarea name="discussion-text" rows={1} required aria-label={writing ? '讨论内容' : '操作原因'}
+                    placeholder={mode === 'reply' && target ? '回复' + target.author.discName + '…' : writing ? '说说你的观察…' : '操作原因'}
+                    maxLength={writing ? learningCommentTextLimit : learningCommentReasonLimit}
+                    ref={node => {
+                        if (node) { node.style.height = 'auto'; node.style.height = node.scrollHeight + 'px'; }
+                    }}
+                    disabled={locked} value={input.text} onChange={event => update({ ...input, text: event.target.value })} />
+                {writing && video && <button type="button" className="composer-time-toggle" aria-label="讨论时间点选项"
+                    title="讨论时间点选项" aria-expanded={showTimeTools} aria-controls={timeToolsId} disabled={locked}
+                    onClick={() => setTimeToolsOpen(!showTimeTools)}>
+                    <Clock size={17} aria-hidden="true" />
+                </button>}
+            </div>}
+            <button type="submit" className={deleting ? 'learning-confirm-delete' : undefined}
+                disabled={busy || (!input.pending && (invalidTarget || staleTime || staleVersion || (!deleting && !input.text.trim())))}>
+                <span className={deleting ? undefined : 'discussion-send-label'}>
+                    {busy ? '正在确认…' : input.pending ? '确认上次结果' : deleting ? '确认删除' : actionLabels[mode]}
+                </span>
+                {!deleting && <Send size={20} aria-hidden="true" />}
+            </button>
+        </div>
+        {writing && video && <div id={timeToolsId} className="learning-actions learning-discussion-time" hidden={!showTimeTools}>
             <label>视频时刻（秒，可选）
-                <input name="discussion-time" type="number" min="0" step="1" disabled={locked} value={input.seconds}
+                <input name="discussion-time" type="number" min="0" step="1" disabled={locked || !showTimeTools} value={input.seconds}
                     onChange={event => update({ ...input, seconds: event.target.value, mediaUrl: event.target.value ? video.url : null })} />
             </label>
             {video.source === 'youtube' && <button type="button" className="secondary" disabled={locked} onClick={() => {
@@ -275,9 +309,5 @@ function DiscussionComposer({ form, choice, target, targetAvailable, actorId, ep
         {error && <div className="notice" role="alert"><p>{error}</p>
             {!input.pending && <button type="button" className="secondary" disabled={busy} onClick={reload}>刷新讨论</button>}
         </div>}
-        <button type="submit" disabled={busy || (!input.pending && (invalidTarget || staleTime || staleVersion || (!deleting && !input.text.trim())))}>
-            {writing && <Send size={16} aria-hidden="true" />}
-            {busy ? '正在确认…' : input.pending ? '确认上次结果' : deleting ? '确认删除' : actionLabels[mode]}
-        </button>
     </form>;
 }

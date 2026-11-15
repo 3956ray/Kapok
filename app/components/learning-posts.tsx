@@ -2,43 +2,56 @@
 import { LearningBookmark } from './collections';
 
 import Link from 'next/link';
-import { useCallback, useRef, useState } from 'react';
-import { ArrowRight, FileText, Film } from 'lucide-react';
+import { useCallback, useId, useRef, useState } from 'react';
+import { ArrowRight, Bookmark, ExternalLink, FileText, Film, Pencil } from 'lucide-react';
 import { api, ApiError } from '../../lib/client/api';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { confirmedRejection, learningMutation, learningRecovery, sendLearning, type LearningMutation } from '../../lib/client/learning-images';
-import { learningCategories, type LearningDraft, type LearningDraftOverview, type LearningPost, type LearningPostOverview } from '../../lib/contracts/learning';
+import { learningCategories, learningCategoryPath, type LearningDraft, type LearningDraftOverview, type LearningPost, type LearningPostOverview } from '../../lib/contracts/learning';
 import type { LearningAssociation, TopicCollection } from '../../lib/contracts/topic-collections';
 import type { LearningActivityInput, LearningActivityStatus, LearningComment } from '../../lib/contracts/learning-social';
+import { learningReflectionHref } from '../../lib/contracts/reflections';
+import { bilibiliPlayerUrl } from '../../lib/client/bilibili';
+import { parseYouTubeSource } from '../../lib/video-source';
+import { useVideoViewport } from './video-discussion';
 import { LearningDiscussion } from './learning-discussion';
+import { LearningText } from './learning-text';
 import type { YouTubeControls } from './youtube-player';
 import type { BootstrapStatus } from '../../lib/contracts';
 import { AccountBoundary } from './secure-resource';
-import { AddPostToTopic, TopicBrowseRows, TopicMine } from './topic-collections';
+import { TopicBrowseRows, TopicMine, useAddPostToTopic } from './topic-collections';
 import { manageFeatured, newTopic, topicsTab } from './topic-paths';
 import { topicsEndpoint } from './topic-controls';
 import { LearningConfirm, LearningImageView, LearningMedia, learningEpoch, useLearningAction } from './learning-controls';
 
 export const learningStatus = { draft: '私人草稿', published: '已发布', withdrawn: '已撤回', hidden: '已隐藏' };
 const kinds = { article: '图文', video: '视频' };
+const allContentLabel = '查看全部内容';
 const emptyFilters = { search: '', kind: '', category: '' };
 const endpoint = 'learning/posts';
 const newPost = '/learn/posts/new';
 
-function BrowseRows({ posts, actorId }: { posts: LearningPostOverview[]; actorId: string }) {
+function BrowseRows({ posts, categories, actorId }: { posts: LearningPostOverview[]; categories: string[]; actorId: string }) {
     const [filters, setFilters] = useNavigationField(actorId, 'learning-filters', emptyFilters);
+    const showCategoryPrefix = categories.includes(allContentLabel);
     const visible = posts.filter(post => post.title.toLowerCase().includes(filters.search.trim().toLowerCase()) &&
         (!filters.kind || filters.kind === post.kind) && (!filters.category || filters.category === post.category));
     return <>
-        <div className="learning-filters" data-own-buffer>
-            <label>搜索标题<input type="search" value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} /></label>
+        <div className="learning-filters learning-browse-filters" data-own-buffer>
+            <label className="learning-title-filter">搜索标题<input type="search" value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })} /></label>
             <label>类型<select value={filters.kind} onChange={e => setFilters({ ...filters, kind: e.target.value })}>
                 <option value="">全部</option><option value="article">图文</option><option value="video">视频</option>
+            </select></label>
+            <label>分类<select value={filters.category} onChange={e => setFilters({ ...filters, category: e.target.value })}>
+                <option value="">{allContentLabel}</option>
+                {categories.map(category => <option key={category} value={category}>
+                    {showCategoryPrefix ? `分类：${category}` : category}
+                </option>)}
             </select></label>
         </div>
         <div className="learning-actions learning-chips" role="group" aria-label="主题筛选">
             {['', ...learningCategories].map(category => <button key={category} type="button" className="secondary"
-                aria-pressed={filters.category === category} onClick={() => setFilters({ ...filters, category })}>{category || '全部'}</button>)}
+                aria-pressed={filters.category === category} onClick={() => setFilters({ ...filters, category })}>{category || allContentLabel}</button>)}
         </div>
         {visible.length > 0 ? <>
             <p className="muted" role="status">{visible.length} 条内容</p>
@@ -62,9 +75,13 @@ export function LearningBrowse({ actorId, tab = 'contents' }: { actorId: string;
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         const admin = account.me.membership?.role === 'admin';
         if (tab === 'collections') return { admin, collections: await api<TopicCollection[]>(topicsEndpoint, undefined, actorId, signal) };
-        return { admin, posts: await api<LearningPostOverview[]>(endpoint, undefined, actorId, signal) };
+        const [posts, categories] = await Promise.all([
+            api<LearningPostOverview[]>(endpoint, undefined, actorId, signal),
+            api<string[]>(learningCategoryPath, undefined, actorId, signal),
+        ]);
+        return { admin, posts, categories };
     }, [actorId, tab]);
-    return <AccountBoundary actorId={actorId} load={load}>{({ admin, collections, posts }) => <>
+    return <AccountBoundary actorId={actorId} load={load}>{({ admin, collections, posts, categories }) => <>
         <div className="learning-actions learning-top">
             <nav className="learning-tabs" aria-label="学习库视图">
                 <Link href="/learn?tab=contents" aria-current={tab === 'contents' ? 'page' : undefined}>内容</Link>
@@ -74,7 +91,7 @@ export function LearningBrowse({ actorId, tab = 'contents' }: { actorId: string;
             {admin && <Link href={manageFeatured}>精选管理</Link>}
             <Link className="button" href={tab === 'collections' ? newTopic : newPost}>{tab === 'collections' ? '新建合集' : '发布内容'}</Link>
         </div>
-        {collections ? <TopicBrowseRows collections={collections} actorId={actorId} /> : <BrowseRows posts={posts ?? []} actorId={actorId} />}
+        {collections ? <TopicBrowseRows collections={collections} actorId={actorId} /> : <BrowseRows posts={posts ?? []} categories={categories ?? []} actorId={actorId} />}
     </>}</AccountBoundary>;
 }
 export function LearningMine({ actorId }: { actorId: string }) {
@@ -179,6 +196,9 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
     post: LearningPost; draft: LearningDraft | null; actorId: string; epoch: string; admin: boolean;
     comments: LearningComment[]; userId: string; activity: LearningActivityStatus | null; membershipEpoch: number;
 }) {
+    const headingId = useId();
+    const bookmarkId = useId();
+    const [bookmarkOpen, setBookmarkOpen] = useState(false);
     const player = useRef<YouTubeControls>(null);
     const playerSurface = useRef<HTMLDivElement>(null);
     const path = endpoint + '/' + post.id;
@@ -188,6 +208,7 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
     const [removed, setRemoved] = useState(false);
     const [status, setStatus] = useState('');
     const { busy, run, session } = useLearningAction();
+    const addToTopic = useAddPostToTopic({ actorId, epoch, postId: post.id, disabled: busy || !!pending });
     const association = associationOverride?.status === 'pending' && draft?.association?.status !== 'pending'
         ? draft?.association : associationOverride ?? draft?.association;
     const action = pending?.path.split('/').at(-1);
@@ -221,27 +242,55 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
     if (removed) return <section className="panel" role="status"><h2>此内容已从队内阅读中移除</h2>
         <Link href={post.isAuthor ? '/learn/mine' : '/learn'}>{post.isAuthor ? '返回我的创作' : '返回学习库'}</Link>
     </section>;
-    return <div className="learning-reading">
-        <div className="learning-top">
-            <h2>{post.title}</h2>
-            {post.isAuthor && <Link className="button secondary" href={'/learn/posts/' + post.id + '/edit'}>编辑内容</Link>}
-        </div>
-        <article className="panel learning-article">
+    const provider = post.video?.source === 'youtube' ? 'YouTube' : 'B 站';
+    const sourceUrl = post.video?.source === 'youtube' ? parseYouTubeSource(post.video.url)?.url
+        : post.video && bilibiliPlayerUrl(post.video.url) ? post.video.url : undefined;
+    return <LearningDiscussion actorId={actorId} epoch={epoch} userId={userId} admin={admin}
+        postId={post.id} initial={comments} video={post.video} player={player} playerSurface={playerSurface}>
+        {post.video && <div className="training-watch-stage">
+            <section className="video-stage" ref={playerSurface} tabIndex={-1} aria-label="视频播放器">
+                <LearningMedia key={post.video.url} video={post.video} title={post.title} player={player} watch />
+            </section>
+        </div>}
+        <section className="training-watch-info" aria-labelledby={headingId}>
+            <div className="training-watch-title">
+                <div>
+                    <h2 id={headingId}>{post.title}</h2>
+                    <time dateTime={post.publishedAt}>{post.publishedAt?.slice(0, 10)}</time>
+                </div>
+                <div className="training-title-actions">
+                    {sourceUrl && <span className="training-title-provider">
+                        <a className="training-title-action" href={sourceUrl} target="_blank" rel="noopener noreferrer"
+                            aria-label={`在 ${provider} 打开（新标签）`} title={`在 ${provider} 打开（新标签）`}>
+                            <ExternalLink size={18} aria-hidden="true" />
+                        </a>
+                    </span>}
+                    <button className="training-title-action training-title-bookmark" type="button" aria-expanded={bookmarkOpen}
+                        aria-controls={bookmarkId} aria-label="收藏与私人备注" title="收藏与私人备注"
+                        onClick={() => setBookmarkOpen(open => !open)}><Bookmark size={18} aria-hidden="true" /></button>
+                    <Link className="video-reflection-link training-title-action" href={learningReflectionHref('learning_post', post.id)}
+                        aria-label="写复盘" title="写复盘"><Pencil size={18} aria-hidden="true" /></Link>
+                    {addToTopic.trigger}
+                </div>
+            </div>
             <p className="learning-byline"><span className="default-avatar" aria-hidden="true">{Array.from(post.author.discName)[0]}</span>
                 {post.author.discName} · 背号 {post.author.jerseyNumber} · {kinds[post.kind]} · {post.category}</p>
-            {post.summary && <p className="learning-summary">{post.summary}</p>}
-            {post.video && <div className="learning-discussion-player" ref={playerSurface} tabIndex={-1} aria-label="视频播放器">
-                <LearningMedia key={post.video.url} video={post.video} title={post.title} player={player} />
-            </div>}
-            {post.body && <p className="learning-body">{post.body}</p>}
-            {post.images.map(image => <figure key={image.id}><LearningImageView image={image} /></figure>)}
-        </article>
+            {post.summary && <p className="preserve">{post.summary}</p>}
+            <div id={bookmarkId} hidden={!bookmarkOpen}>
+                <LearningBookmark actorId={actorId} sourceKind="learning_post" sourceId={post.id} showReflection={false} />
+            </div>
+            {(post.body || post.images.length > 0) && <article className="learning-article" aria-label="资料正文">
+                {post.body && <LearningText text={post.body} />}
+                {post.images.map(image => <figure key={image.id}><LearningImageView image={image} /></figure>)}
+            </article>}
+        </section>
         {association && <LearningAssociationStatus association={association} retry={() => mutate('inclusion-retry')} busy={busy || (!!pending && action !== 'inclusion-retry')} />}
         {pending && action === 'inclusion-retry' && association?.status !== 'pending' &&
             <button className="secondary" type="button" disabled={busy} onClick={() => mutate('inclusion-retry')}>确认收录结果</button>}
         {pending && action !== 'inclusion-retry' && <p role="status" className="notice">上次操作结果待确认。重试会沿用原请求。</p>}
         {status && <div className="notice" role="alert"><p>{status}</p><button className="secondary" onClick={() => void session.verify()}>重新确认状态</button></div>}
-        <div className="learning-actions">
+        <div className="learning-actions learning-reading-actions">
+            {post.isAuthor && <Link className="button secondary" href={'/learn/posts/' + post.id + '/edit'}>编辑内容</Link>}
             {draft && <LearningConfirm label={action === 'withdraw' ? '确认撤回结果' : '撤回内容'} title="撤回这份资料？" confirm="确认撤回"
                 disabled={busy || (!!pending && action !== 'withdraw')} onConfirm={() => mutate('withdraw')}>
                 <p>队友将无法打开此资料。你可在我的创作中继续编辑并重新发布。</p>
@@ -250,16 +299,15 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
                 disabled={busy || (!!pending && action !== 'hide')} onConfirm={() => mutate('hide')}>
                 <p>隐藏后队友无法阅读，作者仍可编辑私稿。隐藏状态会阻止作者重新发布。</p>
             </LearningConfirm>}
+            {addToTopic.feedback}
+            {activity && <ActivityControls post={post} initial={activity} actorId={actorId} epoch={epoch}
+                membershipEpoch={membershipEpoch} disabled={busy || !!pending} />}
         </div>
-        <AddPostToTopic actorId={actorId} epoch={epoch} postId={post.id} disabled={busy || !!pending} />
-        <LearningBookmark actorId={actorId} sourceKind="learning_post" sourceId={post.id} />
-        <LearningDiscussion actorId={actorId} epoch={epoch} userId={userId} admin={admin}
-            postId={post.id} initial={comments} video={post.video} player={player} playerSurface={playerSurface} />
-        {activity && <ActivityControls post={post} initial={activity} actorId={actorId} epoch={epoch}
-            membershipEpoch={membershipEpoch} disabled={busy || !!pending} />}
-    </div>;
+    </LearningDiscussion>;
 }
 export function LearningReading({ actorId, id }: { actorId: string; id: string }) {
+    const boundary = useRef<HTMLDivElement>(null);
+    useVideoViewport(boundary);
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         const path = endpoint + '/' + id;
         const post = await api<LearningPost>(path, undefined, actorId, signal);
@@ -272,5 +320,9 @@ export function LearningReading({ actorId, id }: { actorId: string; id: string }
             draft: current.publishedVersion === draft?.publishedVersion ? draft : null,
             epoch: learningEpoch(account), membershipEpoch: account.me.membership!.epoch, admin: account.me.membership?.role === 'admin' };
     }, [actorId, id]);
-    return <AccountBoundary key={id} actorId={actorId} load={load}>{data => <Reading key={data.post.id + ':' + data.post.publishedVersion} {...data} actorId={actorId} />}</AccountBoundary>;
+    return <div className="video-discussion-boundary training-watch learning-watch" ref={boundary}>
+        <AccountBoundary key={id} actorId={actorId} load={load}>{data =>
+            <Reading key={data.post.id + ':' + data.post.publishedVersion} {...data} actorId={actorId} />
+        }</AccountBoundary>
+    </div>;
 }

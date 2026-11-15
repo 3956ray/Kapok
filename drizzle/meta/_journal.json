@@ -113,6 +113,13 @@
       "when": 1794704000000,
       "tag": "0017_learning_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1794800400000,
+      "tag": "0018_learning_categories",
+      "breakpoints": true
     }
   ]
 }

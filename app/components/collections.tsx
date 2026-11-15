@@ -16,8 +16,8 @@ export function SaveCollection(props: SaveProps) {
     if (props.watch) return <WatchVideoNote actorId={props.actorId} {...props.watch} timestampSec={props.timestampSec ?? null} />;
     return session ? <CollectionEditor {...props} /> : <AccountBoundary actorId={props.actorId} load="me">{() => <CollectionEditor {...props} />}</AccountBoundary>;
 }
-export function LearningBookmark({ actorId, sourceKind, sourceId }: {
-    actorId: string; sourceKind: LearningSourceKind; sourceId: string;
+export function LearningBookmark({ actorId, sourceKind, sourceId, showReflection = true }: {
+    actorId: string; sourceKind: LearningSourceKind; sourceId: string; showReflection?: boolean;
 }) {
     return <div>
         <AccountBoundary<Collection[]> actorId={actorId} load="collections">{items => {
@@ -25,7 +25,7 @@ export function LearningBookmark({ actorId, sourceKind, sourceId }: {
             return item ? <CollectionCard compact actorId={actorId} item={item} /> :
                 <CollectionEditor actorId={actorId} sourceKind={sourceKind} sourceId={sourceId} privateNote refreshOnSave />;
         }}</AccountBoundary>
-        <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}>写复盘</Link>
+        {showReflection && <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}>写复盘</Link>}
     </div>;
 }
 
