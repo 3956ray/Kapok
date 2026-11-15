@@ -1,17 +1,18 @@
 'use client';
+import { isLearningSourceKind } from '../contracts/reflections';
 import { useState } from 'react';
 
 // Browser-only, ephemeral UI buffers. No server resource snapshots are stored here.
 // 30 minutes, 80 entries, 32KiB per entry; clearing advances an epoch to fence late callbacks.
 type Entry = { value: unknown; at: number };
-type Store = { actor: string; stamp: string; epoch: number; entries: Map<string, Entry>; sources: Map<string, string>; pending: Map<string, string> };
+type Store = { actor: string; stamp: string; epoch: number; entries: Map<string, Entry>; reflectionSources: Map<string, string>; sources: Map<string, string>; pending: Map<string, string> };
 const slot = '__kapokNavigationState' as const;
 type Host = Window & { [slot]?: Store };
 function store(): Store | null {
     if (typeof window === 'undefined') return null;
     const host = window as Host;
     if (!host[slot]) {
-        host[slot] = { actor: '', stamp: '', epoch: 0, entries: new Map(), sources: new Map(), pending: new Map() };
+        host[slot] = { actor: '', stamp: '', epoch: 0, entries: new Map(), reflectionSources: new Map(), sources: new Map(), pending: new Map() };
         const ended = (actor: string) => { if (host[slot]?.actor === actor) clearNavigationActor(actor); };
         window.addEventListener('kapok-account-changed', e => ended((e as CustomEvent<string>).detail));
         const channel = new BroadcastChannel('kapok-session');
@@ -28,14 +29,18 @@ function store(): Store | null {
     }
     return host[slot]!;
 }
-function validPath(path: string) { return /^\/(?:$|home|trainings(?:\/[\w-]+)?|videos\/[\w-]+|growth|me(?:\/(?:edit|data|recycle))?|members(?:\/[\w-]+)?|reflections\/(?:new|[\w-]+(?:\/(?:edit|sharing))?)|announcements\/[\w-]+|activity|admin\/(?:invites|announcements|members|trainings(?:\/(?:new|(?!new(?:\/|$))[\w-]{1,80}(?:\/edit)?))?)|login|join(?:\/[\w-]+)?|internal\/bootstrap)$/.test(path); }
+function validPath(path: string) { return /^\/(?:$|home|trainings(?:\/[\w-]+)?|videos\/[\w-]+|growth|learn(?:\/(?:mine|(?:posts|collections)\/(?:new|(?!new(?:\/|$))[a-zA-Z0-9_-]{1,80}(?:\/edit)?)|featured\/manage))?|me(?:\/(?:edit|data|recycle|preview))?|members(?:\/[\w-]+)?|reflections\/(?:new|[\w-]+(?:\/(?:edit|sharing))?)|announcements\/[\w-]+|activity|admin\/(?:invites|announcements|members|trainings(?:\/(?:new|(?!new(?:\/|$))[\w-]{1,80}(?:\/edit)?))?)|login|join(?:\/[\w-]+)?|internal\/bootstrap)$/.test(path); }
 function sourceHref() {
     const url = new URL(window.location.href);
-    const allowed = url.pathname.startsWith('/videos/') ? ['t'] : url.pathname === '/reflections/new' ? ['collection', 'training', 'video'] : url.pathname === '/activity' ? ['cursor'] : /^\/trainings\/[\w-]{1,80}$/.test(url.pathname) ? ['view'] : [];
-    if (url.searchParams.size !== 1) url.searchParams.delete('view');
+    const allowed = url.pathname.startsWith('/videos/') ? ['t'] : url.pathname === '/reflections/new' ? ['collection', 'training', 'video', 'sourceKind', 'sourceId'] : url.pathname === '/growth' ? ['filter'] : url.pathname === '/learn' ? ['tab'] : url.pathname === '/activity' ? ['cursor'] : /^\/trainings\/[\w-]{1,80}$/.test(url.pathname) ? ['view', 'video'] : [];
+    if ([...url.searchParams.keys()].some(key => !['view', 'video'].includes(key))) url.searchParams.delete('view');
     for (const key of [...url.searchParams.keys()]) {
         const value = url.searchParams.get(key)!;
-        if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1 || (key === 't' ? !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) : key === 'cursor' ? !/^[a-zA-Z0-9_+=/-]{1,512}$/.test(value) : key === 'view' ? value !== 'member' : !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) url.searchParams.delete(key);
+        if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1 || (key === 'sourceKind' ? !isLearningSourceKind(value) : key === 't' ? !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) : key === 'cursor' ? !/^[a-zA-Z0-9_+=/-]{1,512}$/.test(value) : key === 'filter' ? !['reflections', 'bookmarks'].includes(value) : key === 'tab' ? !['contents', 'collections'].includes(value) : key === 'view' ? value !== 'member' : !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) url.searchParams.delete(key);
+    }
+    const params = url.searchParams;
+    if (url.pathname === '/reflections/new' && (!params.has('sourceKind') || !params.has('sourceId') || params.size !== 2)) {
+        params.delete('sourceKind'); params.delete('sourceId');
     }
     if (url.pathname === '/reflections/new' && url.searchParams.has('collection')) { url.searchParams.delete('training'); url.searchParams.delete('video'); }
     if (!(url.pathname.startsWith('/videos/') && /^#comment-[a-zA-Z0-9_-]{1,80}$/.test(url.hash)) && !(url.pathname.startsWith('/announcements/') && url.hash === '#body')) url.hash = '';
@@ -43,12 +48,12 @@ function sourceHref() {
 }
 export function confirmNavigationActor(actor: string, stamp: string) {
     const state = store(); if (!state) return;
-    if (state.actor !== actor || state.stamp !== stamp) { state.entries.clear(); state.sources.clear(); state.pending.clear(); state.epoch++; }
+    if (state.actor !== actor || state.stamp !== stamp) { state.entries.clear(); state.reflectionSources.clear(); state.sources.clear(); state.pending.clear(); state.epoch++; }
     state.actor = actor; state.stamp = stamp;
 }
 export function clearNavigationActor(actor: string) {
     const state = store(); if (!state || state.actor !== actor) return;
-    state.entries.clear(); state.sources.clear(); state.pending.clear(); state.epoch++; state.actor = ''; state.stamp = '';
+    state.entries.clear(); state.reflectionSources.clear(); state.sources.clear(); state.pending.clear(); state.epoch++; state.actor = ''; state.stamp = '';
 }
 export function navigationBuffer(actor: string, route: string, entity: string) {
     const state = store();
@@ -79,7 +84,27 @@ export function clearNavigationRoute(actor: string, route: string) {
     state.epoch++; // Old route callbacks cannot refill a cleared buffer.
 }
 export function currentRoute() { return typeof window === 'undefined' ? '/' : window.location.pathname; }
-export function controlledBackSource() { const source = store()?.sources.get(currentRoute()); return source && validPath(source.split(/[?#]/)[0]) ? source : null; }
+export function controlledBackSource() {
+    const state = store();
+    const route = currentRoute();
+    if (!state?.actor) return null;
+    let source = state.sources.get(route);
+    if (route === '/reflections/new') {
+        // Capture the source per browser entry so Forward can reopen a different editor origin.
+        const href = sourceHref();
+        const entry = window.history.state?.kapokReflectionSource;
+        const previous = entry?.href === href && typeof entry.id === 'string' ? state.reflectionSources.get(entry.id) : undefined;
+        if (previous) source = previous;
+        else if (source && /^\/(?:trainings|videos|learn\/(?:posts|collections))\//.test(source)) {
+            const id = crypto.randomUUID();
+            state.reflectionSources.set(id, source);
+            if (state.reflectionSources.size > 80) state.reflectionSources.delete(state.reflectionSources.keys().next().value!);
+            window.history.replaceState({ ...window.history.state, kapokReflectionSource: { href, id } }, '');
+        }
+        if (source) state.sources.set(route, source);
+    }
+    return typeof source === 'string' && validPath(source.split(/[?#]/)[0]) ? source : null;
+}
 
 // Save only fields changed by the user; fresh source values are never a cache authority.
 // Reflection editors retain their existing separate draft protocol.
@@ -165,4 +190,13 @@ export function transferNavigationSource(actor: string, to: string) {
         visited.add(path); source = state.sources.get(path);
     }
     if (source) state.sources.set(to, source);
+}
+
+export function clearTrainingVideoUI(actor: string, trainingId: string, videoId: string) {
+    const state = store();
+    if (state?.actor !== actor) return;
+    const prefix = `/trainings/${trainingId}:discussion:${videoId}`;
+    for (const key of state.entries.keys()) {
+        if (key === prefix || key.startsWith(prefix + ':')) state.entries.delete(key);
+    }
 }

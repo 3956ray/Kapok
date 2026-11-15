@@ -1,5 +1,7 @@
 # Kapok 部署、恢复与验收
 
+> 2026-11-15：学习库与账号更新的部署状态见 [发布记录](RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
+
 线上入口 [kapok.party](https://kapok.party)。从 Cloudflare Dashboard 查看当前部署版本与 Worker、Access 应用及 D1 的绑定。部署负责人保存所用 Git 提交、实际构建 SHA-256、Cloudflare Worker 版本、迁移记录及验收结果。
 
 ## 最近已核对版本
@@ -20,6 +22,7 @@
 | `databaseName`、`databaseId` | 已部署 Worker 的 `DB` D1 绑定 |
 | `accessIssuer` | Zero Trust 团队域名，含 `https://`，无尾斜线 |
 | `accessAudience` | kapok.party 的 Access Application Audience |
+| `bucketName` | 已建立的私有Standard R2桶，不开放r2.dev或自定义公共域 |
 
 配置格式示例，值均为占位：
 
@@ -31,7 +34,8 @@
   "databaseName": "kapok-example",
   "databaseId": "00000000-0000-4000-8000-000000000001",
   "accessIssuer": "https://example.cloudflareaccess.com",
-  "accessAudience": "0000000000000000000000000000000000000000000000000000000000000000"
+  "accessAudience": "0000000000000000000000000000000000000000000000000000000000000000",
+  "bucketName": "kapok-example-media"
 }
 ```
 
@@ -42,7 +46,7 @@ KAPOK_DEPLOY_CONFIG_PATH="$PWD/kapok.deploy.local.json" npm run build:staging
 npm run dry-run:staging
 ```
 
-固定 `dist/staging/client`、`dist/staging/server` 和对应迁移。核对生成的 `dist/staging/server/wrangler.json`。部署必须传明确配置路径，避免拿错 Sites 或本机配置。线上不绑定 R2，默认 `workers.dev` 和预览域关闭，静态资源由 Worker 优先处理。
+固定 `dist/staging/client`、`dist/staging/server` 和对应迁移。核对生成的 `dist/staging/server/wrangler.json`。部署必须传明确配置路径，避免拿错 Sites 或本机配置。线上通过 BUCKET 绑定私有 R2，默认 `workers.dev` 和预览域关闭，静态资源由 Worker 优先处理。
 
 ## 部署顺序
 

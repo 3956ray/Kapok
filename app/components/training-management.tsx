@@ -44,7 +44,7 @@ export function TrainingManagement({ actorId, mode, id }: ManagementProps) {
             return <>
                 <p className="workspace-overline">TRAINING DETAILS</p>
                 <h1>{data.mode === 'new' ? '新建训练' : '编辑训练'}</h1>
-                <p className="training-subheading">{data.mode === 'new' ? '填写训练信息，准备好就可以发布。' : '更新队员看到的训练信息。'}</p>
+                <p className="training-subheading">{data.mode === 'new' ? '填写训练信息，可先保存草稿或直接发布。' : '更新队员看到的训练信息。'}</p>
                 <TrainingForm actorId={actorId} training={data.mode === 'edit' ? data.training : undefined} />
             </>;
         }}</AccountBoundary>
@@ -78,12 +78,12 @@ function TrainingManagementList({ items }: { items: Training[] }) {
 function ManagedTraining({ actorId, training, uploads }: { actorId: string; training: TrainingDetail; uploads: UploadPage }) {
     const heading = useRef<HTMLHeadingElement>(null);
     const path = basePath + '/' + training.id;
-    const [justPublished] = useState(() => navigationBuffer(actorId, path, 'training-published').read<boolean>() === true);
+    const [createdStatus] = useState(() => navigationBuffer(actorId, path, 'training-created').read<string>());
     useEffect(() => {
-        if (!justPublished) return;
-        navigationBuffer(actorId, path, 'training-published').clear();
+        if (!createdStatus) return;
+        navigationBuffer(actorId, path, 'training-created').clear();
         heading.current?.focus({ preventScroll: true });
-    }, [actorId, path, justPublished]);
+    }, [actorId, path, createdStatus]);
     const visibleToMembers = ['published', 'archived'].includes(training.status);
     const writable = ['draft', 'published'].includes(training.status);
     const videos = training.videos;
@@ -96,7 +96,8 @@ function ManagedTraining({ actorId, training, uploads }: { actorId: string; trai
                 <p className="training-subheading"><time dateTime={training.date}>{training.date}</time> · {visibleToMembers ? '队员可查看' : '仅管理员可查看'}</p>
             </div>
         </div>
-        {justPublished && training.status === 'published' && <p className="notice success" role="status">训练已发布 · 全队可见</p>}
+        {createdStatus === training.status && (training.status === 'draft' || training.status === 'published') &&
+            <p className="notice success" role="status">{training.status === 'draft' ? '训练草稿已保存 · 仅管理员可见' : '训练已发布 · 全队可见'}</p>}
         <section className="panel training-surface">
             <div className="section-heading"><h2>训练信息</h2><Link href={path + '/edit'}>编辑信息</Link></div>
             <p className="preserve">{training.description || '暂无训练简介。'}</p>
@@ -110,14 +111,14 @@ function ManagedTraining({ actorId, training, uploads }: { actorId: string; trai
                     <span className="detail-tile"><Play size={18} aria-hidden="true" /></span>
                     <div>
                         {v.status === 'active' ? <h3><Link href={'/videos/' + v.id}>{v.title}</Link></h3> : <h3>{v.title}</h3>}
-                        <small>{v.source === 'upload' ? '私有短片' : 'B站'} · 排序 {v.position}{v.status === 'hidden' && ' · 已隐藏'}</small>
+                        <small>{v.source === 'upload' ? '私有短片' : v.source === 'youtube' ? 'YouTube' : 'B站'} · 排序 {v.position}{v.status === 'hidden' && ' · 已隐藏'}</small>
                     </div>
                 </div>
                 {writable && <details><summary>管理顺序与视频</summary><VideoEditForm actorId={actorId} video={v} /></details>}
             </li>)}</ol> : <div className="training-empty">
                 <span className="detail-tile"><Play size={18} aria-hidden="true" /></span>
                 <h3>还没有训练视频</h3>
-                {writable && <p>随时可以补加 B 站视频。</p>}
+                {writable && <p>随时可以补加 YouTube 或 B 站视频。</p>}
             </div>}
             {training.status === 'archived' && <p className="muted">训练已归档，可回看历史视频。</p>}
         </div>

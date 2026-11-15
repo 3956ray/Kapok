@@ -1,4 +1,4 @@
-import type { ReflectionAuthor } from '../contracts/reflections';
+import type { LearningSourceRef, ReflectionAuthor } from '../contracts/reflections';
 export type CloudRevision = Pick<ReflectionAuthor, 'id' | 'version' | 'sharingVersion' | 'generation'>;
 export type DraftBody = {
     title: string;
@@ -6,6 +6,7 @@ export type DraftBody = {
     date: string;
     trainingId: string | null;
     videoId: string | null;
+    sourceRef?: LearningSourceRef | null;
     expectedVersion?: number;
     expectedSharingVersion?: number;
     expectedGeneration?: number;
@@ -17,6 +18,7 @@ export type Draft = {
     date: string;
     trainingId: string;
     videoId: string;
+    sourceRef?: LearningSourceRef | null;
     updatedAt: string;
     cloud: CloudRevision | null;
     pending: {
@@ -52,6 +54,7 @@ export function prepareDraftRequest(draft: Draft, key: string): Draft & {
                 date: draft.date,
                 trainingId: draft.trainingId || null,
                 videoId: draft.videoId || null,
+                ...(draft.sourceRef !== undefined ? { sourceRef: draft.sourceRef ? { ...draft.sourceRef } : null } : {}),
                 ...(draft.cloud ? {
                     expectedVersion: draft.cloud.version,
                     expectedSharingVersion: draft.cloud.sharingVersion,
@@ -62,7 +65,9 @@ export function prepareDraftRequest(draft: Draft, key: string): Draft & {
     };
 }
 export function reconcileDraft(draft: Draft, cloud: CloudRevision & DraftBody) {
-    const saved = draft.title === cloud.title && draft.text === cloud.text && draft.date === cloud.date && (draft.trainingId || null) === cloud.trainingId && (draft.videoId || null) === cloud.videoId;
+    const saved = draft.title === cloud.title && draft.text === cloud.text && draft.date === cloud.date && (draft.trainingId || null) === cloud.trainingId && (draft.videoId || null) === cloud.videoId &&
+        (draft.sourceRef?.kind ?? null) === (cloud.sourceRef?.kind ?? null) &&
+        (draft.sourceRef?.id ?? null) === (cloud.sourceRef?.id ?? null);
     return {
         saved,
         draft: {

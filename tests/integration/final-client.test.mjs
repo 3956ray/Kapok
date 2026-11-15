@@ -626,6 +626,7 @@ test('final C1 changed role during verification conceals the former admin member
 test('V2 account hides management links when the same account loses its role', async () => {
     try {
         await mount(h(AccountScreen, { actorId: 'A' }));
+        assert.ok(document.querySelector('a[href="/admin/trainings"]'));
         assert.ok(document.querySelector('a[href="/admin/members"]'));
         assert.ok(document.querySelector('a[href="/admin/announcements"]'));
         assert.match(document.querySelector('.account-profile').textContent, /背号 07/);
@@ -633,6 +634,7 @@ test('V2 account hides management links when the same account loses its role', a
         state.bootstrap = { ...bootstrap, me: state.me };
         await lifecycle('focus');
         assert.equal(document.querySelector('a[href^="/admin/"]'), null);
+        assert.equal(document.querySelector('[aria-labelledby="account-admin"]'), null);
         assert.ok(document.querySelector('a[href="/me/data"]'));
     } finally { await unmount(); }
 });

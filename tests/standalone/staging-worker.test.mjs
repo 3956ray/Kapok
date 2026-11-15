@@ -28,6 +28,13 @@ const migrations = [
   "0008_fixed_team_onboarding.sql",
   "0009_kapok_team_name.sql",
   "0010_training_publication.sql",
+  "0011_profile_bio.sql",
+  "0012_video_platforms.sql",
+  "0013_learning_posts.sql",
+  "0014_topic_collections.sql",
+  "0015_learning_discussion.sql",
+  "0016_learning_private_sources.sql",
+  "0017_learning_activity.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
@@ -48,7 +55,7 @@ test("the default build targets only synthetic D1, with Worker-first assets and 
     migrations_dir: "../../../drizzle",
   }]);
   assert.deepEqual(config.assets, { binding: "ASSETS", run_worker_first: true, directory: "../client" });
-  assert.deepEqual(config.r2_buckets, []);
+  assert.deepEqual(config.r2_buckets, [{ binding: "BUCKET", bucket_name: "kapok-local-media" }]);
   assert.deepEqual(config.services, []);
   assert.deepEqual(externalWorkers, []);
   assert.equal(existsSync(main), true);

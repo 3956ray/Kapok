@@ -1,10 +1,12 @@
 import { resolveBilibiliShare } from './bilibili.ts';
+import { parseYouTubeSource } from '../video-source.ts';
 import type { Me, Principal } from '../contracts/index';
 import type { Training, TrainingPublication, Video, Comment, Collection, CollectionReflectionSeed } from '../contracts/training';
 import { DomainError, assertGuard } from './domain.ts';
 import type { StoredResult } from './domain';
-import type { Reflection } from '../contracts/reflections';
-import { actorKey, accessMembershipFence } from './identity.ts';
+import { isLearningSourceId, isLearningSourceKind, type Reflection } from '../contracts/reflections.ts';
+import { learningSourceGuard, parseLearningLink, privateOwnerFence, privateSourceWrite, publishedLearningLink, requirePrivateOwner } from './learning-sources.ts';
+import { actorKey } from './identity.ts';
 import { reflectionShared } from './reflections.ts';
 import { createResumableUploads } from './resumable-upload.ts';
 import type { MediaPolicy, UploadPage, UploadReservation } from '../contracts/media';
@@ -270,33 +272,43 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     async function publishTraining(p: Principal | null, input: unknown, key: string, precondition?: unknown): Promise<TrainingPublication> {
         const c = await activeMember(p, true);
         const approved = await importBinding(p, c, precondition, null);
-        const raw = object(input, ['title', 'date', 'description', 'video']);
+        const raw = object(input, ['title', 'date', 'description', 'status', 'video']);
         const fields = trainingFields(raw);
+        const status = raw.status === undefined ? 'published' : raw.status;
+        if(status !== 'draft' && status !== 'published')
+            throw new DomainError('INVALID_INPUT', '请选择草稿或发布。');
         const entry = raw.video === undefined ? null : object(raw.video, ['title', 'url']);
         const rawVideo = entry ? { title: text(entry.title, 80), url: entry.url } : null;
+        const youtube = typeof rawVideo?.url === 'string' ? parseYouTubeSource(rawVideo.url) : null;
+        if(approved && (status === 'draft' || youtube))
+            throw new DomainError('INVALID_INPUT', '历史B站导入仅支持发布状态和B站视频。');
+
+        // Keep both published receipt hashes identical to the parent service.
+        const requestFields = status === 'draft' ? { ...fields, status } : fields;
         const normalize = async () => ({
-            ...fields,
-            video: rawVideo ? { title: rawVideo.title, url: await resolveBilibiliShare(rawVideo.url) } : null,
+            ...requestFields,
+            video: rawVideo ? { title: rawVideo.title, url: youtube?.url ?? await resolveBilibiliShare(rawVideo.url) } : null,
         });
         let normalized: ReturnType<typeof normalize> | undefined;
         const prepare = () => normalized ??= normalize();
-        const op = await operation(c.user.id, 'training-publish', c.membership.teamId, key, { ...fields, video: rawVideo }, prepare);
+        const op = await operation(c.user.id, 'training-publish', c.membership.teamId, key, { ...requestFields, video: rawVideo }, prepare);
         let receipt = op.replay?.result;
         if(!receipt) {
             const id = crypto.randomUUID();
             const { video } = await prepare();
-            const statements = [...importMappingGuard(op, c, approved, fields.date, video?.url ?? null), insertTraining(c, id, fields, 'published')];
+            const importUrl = youtube ? null : video?.url ?? null;
+            const statements = [...importMappingGuard(op, c, approved, fields.date, importUrl), insertTraining(c, id, fields, status)];
             const videoId = video ? crypto.randomUUID() : undefined;
             if(video && videoId) {
                 statements.push(
-                    insertVideo(c, videoId, id, { ...video, source: 'bilibili', position: 0 }, null),
+                    insertVideo(c, videoId, id, { ...video, source: youtube ? 'youtube' : 'bilibili', position: 0 }, null),
                     assertGuard(db, op.opId, 'video-event',
-                        `EXISTS(SELECT 1 FROM videos v JOIN video_events e ON e.video_id=v.id
-                                WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.publisher_id=?)`,
-                        [videoId, id, c.membership.teamId, c.user.id])
+                        `EXISTS(SELECT 1 FROM videos v WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.publisher_id=?)
+                         AND ${status === 'draft' ? 'NOT ' : ''}EXISTS(SELECT 1 FROM video_events WHERE video_id=?)`,
+                        [videoId, id, c.membership.teamId, c.user.id, videoId])
                 );
             }
-            receipt = (await commitImport(op, c, approved, statements, { id, videoId }, video?.url ?? null)).result;
+            receipt = (await commitImport(op, c, approved, statements, { id, videoId }, importUrl)).result;
         }
         const current = await activeMember(p, true);
         if(current.user.id !== c.user.id || current.membership.teamId !== c.membership.teamId)
@@ -326,11 +338,16 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             throw new DomainError('READ_ONLY', '归档训练只可回看，请先重新开放。', 409);
         const title = text(r.title, 80);
         const source = r.source;
-        if(source !== 'bilibili' && source !== 'upload')
+        if(source !== 'bilibili' && source !== 'youtube' && source !== 'upload')
             throw new DomainError('INVALID_INPUT', '请选择视频来源。');
         if(!Number.isSafeInteger(r.position) || Number(r.position) < 0 || Number(r.position) > 10000)
             throw new DomainError('INVALID_INPUT', '请检查视频顺序。');
-        const url = source === 'bilibili' ? await resolveBilibiliShare(r.url) : null;
+        if(approved && source === 'youtube')
+            throw new DomainError('INVALID_INPUT', '历史B站导入仅支持B站视频。');
+        const youtube = source === 'youtube' && typeof r.url === 'string' ? parseYouTubeSource(r.url) : null;
+        if(source === 'youtube' && !youtube)
+            throw new DomainError('INVALID_INPUT', '请填写有效的 YouTube HTTPS 视频链接。');
+        const url = source === 'bilibili' ? await resolveBilibiliShare(r.url) : youtube?.url ?? null;
         const uploadId = source === 'upload' ? text(r.uploadId, 80) : null;
         const op = await operation(c.user.id, 'video-add', trainingId, key, { title, source, url, uploadId, position: r.position });
         let id = op.replay?.result.id ?? crypto.randomUUID();
@@ -610,23 +627,54 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     async function listCollections(p: Principal | null) {
         const c = await personal(p);
         const owner = c.user.id;
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         const rows = (await q(
             `SELECT id,source_kind AS sourceKind,source_id AS sourceId,timestamp_sec AS timestampSec,private_note AS privateNote,version,created_at AS createdAt
                 FROM collections WHERE owner_id=? AND ${access.predicate} ORDER BY created_at DESC,id DESC`,
             owner, ...access.values
         ).all<Omit<Collection, 'source'>>()).results;
-        return Promise.all(rows.map(async (r) => ({ ...r, source: await resolveSource(p, r.sourceKind, r.sourceId, r.timestampSec) })));
+        const items = await Promise.all(rows.map(async r => ({
+            ...r, source: isLearningSourceKind(r.sourceKind) ? null : await resolveSource(p, r.sourceKind, r.sourceId, r.timestampSec),
+        })));
+        const links = await q(`WITH viewer(id) AS (SELECT ? WHERE ${access.predicate})
+            SELECT c.id,c.version,${publishedLearningLink('c.source_kind', 'c.source_id', 'viewer.id')} AS link
+            FROM viewer LEFT JOIN collections c ON c.owner_id=viewer.id`,
+            owner, ...access.values).all<{ id: string | null; version: number; link: string | null }>();
+        if (!links.results.length) throw missing();
+        const byId = new Map(links.results.map(row => [row.id, row]));
+        return items.flatMap(item => {
+            const row = byId.get(item.id);
+            if (!row || row.version !== item.version) return [];
+            return [isLearningSourceKind(item.sourceKind) ? { ...item, source: parseLearningLink(row.link) } : item];
+        });
+    }
+    async function getLearningReflectionSeed(p: Principal | null, kind: unknown, id: unknown): Promise<CollectionReflectionSeed> {
+        if (!isLearningSourceKind(kind) || !isLearningSourceId(id))
+            throw new DomainError('INVALID_INPUT', '请选择有效的学习来源。');
+        const c = await personal(p);
+        const access = privateOwnerFence(p, c);
+        const row = await q(`WITH source(kind,id,reader) AS (VALUES (?,?,?))
+            SELECT ${publishedLearningLink('source.kind', 'source.id', 'source.reader')} AS link
+            FROM source WHERE ${access.predicate}`, kind, id, c.user.id, ...access.values).first<{ link: string | null }>();
+        if (!row?.link) throw missing();
+        await requirePrivateOwner(db, access);
+        return { text: '', trainingId: null, videoId: null, sourceRef: { kind, id } };
     }
     async function getCollectionReflectionSeed(p: Principal | null, id: string): Promise<CollectionReflectionSeed> {
         const c = await personal(p);
         const owner = c.user.id;
-        const access = accessMembershipFence(p, c);
-        const row = await q(`SELECT source_kind,source_id,private_note FROM collections WHERE id=? AND owner_id=? AND ${access.predicate}`,
+        const access = privateOwnerFence(p, c);
+        const row = await q(`SELECT source_kind,source_id,private_note,${publishedLearningLink('c.source_kind', 'c.source_id', 'c.owner_id')} AS link
+            FROM collections c WHERE id=? AND owner_id=? AND ${access.predicate}`,
             id, owner, ...access.values).first<{
-            source_kind: string; source_id: string; private_note: string;
+            source_kind: string; source_id: string; private_note: string; link: string | null;
         }>();
         if (!row) throw missing();
+        if (isLearningSourceKind(row.source_kind)) {
+            await requirePrivateOwner(db, access);
+            return { text: row.private_note, trainingId: null, videoId: null,
+                sourceRef: row.link ? { kind: row.source_kind, id: row.source_id } : null };
+        }
         let trainingId: string | null = null;
         let videoId: string | null = null;
         try {
@@ -655,13 +703,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             if (!(e instanceof DomainError && [403, 404].includes(e.status))) throw e;
         }
         // Source access may disappear independently; the owner's saved note remains theirs.
-        if ((await personal(p)).user.id !== owner) throw missing();
+        await requirePrivateOwner(db, access);
         return { text: row.private_note, trainingId, videoId };
     }
     async function saveCollection(p: Principal | null, id: string | null, input: unknown, key: string) {
         const c = await personal(p);
         const owner = c.user.id;
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         const r = object(input, ['sourceKind', 'sourceId', 'timestampSec', 'privateNote', 'expectedVersion', 'action']);
         const action = r.action === 'delete' ? 'delete' : 'save';
         const note = action === 'delete' ? '' : text(r.privateNote ?? '', 2000, true);
@@ -702,12 +750,14 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             }
         }
         else {
-            await activeMember(p);
-            if(!['video', 'comment', 'reflection'].includes(String(r.sourceKind)))
+            if (!isLearningSourceKind(r.sourceKind)) await activeMember(p);
+            if (isLearningSourceKind(r.sourceKind) && (!isLearningSourceId(r.sourceId) || r.timestampSec != null || r.action !== undefined))
+                throw new DomainError('INVALID_INPUT', '请选择有效的学习来源。');
+            if(!isLearningSourceKind(r.sourceKind) && !['video', 'comment', 'reflection'].includes(String(r.sourceKind)))
                 throw new DomainError('INVALID_INPUT', '请选择收藏来源。');
             if (r.sourceKind === 'reflection' && (await getReflection(p, String(r.sourceId))).isAuthor)
                 throw new DomainError('INVALID_INPUT', '本人复盘已自动加入成长，无需再次收藏。');
-            if(!await resolveSource(p, String(r.sourceKind), String(r.sourceId)))
+            if(!isLearningSourceKind(r.sourceKind) && !await resolveSource(p, String(r.sourceKind), String(r.sourceId)))
                 throw missing();
             old = await q(
                 'SELECT id,source_kind,source_id,timestamp_sec FROM collections WHERE owner_id=? AND source_kind=? AND source_id=?',
@@ -731,13 +781,18 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             timestamp = c?.timestamp_sec ?? null;
         }
         const normalized = { kind, source, timestamp, note, expected, action };
-        const op = await operation(owner, 'collection', id ?? kind + ':' + source, key, normalized);
+        const lookup = () => operation(owner, 'collection', id ?? kind + ':' + source, key, normalized);
+        const op = await privateSourceWrite(lookup);
         let target = op.replay?.result.id ?? old?.id ?? crypto.randomUUID();
         if(!op.replay) {
             const guards = [
                 assertGuard(db, op.opId, 'owner', `EXISTS(SELECT 1 FROM users WHERE id=? AND status='active') AND ${access.predicate}`,
                     [owner, ...access.values])
             ];
+            if (!id && isLearningSourceKind(kind)) {
+                await getLearningReflectionSeed(p, kind, source);
+                guards.push(learningSourceGuard(db, op.opId, kind, source, owner));
+            }
             if(id) {
                 guards.push(
                     assertGuard(
@@ -758,25 +813,28 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                 );
             }
             else if(!old) {
-                const c = await activeMember(p);
-                guards.push(memberGuard(op, c));
+                if (!isLearningSourceKind(kind)) {
+                    const member = await activeMember(p);
+                    if (member.user.id !== owner) throw missing();
+                    guards.push(memberGuard(op, member));
+                }
                 if(kind === 'video')
                     guards.push(assertGuard(
                         db,
                         op.opId,
                         'source',
                         "EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id WHERE v.id=? AND v.team_id=? AND v.status='active' AND t.status IN ('published','archived'))",
-                        [source, c.membership.teamId]
+                        [source, c.membership?.teamId ?? null]
                     ));
                 else if (kind === 'reflection')
                     guards.push(assertGuard(db, op.opId, 'source', `EXISTS(SELECT 1 FROM reflections r WHERE r.id=? AND r.owner_id!=? AND (${reflectionShared}))`, [source, owner, owner]));
-                else
+                else if (kind === 'comment')
                     guards.push(assertGuard(
                         db,
                         op.opId,
                         'source',
                         "EXISTS(SELECT 1 FROM video_comments c JOIN videos v ON v.id=c.video_id JOIN trainings t ON t.id=v.training_id WHERE c.id=? AND c.team_id=? AND c.status='active' AND v.status='active' AND t.status IN ('published','archived'))",
-                        [source, c.membership.teamId]
+                        [source, c.membership?.teamId ?? null]
                     ));
                 guards.push(q(
                     'INSERT INTO collections(id,owner_id,source_kind,source_id,timestamp_sec,private_note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
@@ -806,18 +864,16 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     'EXISTS(SELECT 1 FROM collections WHERE id=? AND owner_id=? AND version=1)',
                     [target, owner]
                 ));
-            try {
-                target = (await op.commit(guards, { id: target, sourceKind: kind, sourceId: source, timestampSec: timestamp })).result.id!;
-            }
-            catch(e) {
-                if(e instanceof DomainError)
-                    throw e;
-                throw new DomainError('VERSION_CONFLICT', '收藏已经变化，请刷新后重试。', 409);
-            }
+            target = (await privateSourceWrite(() => op.commit(guards, {
+                id: target, sourceKind: kind, sourceId: source, timestampSec: timestamp,
+            }))).result.id!;
         }
-        await personal(p);
         // A replay resolves the current owned collection; deleted receipts never recreate it.
-        if (action !== 'delete' && !await q('SELECT id FROM collections WHERE id=? AND owner_id=?', target, owner).first()) throw missing();
+        await privateSourceWrite(async () => {
+            if (action === 'delete') return requirePrivateOwner(db, access);
+            if (!await q(`SELECT id FROM collections WHERE id=? AND owner_id=? AND ${access.predicate}`,
+                target, owner, ...access.values).first()) throw missing();
+        });
         return { id: target };
     }
     async function createUpload(p: Principal | null, input: unknown, key: string) {
@@ -1421,6 +1477,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         moderateComment,
         listCollections,
         getCollectionReflectionSeed,
+        getLearningReflectionSeed,
         saveCollection,
         createUpload,
         getUpload: resumable.get,

@@ -10,7 +10,7 @@ import { CollectionCard } from './collections';
 import { DateGroup, RecordRow } from './presentation';
 
 type GrowthRows = { reflections: ReflectionAuthor[]; collections: Collection[] };
-export function GrowthContent({ actorId }: { actorId: string }) {
+export function GrowthContent({ actorId, initialFilter = 'all' }: { actorId: string; initialFilter?: 'all' | 'reflections' | 'collections' }) {
     const load = useCallback(async (_account: unknown, signal: AbortSignal) => {
         const [reflections, collections] = await Promise.all([
             api<ReflectionAuthor[]>('reflections', undefined, actorId, signal),
@@ -18,10 +18,10 @@ export function GrowthContent({ actorId }: { actorId: string }) {
         ]);
         return { reflections, collections };
     }, [actorId]);
-    return <AccountBoundary<GrowthRows> actorId={actorId} load={load}>{data => <Tabs actorId={actorId} data={data} />}</AccountBoundary>;
+    return <AccountBoundary<GrowthRows> actorId={actorId} load={load}>{data => <Tabs key={initialFilter} actorId={actorId} data={data} initialFilter={initialFilter} />}</AccountBoundary>;
 }
-function Tabs({ actorId, data }: { actorId: string; data: GrowthRows }) {
-    const [tab, setTab] = useNavigationField<'all' | 'reflections' | 'collections'>(actorId, 'growth-tab', 'all');
+function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthRows; initialFilter: 'all' | 'reflections' | 'collections' }) {
+    const [tab, setTab] = useNavigationField<'all' | 'reflections' | 'collections'>(actorId, 'growth-tab:' + initialFilter, initialFilter);
     const rows = [
         ...data.reflections.map(item => ({ kind: 'reflection' as const, date: item.date, item })),
         ...data.collections.map(item => ({ kind: 'collection' as const, date: item.createdAt, item })),
@@ -42,7 +42,7 @@ function Tabs({ actorId, data }: { actorId: string; data: GrowthRows }) {
         })}
         {!visible.length && <section className="panel">
             <h2>{tab === 'collections' ? '还没有收藏' : tab === 'reflections' ? '还没有复盘' : '还没有成长记录'}</h2>
-            <p>{tab === 'collections' ? '回看训练时，收藏视频或讨论，留下自己的备注。' : '从一段想法开始，保存后再决定是否分享。'}</p>
+            <p>{tab === 'collections' ? '收藏学习资料、专题合集或训练视频，留下自己的备注。' : '从一段想法开始，保存后再决定是否分享。'}</p>
             <Link className="button secondary" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab === 'collections' ? '去看训练' : '写复盘'}</Link>
         </section>}
     </>;

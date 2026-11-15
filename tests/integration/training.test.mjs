@@ -20,7 +20,7 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for(const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
+    for(const file of ['0000_identity.sql', '0011_profile_bio.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
         const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
         for(const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean))
             await db.prepare(sql).run();
@@ -877,7 +877,7 @@ test(
 test('mobile Bilibili share creates canonical persisted video with guarded replay',async t=>{
  const {s,db}=await fixture(t);const tr=await published(s);let calls=0;let challenged=false;
  t.mock.method(globalThis,'fetch',async()=>{calls++;return challenged?new Response(null,{status:200}):new Response(null,{status:302,headers:{location:'https://www.bilibili.com/video/BV1KapokTest?spm_id_from=tracking'}});});
- const input={title:'分享验证',source:'bilibili',url:'【【合成比赛】回看-哔哩哔哩】 https://b23.tv/Example01',position:0};
+ const input={title:'分享验证',source:'bilibili',url:'【【华工飞盘】比赛-哔哩哔哩】 https://b23.tv/Example01',position:0};
  await reject(s.addVideo(alice,tr.id,input,'denied'),'FORBIDDEN');assert.equal(calls,0);
  const result=await s.addVideo(owner,tr.id,input,'share');assert.equal(result.url,'https://www.bilibili.com/video/BV1KapokTest/');
  challenged=true;await assert.rejects(s.addVideo(owner,tr.id,input,'share'),e=>e.status===503&&e.retryable);challenged=false;

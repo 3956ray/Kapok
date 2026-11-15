@@ -3,7 +3,11 @@ import type { Me, Principal } from '../contracts/index';
 import type { Announcement, ActivityItem, ActivityPage, PublicMember, PublicProfile, Reflection, ReflectionAuthor, ReflectionReader } from '../contracts/reflections';
 import { assertGuard, DomainError } from './domain.ts';
 import type { StoredResult } from './domain';
+import { learningActivitySelect } from './learning-activity.ts';
+import { bindLearningMember, learningMemberFence } from './learning.ts';
 import { accessMembershipFence } from './identity.ts';
+import { isLearningSourceRef, type LearningSourceKind } from '../contracts/reflections.ts';
+import { learningSourceGuard, parseLearningLink, privateOwnerFence, privateSourceWrite, publishedLearningLink } from './learning-sources.ts';
 type Context = Me & {
     user: NonNullable<Me['user']>;
     membership: NonNullable<Me['membership']>;
@@ -42,6 +46,8 @@ type Row = {
     deleted_at: string | null;
     training_id: string | null;
     video_id: string | null;
+    source_kind: LearningSourceKind | null;
+    source_id: string | null;
     updated_at: string;
     disc_name: string;
     jersey_number: string;
@@ -92,7 +98,7 @@ export function createReflectionService({
         };
     }
     function ownerGuard(op: Op, p: Principal | null, c: Awaited<ReturnType<typeof personal>>) {
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         return assertGuard(db, op.opId, 'owner', `EXISTS(SELECT 1 FROM users WHERE id=? AND status='active') AND ${access.predicate}`,
             [c.user.id, ...access.values]);
     }
@@ -117,9 +123,8 @@ export function createReflectionService({
             throw conflict();
         }
     }
-    async function link(p: Principal | null, r: Row) {
+    async function link(r: Row, c: Awaited<ReturnType<typeof personal>>) {
         if (!r.training_id) return null;
-        const c = await me(p);
         if (c.user?.status !== 'active' || c.membership?.status !== 'active' || c.membership.teamId !== r.team_id) return null;
         const source = r.video_id ? await q(
             `SELECT v.title,v.id FROM videos v JOIN trainings t ON t.id=v.training_id
@@ -139,7 +144,8 @@ export function createReflectionService({
             href: (r.video_id ? '/videos/' : '/trainings/') + source.id
         } : null;
     }
-    async function present(p: Principal | null, r: Row, actor: string): Promise<Reflection> {
+    async function present(r: Row, c: Awaited<ReturnType<typeof personal>>): Promise<Reflection> {
+        const actor = c.user.id;
         const base: ReflectionReader = {
             id: r.id,
             title: r.title,
@@ -152,7 +158,7 @@ export function createReflectionService({
                 jerseyNumber: r.jersey_number
             },
             isAuthor: actor === r.owner_id,
-            link: await link(p, r)
+            link: await link(r, c)
         };
         if (actor !== r.owner_id) return base;
         return {
@@ -164,7 +170,8 @@ export function createReflectionService({
             scope: r.scope === 'team' ? 'team' : 'private',
             published: r.scope === 'team' && r.published_at !== null,
             trainingId: r.training_id,
-            videoId: r.video_id
+            videoId: r.video_id,
+            ...(r.source_kind && r.source_id ? { sourceRef: { kind: r.source_kind, id: r.source_id } } : {})
         };
     }
     async function getReflection(p: Principal | null, id: string): Promise<Reflection> {
@@ -175,7 +182,7 @@ export function createReflectionService({
         } catch {
             throw missing();
         }
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         const r = await q(
             `${select} WHERE r.id=? AND r.deleted_at IS NULL AND
                         (r.owner_id=? OR (${reflectionShared})) AND ${access.predicate}`,
@@ -185,20 +192,49 @@ export function createReflectionService({
             ...access.values
         ).first<Row>();
         if (!r) throw missing();
-        return present(p, r, c.user.id);
+        const dto = await present(r, c);
+        const current = await q(`SELECT ${publishedLearningLink('r.source_kind', 'r.source_id', 'viewer.id')} AS link
+            FROM reflections r CROSS JOIN (SELECT ? AS id) viewer WHERE r.id=? AND r.version=? AND r.sharing_version=? AND r.deleted_at IS NULL
+            AND (r.owner_id=? OR (${reflectionShared})) AND ${access.predicate}`,
+            c.user.id, id, r.version, r.sharing_version, c.user.id, c.user.id, ...access.values).first<{ link: string | null }>();
+        if (!current) throw missing();
+        return { ...dto, link: r.source_kind ? parseLearningLink(current.link) : dto.link };
     }
-    async function getOwnReflection(p: Principal | null, id: string): Promise<ReflectionAuthor> {
-        const c = await personal(p);
-        const access = accessMembershipFence(p, c);
+    async function withCurrentOwnLinks<T extends ReflectionAuthor>(p: Principal | null, c: Awaited<ReturnType<typeof personal>>, items: T[]) {
+        const access = privateOwnerFence(p, c);
+        const rows = await q(`WITH viewer(id) AS (SELECT ? WHERE ${access.predicate})
+            SELECT r.id,r.version,r.sharing_version,${publishedLearningLink('r.source_kind', 'r.source_id', 'viewer.id')} AS link
+            FROM viewer LEFT JOIN reflections r ON r.owner_id=viewer.id`, c.user.id, ...access.values)
+            .all<{ id: string | null; version: number; sharing_version: number; link: string | null }>();
+        if (!rows.results.length) throw missing();
+        const links = new Map(rows.results.map(row => [row.id, row]));
+        return items.flatMap(item => {
+            const row = links.get(item.id);
+            if (!row || row.version !== item.version || row.sharing_version !== item.sharingVersion) return [];
+            return [item.sourceRef ? { ...item, link: parseLearningLink(row.link) } : item];
+        });
+    }
+    async function getOwnReflection(p: Principal | null, id: string, captured?: Awaited<ReturnType<typeof personal>>): Promise<ReflectionAuthor> {
+        const c = captured ?? await personal(p);
+        const access = privateOwnerFence(p, c);
         const r = await q(`${select} WHERE r.id=? AND r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate}`, id, c.user.id, ...access.values).first<Row>();
         if (!r) throw missing();
-        return (await present(p, r, c.user.id)) as ReflectionAuthor;
+        const dto = await present(r, c) as ReflectionAuthor;
+        const current = await q(`SELECT r.version,r.sharing_version,${publishedLearningLink('r.source_kind', 'r.source_id', 'r.owner_id')} AS link
+            FROM reflections r WHERE r.id=? AND r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate}`,
+            id, c.user.id, ...access.values).first<{ version: number; sharing_version: number; link: string | null }>();
+        if (!current) throw missing();
+        if (current.version !== dto.version || current.sharing_version !== dto.sharingVersion) {
+            throw new DomainError('RESULT_UNKNOWN', '记录刚发生变化，请使用原操作重新读取结果。', 503, true);
+        }
+        return { ...dto, link: r.source_kind ? parseLearningLink(current.link) : dto.link };
     }
     async function listMyReflections(p: Principal | null) {
         const c = await personal(p);
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate} ORDER BY r.date DESC,r.id DESC`, c.user.id, ...access.values).all<Row>()).results;
-        return Promise.all(rows.map(r => present(p, r, c.user.id) as Promise<ReflectionAuthor>));
+        const items = await Promise.all(rows.map(r => present(r, c) as Promise<ReflectionAuthor>));
+        return withCurrentOwnLinks(p, c, items);
     }
     async function association(p: Principal | null, trainingId: unknown, videoId: unknown) {
         const training = trainingId == null || trainingId === '' ? null : text(trainingId, 80);
@@ -295,6 +331,7 @@ export function createReflectionService({
                 'date',
                 'trainingId',
                 'videoId',
+                'sourceRef',
                 'expectedVersion',
                 'expectedSharingVersion',
                 'expectedGeneration'
@@ -306,6 +343,11 @@ export function createReflectionService({
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) {
             throw new DomainError('INVALID_INPUT', '请填写有效日期。');
         }
+        if (raw.sourceRef !== undefined && raw.sourceRef !== null && !isLearningSourceRef(raw.sourceRef))
+            throw new DomainError('INVALID_INPUT', '请选择有效的学习来源。');
+        const explicitRef = isLearningSourceRef(raw.sourceRef) ? { kind: raw.sourceRef.kind, id: raw.sourceRef.id } : null;
+        if (explicitRef && ((raw.trainingId != null && raw.trainingId !== '') || (raw.videoId != null && raw.videoId !== '')))
+            throw new DomainError('INVALID_INPUT', '学习来源和训练请选择其一。');
         const e = id ? expected(raw) : null;
         const normalized = {
             title,
@@ -313,23 +355,28 @@ export function createReflectionService({
             date,
             trainingId: raw.trainingId ?? null,
             videoId: raw.videoId ?? null,
-            expected: e
+            expected: e,
+            ...(raw.sourceRef !== undefined ? { sourceRef: explicitRef } : {})
         };
-        const op = await operation(c.user.id, 'reflection-save', id ?? c.user.id, key, normalized);
+        const op = await privateSourceWrite(() => operation(c.user.id, 'reflection-save', id ?? c.user.id, key, normalized));
         const target = op.replay?.result.id ?? id ?? crypto.randomUUID();
-        if (op.replay) return getOwnReflection(p, target);
-        if (id) await getOwnReflection(p, id);
+        if (op.replay) return privateSourceWrite(() => getOwnReflection(p, target, c));
+        const old = id ? await getOwnReflection(p, id, c) : null;
         const a = await association(p, raw.trainingId, raw.videoId);
+        const ref = raw.sourceRef === undefined && !a.training ? old?.sourceRef ?? null : explicitRef;
+        const sourceGuards = ref && (ref.kind !== old?.sourceRef?.kind || ref.id !== old.sourceRef.id)
+            ? [learningSourceGuard(db, op.opId, ref.kind, ref.id, c.user.id)] : [];
+        const commitSave = (statements: D1PreparedStatement[], id: string) => privateSourceWrite(() => op.commit(statements, { id }));
         if (!id) {
             if (!c.membership) throw new DomainError('FORBIDDEN', '请先完成队伍建档。', 403);
-            const committed = await commit(
-                op,
+            const committed = await commitSave(
                 [
                     ownerGuard(op, p, c),
                     ...associationGuard(op, a),
+                    ...sourceGuards,
                     q(
-                        `INSERT INTO reflections(id,owner_id,team_id,title,text,date,training_id,video_id,last_committed_op_id,created_at,updated_at)
-                                        VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+                        `INSERT INTO reflections(id,owner_id,team_id,title,text,date,training_id,video_id,source_kind,source_id,last_committed_op_id,created_at,updated_at)
+                                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
                         target,
                         c.user.id,
                         c.membership.teamId,
@@ -338,6 +385,8 @@ export function createReflectionService({
                         date,
                         a.training,
                         a.video,
+                        ref?.kind ?? null,
+                        ref?.id ?? null,
                         op.opId,
                         now(),
                         now()
@@ -352,15 +401,15 @@ export function createReflectionService({
                 ],
                 target
             );
-            return getOwnReflection(p, committed.id!);
+            return privateSourceWrite(() => getOwnReflection(p, committed.result.id!, c));
         } else {
-            await commit(
-                op,
+            await commitSave(
                 [
                     ...begin(op, p, c, id, e!),
                     ...associationGuard(op, a),
+                    ...sourceGuards,
                     q(
-                        `UPDATE reflections SET title=?,text=?,date=?,training_id=?,video_id=?,version=version+1,
+                        `UPDATE reflections SET title=?,text=?,date=?,training_id=?,video_id=?,source_kind=?,source_id=?,version=version+1,
                                         scope='private',coach_id=NULL,coach_epoch=NULL,author_epoch=NULL,published_at=NULL,
                                         active_op_id=NULL,last_committed_op_id=?,updated_at=? WHERE ${finalWhere}`,
                         title,
@@ -368,6 +417,8 @@ export function createReflectionService({
                         date,
                         a.training,
                         a.video,
+                        ref?.kind ?? null,
+                        ref?.id ?? null,
                         op.opId,
                         now(),
                         id,
@@ -380,14 +431,14 @@ export function createReflectionService({
                         id,
                         e!,
                         e!.version + 1,
-                        "scope='private' AND gate='closed' AND published_at IS NULL AND title=? AND text=? AND date=? AND training_id IS ? AND video_id IS ?",
-                        [title, body, date, a.training, a.video]
+                        "scope='private' AND gate='closed' AND published_at IS NULL AND title=? AND text=? AND date=? AND training_id IS ? AND video_id IS ? AND source_kind IS ? AND source_id IS ?",
+                        [title, body, date, a.training, a.video, ref?.kind ?? null, ref?.id ?? null]
                     )
                 ],
                 id
             );
         }
-        return getOwnReflection(p, target);
+        return privateSourceWrite(() => getOwnReflection(p, target, c));
     }
     async function shareReflection(p: Principal | null, id: string, input: unknown, key: string) {
         const c = await personal(p);
@@ -535,14 +586,15 @@ export function createReflectionService({
     async function listDeletedReflections(p: Principal | null): Promise<DeletedReflection[]> {
         const c = await personal(p);
         const cutoff = new Date(clock().getTime() - 7 * 86400000).toISOString();
-        const access = accessMembershipFence(p, c);
+        const access = privateOwnerFence(p, c);
         const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at>? AND EXISTS(SELECT 1 FROM users u WHERE u.id=r.owner_id AND u.status='active')
             AND ${access.predicate} ORDER BY r.deleted_at DESC,r.id DESC`, c.user.id, cutoff, ...access.values).all<Row>()).results;
-        return Promise.all(rows.map(async r => ({
-            ...await present(p, r, c.user.id) as ReflectionAuthor,
+        const items = await Promise.all(rows.map(async r => ({
+            ...await present(r, c) as ReflectionAuthor,
             deletedAt: r.deleted_at!,
             recoverUntil: new Date(Date.parse(r.deleted_at!) + 7 * 86400000).toISOString()
         })));
+        return withCurrentOwnLinks(p, c, items);
     }
     async function restoreReflection(p: Principal | null, id: string, input: unknown, key: string) {
         const c = await personal(p);
@@ -571,7 +623,7 @@ export function createReflectionService({
     async function listMembers(p: Principal | null): Promise<PublicMember[]> {
         const c = await activeMember(p);
         return (await q(
-            `SELECT u.id,p.disc_name AS discName,p.jersey_number AS jerseyNumber,m.role FROM memberships m
+            `SELECT u.id,p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio,m.role FROM memberships m
                         JOIN users u ON u.id=m.user_id JOIN profiles p ON p.user_id=u.id
                         WHERE m.team_id=? AND m.status='active' AND u.status='active' ORDER BY p.disc_name,u.id`,
             c.membership.teamId
@@ -684,7 +736,8 @@ export function createReflectionService({
         } : getAnnouncement(p, committed.id!);
     }
     async function listActivity(p: Principal | null, cursor: string | null = null, limit = 20): Promise<ActivityPage> {
-        const c = await activeMember(p);
+        const c = await bindLearningMember(activeMember, p);
+        const member = learningMemberFence(c);
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 30) throw new DomainError('INVALID_INPUT', '分页大小不可用。');
         let after: {
             time: string;
@@ -710,11 +763,15 @@ export function createReflectionService({
                         WHERE v.team_id=? AND v.status='active' AND t.status='published'
                         UNION ALL SELECT 'announcement:'||a.id,'announcement',a.title,'/announcements/'||a.id,a.published_at,a.updated_at,NULL,NULL
                         FROM announcements a WHERE a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
-                        ) WHERE (? IS NULL OR publishedAt<? OR (publishedAt=? AND id<?)) ORDER BY publishedAt DESC,id DESC LIMIT ?`,
+                        UNION ALL ${learningActivitySelect}
+                        ) WHERE ${member.sql} AND (? IS NULL OR publishedAt<? OR (publishedAt=? AND id<?))
+                        ORDER BY publishedAt DESC,id DESC LIMIT ?`,
             c.membership.teamId,
             c.user.id,
             c.membership.teamId,
             c.membership.teamId,
+            c.membership.teamId,
+            ...member.values,
             after?.time ?? null,
             after?.time ?? null,
             after?.time ?? null,

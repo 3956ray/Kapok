@@ -30,6 +30,9 @@ try {
   if (!(await db.prepare("PRAGMA table_info(invites)").all()).results.some(column => column.name === 'recipient_email')) {
     await migrate('0007_email_bound_invites.sql');
   }
+  if (!(await db.prepare("PRAGMA table_info(profiles)").all()).results.some(column => column.name === 'bio')) {
+    await migrate('0011_profile_bio.sql');
+  }
   const principal = { provider: 'site', issuer: LEGACY_SITES_ISSUER, subject: 'local_seedy' };
   const service = createService({ db, bootstrapSiteUserId: principal.subject });
   const status = await service.getBootstrap(principal);

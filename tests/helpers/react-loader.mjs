@@ -18,6 +18,7 @@ registerHooks({
     load(url, context, next) {
         if (/\.(?:tsx|ts)$/.test(new URL(url).pathname)) {
             return { format: 'module', source: ts.transpileModule(readFileSync(new URL(url), 'utf8'), {
+                fileName: fileURLToPath(url),
                 compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 }
             }).outputText, shortCircuit: true };
         }

@@ -16,7 +16,7 @@ async function fixture(t) {
     const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("test")}}', compatibilityDate: '2026-05-22', d1Databases: ['DB'] });
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
-    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql') && (x < '0005' || ['0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql'].includes(x))).sort()) {
+    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql') && (x < '0005' || ['0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql', '0011_profile_bio.sql'].includes(x))).sort()) {
         for (const statement of split(await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8'))) await db.prepare(statement).run();
     }
     const options = { db, bootstrapSiteUserId: admin.subject, clock: () => new Date('2026-10-18T01:00:00.000Z') };

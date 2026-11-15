@@ -16,7 +16,7 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for (const file of ['0000_identity.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
+    for (const file of ['0000_identity.sql', '0011_profile_bio.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
         const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
         for (const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean)) await db.prepare(sql).run();
     }

@@ -78,6 +78,41 @@
       "when": 1794113775085,
       "tag": "0010_training_publication",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794700000000,
+      "tag": "0013_learning_posts",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794701000000,
+      "tag": "0014_topic_collections",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794702000000,
+      "tag": "0015_learning_discussion",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1794703000000,
+      "tag": "0016_learning_private_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1794704000000,
+      "tag": "0017_learning_activity",
+      "breakpoints": true
     }
   ]
 }

@@ -2,8 +2,12 @@ import type { Me, Principal } from '../contracts/index';
 import type { ManagedMember, PersonalExport } from '../contracts/data-rights';
 import { assertGuard, DomainError } from './domain.ts';
 import type { StoredResult } from './domain';
-import { accessMembershipFence, identityTuple } from './identity.ts';
+import { identityTuple } from './identity.ts';
 import { reflectionShared } from './reflections.ts';
+import { privateOwnerFence, publishedLearningLink, requirePrivateOwner } from './learning-sources.ts';
+import { learningActivityVisible } from './learning-activity.ts';
+import { learningPostVisible } from './learning.ts';
+import { topicVideoVisible, topicVisible } from './topic-collections.ts';
 
 type Context = Me & {
     user: NonNullable<Me['user']>;
@@ -46,24 +50,39 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
     async function exportOwnData(p: Principal | null): Promise<PersonalExport> {
         const c = await personal(p);
         // All sections are generated in ONE current-identity D1 snapshot. No stored file or old job is reused.
-        const access = accessMembershipFence(p, c);
-        const owner = p?.provider === 'access'
-            ? `SELECT ? AS id WHERE ${access.predicate}`
-            : `SELECT u.id FROM users u JOIN auth_identities a ON a.user_id=u.id
-                WHERE u.id=? AND u.status='active' AND a.provider=? AND a.issuer=? AND a.subject=?`;
-        const owned = (sql: string) => q(`WITH owner AS (${owner}) ` + sql, c.user.id,
-            ...(p?.provider === 'access' ? access.values : identityTuple(p!)));
+        const access = privateOwnerFence(p, c);
+        const owned = (sql: string) => q(`WITH owner AS (SELECT ? AS id WHERE ${access.predicate}) ` + sql,
+            c.user.id, ...access.values);
         const teamSource = (team: string) => `EXISTS(SELECT 1 FROM memberships rm WHERE rm.user_id=o.id
             AND rm.team_id=${team} AND rm.status='active')`;
         const videoSource = (video: string) => `EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id
             WHERE v.id=${video} AND v.status='active' AND t.status IN ('published','archived') AND ${teamSource('t.team_id')})`;
+        const bool = (predicate: string) => `json(CASE WHEN ${predicate} THEN 'true' ELSE 'false' END)`;
+        const imageRefs = (table: 'learning_draft_images' | 'learning_publication_images') =>
+            `(SELECT json_group_array(json(entry)) FROM (
+                SELECT json_object('id',li.id,'position',ir.position,'alt',ir.alt,'decorative',${bool('ir.decorative=1')}) AS entry
+                FROM ${table} ir JOIN learning_images li ON li.id=ir.image_id AND li.post_id=ir.post_id
+                WHERE ir.post_id=lp.id AND li.status='ready' ORDER BY ir.position))`;
+        const learningContent = (alias: 'lp' | 'lpub', publication: boolean) =>
+            `'kind',${alias}.kind,'category',${alias}.category,'title',${alias}.title,'summary',${alias}.summary,'body',${alias}.body,
+            'version',${alias}.version,'collectionTargetId',${alias}.collection_target_id,
+            'video',CASE WHEN ${alias}.video_source IS NOT NULL THEN json_object('source',${alias}.video_source,'url',${alias}.video_url) END,
+            'images',json(${imageRefs(publication ? 'learning_publication_images' : 'learning_draft_images')})`;
+        const topicItems = (snapshot: 0 | 1) => `(SELECT json_group_array(json(entry)) FROM (
+            SELECT json_object('kind',ti.kind,'id',ti.source_id,'position',ti.position,'sourceAvailable',${bool(`${teamSource('tc.team_id')} AND (
+                (ti.kind='post' AND EXISTS(SELECT 1 FROM learning_posts lp JOIN learning_post_publications lpub ON lpub.post_id=lp.id
+                    WHERE lp.id=ti.source_id AND lp.team_id=tc.team_id AND ${learningPostVisible}))
+                OR (ti.kind='video' AND EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id
+                    WHERE v.id=ti.source_id AND v.team_id=tc.team_id AND ${topicVideoVisible})))`)}) AS entry
+            FROM topic_collection_items ti WHERE ti.collection_id=tc.id AND ti.snapshot=${snapshot} ORDER BY ti.position))`;
         const result = await db.batch([
-            owned('SELECT p.disc_name AS discName,p.jersey_number AS jerseyNumber FROM profiles p JOIN owner o ON o.id=p.user_id'),
+            owned('SELECT p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio FROM profiles p JOIN owner o ON o.id=p.user_id'),
             owned(`SELECT r.id,r.title,r.text,r.date,r.training_id AS trainingId,r.video_id AS videoId,
-                r.deleted_at AS deletedAt,r.created_at AS createdAt,r.updated_at AS updatedAt,
-                CASE WHEN r.training_id IS NOT NULL AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=r.training_id
+                r.source_kind AS sourceKind,r.source_id AS sourceId,r.deleted_at AS deletedAt,r.created_at AS createdAt,r.updated_at AS updatedAt,
+                CASE WHEN ${publishedLearningLink('r.source_kind', 'r.source_id', 'o.id')} IS NOT NULL
+                    OR (r.training_id IS NOT NULL AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=r.training_id
                     AND t.status IN ('published','archived') AND ${teamSource('t.team_id')})
-                    AND (r.video_id IS NULL OR ${videoSource('r.video_id')}) THEN 1 ELSE 0 END AS sourceAvailable
+                    AND (r.video_id IS NULL OR ${videoSource('r.video_id')})) THEN 1 ELSE 0 END AS sourceAvailable
                 FROM reflections r JOIN owner o ON o.id=r.owner_id ORDER BY r.date DESC,r.id DESC`),
             owned(`SELECT c.id,c.source_kind AS sourceKind,c.source_id AS sourceId,c.timestamp_sec AS timestampSec,
                 c.private_note AS privateNote,c.created_at AS createdAt,c.updated_at AS updatedAt,
@@ -72,12 +91,40 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                         AND vc.status='active' AND ${videoSource('vc.video_id')}))
                     OR (c.source_kind='reflection' AND EXISTS(SELECT 1 FROM reflections r WHERE r.id=c.source_id
                         AND r.deleted_at IS NULL AND (r.owner_id=o.id OR (${reflectionShared.replaceAll('?', 'o.id')}))))
+                    OR ${publishedLearningLink('c.source_kind', 'c.source_id', 'o.id')} IS NOT NULL
                     THEN 1 ELSE 0 END AS sourceAvailable
                 FROM collections c JOIN owner o ON o.id=c.owner_id ORDER BY c.created_at DESC,c.id DESC`),
             owned(`SELECT c.id,c.video_id AS videoId,c.root_id AS rootId,CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,
                 c.timestamp_sec AS timestampSec,c.status,c.created_at AS createdAt,c.updated_at AS updatedAt,
                 CASE WHEN c.status='active' AND ${videoSource('c.video_id')} THEN 1 ELSE 0 END AS sourceAvailable
                 FROM video_comments c JOIN owner o ON o.id=c.author_id ORDER BY c.created_at,c.id`),
+            owned(`SELECT lp.id,lp.status,lp.created_at AS createdAt,lp.updated_at AS updatedAt,
+                json_object(${learningContent('lp', false)}) AS draft,
+                CASE WHEN lpub.post_id IS NOT NULL THEN json_object(${learningContent('lpub', true)},
+                    'publishedAt',lpub.published_at,'available',${bool(`${teamSource('lp.team_id')} AND ${learningPostVisible}`)}) END AS publication
+                FROM learning_posts lp JOIN owner o ON o.id=lp.owner_id
+                LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY lp.created_at,lp.id`),
+            owned(`SELECT tc.id,tc.status,tc.created_at AS createdAt,tc.updated_at AS updatedAt,
+                json_object('title',tc.title,'summary',tc.summary,'version',tc.version,'items',json(${topicItems(0)})) AS draft,
+                CASE WHEN tcp.collection_id IS NOT NULL THEN json_object('title',tcp.title,'summary',tcp.summary,'version',tcp.version,
+                    'publishedAt',tcp.published_at,'available',${bool(`${teamSource('tc.team_id')} AND ${topicVisible}`)},'items',json(${topicItems(1)})) END AS publication
+                FROM topic_collections tc JOIN owner o ON o.id=tc.owner_id
+                LEFT JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id ORDER BY tc.created_at,tc.id`),
+            owned(`SELECT li.id,li.post_id AS postId,li.mime_type AS mimeType,li.bytes,li.width,li.height,li.created_at AS createdAt
+                FROM learning_images li JOIN learning_posts lp ON lp.id=li.post_id JOIN owner o ON o.id=lp.owner_id
+                WHERE li.status='ready' ORDER BY li.created_at,li.id`),
+            owned(`SELECT c.id,c.post_id AS postId,c.root_id AS rootId,c.reply_to_id AS replyToId,
+                CASE WHEN c.status='active' THEN c.text END AS text,
+                CASE WHEN c.status='active' THEN c.timestamp_sec END AS timestampSec,
+                c.status,c.created_at AS createdAt,c.updated_at AS updatedAt,
+                CASE WHEN c.status='active' AND ${teamSource('lp.team_id')} AND ${learningPostVisible} THEN 1 ELSE 0 END AS sourceAvailable
+                FROM learning_comments c JOIN owner o ON o.id=c.author_id
+                JOIN learning_posts lp ON lp.id=c.post_id AND lp.team_id=c.team_id
+                LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY c.created_at,c.id`),
+            owned(`SELECT la.id,la.post_id AS postId,la.shared_at AS sharedAt,la.revoked_at AS revokedAt,
+                CASE WHEN ${learningActivityVisible} THEN 1 ELSE 0 END AS active
+                FROM learning_activity_events la JOIN learning_posts lp ON lp.id=la.post_id JOIN owner o ON o.id=lp.owner_id
+                LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY la.shared_at,la.id`),
         ]);
         const profile = result[0].results[0] as PersonalExport['profile'] | undefined;
         if (!profile) throw new DomainError('FORBIDDEN', '账号状态已变化，请重新确认。', 403);
@@ -85,6 +132,11 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             const item = row as T & { sourceAvailable: number };
             return { ...item, sourceAvailable: !!item.sourceAvailable };
         });
+        const revisions = <T>(rows: unknown[]) => rows.map(row => {
+            const { draft, publication, ...fields } = row as { draft: string; publication: string | null };
+            return { ...fields, draft: JSON.parse(draft), publication: publication ? JSON.parse(publication) : null } as T;
+        });
+        await requirePrivateOwner(db, access);
         return {
             format: 'kapok-personal-v1',
             generatedAt: clock().toISOString(),
@@ -92,6 +144,12 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             reflections: availability<PersonalExport['reflections'][number]>(result[1].results),
             collections: availability<PersonalExport['collections'][number]>(result[2].results),
             comments: availability<PersonalExport['comments'][number]>(result[3].results),
+            learningPosts: revisions<PersonalExport['learningPosts'][number]>(result[4].results),
+            topicCollections: revisions<PersonalExport['topicCollections'][number]>(result[5].results),
+            learningImages: result[6].results as PersonalExport['learningImages'],
+            learningComments: availability<PersonalExport['learningComments'][number]>(result[7].results),
+            learningActivity: (result[8].results as (Omit<PersonalExport['learningActivity'][number], 'active'> & { active: number })[])
+                .map(event => ({ ...event, active: !!event.active })),
         };
     }
     const selectMember = `SELECT m.id,m.team_id AS teamId,m.role,m.status,m.epoch,m.version,

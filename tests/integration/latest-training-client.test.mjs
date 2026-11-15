@@ -10,7 +10,7 @@ import { navigation } from '../helpers/next-stubs.mjs';
 const h = React.createElement;
 const actorId = 'A';
 const training = { id: 't', title: '合成训练', date: '2026-11-08', description: '', status: 'published', version: 1 };
-const video = { id: 'v', title: '合成视频', position: 0, source: 'bilibili', status: 'active', version: 1 };
+const video = { id: 'v', trainingId: training.id, title: '合成视频', position: 0, source: 'bilibili', status: 'active', version: 1 };
 const admin = { user: { id: 'u', status: 'active' }, profile: { discName: '合成管理员' }, membership: { id: 'm', teamId: 't', role: 'admin', status: 'active', epoch: 1 } };
 const member = { ...admin, membership: { ...admin.membership, role: 'member' } };
 const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'https://kapok.local/admin/trainings/new', pretendToBeVisual: true });
@@ -46,6 +46,8 @@ function setup(path = '/admin/trainings/new', me = admin) {
         if (path === 'uploads') return response({ items: [], nextCursor: null });
         if (path === 'trainings/t?view=member') return response({ ...training, videos: [video] });
         if (path === 'trainings/t') return response({ ...training, videos: [video, { ...video, id: 'hidden', status: 'hidden', title: '隐藏视频' }] });
+        if (path === 'videos/v') return response({ ...video, training });
+        if (path === 'videos/v/comments' || path === 'collections') return response([]);
         throw new Error('unexpected path ' + path);
     };
 }
@@ -169,7 +171,101 @@ test('member preview requests only the filtered training and never loads uploads
         assert.match(document.body.textContent, /队员视角预览/);
         assert.match(document.body.textContent, /合成视频/);
         assert.doesNotMatch(document.body.textContent, /隐藏视频/);
-        assert.equal(document.querySelector('form'), null);
+        assert.ok(document.querySelector('form.discussion-composer:not([hidden])'));
+    } finally { await unmount(); }
+});
+
+test('training title source follows authorized YouTube, Bilibili, local and empty selections', async t => {
+    t.mock.method(window.HTMLMediaElement.prototype, 'pause', () => {});
+    t.mock.method(window.HTMLMediaElement.prototype, 'load', () => {});
+    const { TrainingWatch } = await import('../../app/components/training-watch.tsx');
+    const youtube = { ...video, id: 'yt', title: '油管片段', source: 'youtube', url: 'https://youtu.be/aaaaaaaaaaa?start=62' };
+    const bili = { ...video, id: 'bili', title: 'B 站片段', url: 'https://www.bilibili.com/video/BV1KapokTest/?p=2&t=61&spm_id_from=333.999' };
+    const anotherBili = { ...bili, id: 'bili2', title: 'B 站下集', url: 'https://www.bilibili.com/video/BV1KapokTest/?p=3' };
+    const local = { ...video, id: 'upload', title: '本地片段', source: 'upload', url: null };
+    let visible;
+    function watchFixture(path, videos) {
+        setup(path, member);
+        visible = videos;
+        override = route => {
+            if (route === 'trainings/t') return response({ ...training, videos: visible });
+            const selected = visible.find(entry => route === `videos/${entry.id}` || route === `videos/${entry.id}/comments`);
+            if (!selected) return route.startsWith('videos/') ? response({ error: { code: 'NOT_FOUND', message: '不可用', retryable: false } }, 404) : null;
+            return response(route.endsWith('/comments') ? [] : { ...selected, training });
+        };
+    }
+    const sourceLinks = () => [...document.querySelectorAll('a[target="_blank"]')];
+    function titleSource(url, label) {
+        const actions = document.querySelector('.training-title-actions');
+        const [link] = sourceLinks();
+        assert.equal(sourceLinks().length, 1);
+        assert.ok(actions.contains(link));
+        assert.equal(link.getAttribute('href'), url);
+        assert.equal(link.getAttribute('aria-label'), label);
+        assert.equal(link.title, label);
+        assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
+        assert.deepEqual([...actions.querySelectorAll('a, button')].map(control => control.getAttribute('aria-label')),
+            [label, '收藏与备注', '写复盘']);
+        return link;
+    }
+    const stage = () => document.querySelector('.video-stage');
+    const biliLoad = () => stage().querySelector('button[aria-label^="载入 B 站视频"]');
+    async function pick(title) {
+        await act(async () => [...document.querySelectorAll('.training-rail-track button')].find(button => button.textContent.includes(title)).click());
+        await flush();
+    }
+    const biliLabel = '在 B 站打开（新标签）';
+    try {
+        watchFixture('/trainings/t', [youtube, bili, local]);
+        await render(h(TrainingWatch, { actorId, trainingId: 't' }));
+        titleSource('https://www.youtube.com/watch?v=aaaaaaaaaaa&t=62s', '在 YouTube 打开（新标签）');
+
+        await pick(bili.title);
+        const biliLink = titleSource(bili.url, biliLabel);
+        assert.ok(biliLoad());
+        assert.ok(document.querySelector('.video-external-actions button'));
+        await act(async () => biliLoad().click());
+        const frame = stage().querySelector('iframe');
+        assert.equal(new URL(frame.src).searchParams.get('p'), '2');
+        titleSource(bili.url, biliLabel);
+        await act(async () => frame.dispatchEvent(new Event('error')));
+        assert.match(stage().querySelector('[role="alert"]').textContent, /加载失败/);
+        titleSource(bili.url, biliLabel);
+        await act(async () => biliLoad().click());
+        assert.ok(stage().querySelector('iframe'));
+
+        await act(async () => window.dispatchEvent(new Event('blur')));
+        assert.ok(biliLink.closest('[hidden]'));
+        await act(async () => window.dispatchEvent(new Event('focus')));
+        await flush();
+        assert.equal(titleSource(bili.url, biliLabel).closest('[hidden]'), null);
+
+        visible = [youtube, local];
+        await act(async () => window.dispatchEvent(new Event('focus')));
+        await flush();
+        assert.equal(biliLink.isConnected, false);
+        titleSource('https://www.youtube.com/watch?v=aaaaaaaaaaa&t=62s', '在 YouTube 打开（新标签）');
+
+        await pick(local.title);
+        assert.ok(stage().querySelector('video'));
+        assert.deepEqual(sourceLinks(), []);
+        visible = [];
+        await act(async () => window.dispatchEvent(new Event('focus')));
+        await flush();
+        assert.match(document.body.textContent, /本次训练暂无视频/);
+        assert.deepEqual(sourceLinks(), []);
+        await unmount();
+
+        watchFixture('/videos/bili', [bili, anotherBili]);
+        await render(h(TrainingWatch, { actorId, legacyVideoId: bili.id }));
+        assert.equal(window.location.pathname, '/videos/bili');
+        assert.equal(sourceLinks().length, 2);
+        assert.ok(stage().querySelector('a[target="_blank"]'));
+        assert.ok(document.querySelector('.video-source-disclosure a[target="_blank"]'));
+        assert.equal(document.querySelector('.training-title-actions a[target="_blank"]'), null);
+        await pick(anotherBili.title);
+        assert.equal(window.location.pathname, '/trainings/t');
+        titleSource(anotherBili.url, biliLabel);
     } finally { await unmount(); }
 });
 

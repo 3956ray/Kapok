@@ -4,6 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import React, { act } from 'react';
 import { JSDOM } from 'jsdom';
+import { actorKey } from '../helpers/identity-fixture.mjs';
+import { createSharingFixture, principals, syntheticContent } from '../helpers/sharing-browser-fixture.mjs';
+import { dispatchApi } from '../../lib/server/http.ts';
 // Only the framework's pathname is supplied; all product components and session guards remain real.
 registerHooks({ resolve(specifier, context, next) {
     if (specifier === 'next/navigation') return { shortCircuit: true, url: 'data:text/javascript,export function usePathname(){return globalThis.testPathname ?? "/"};export function useRouter(){return {push(){}}}' };
@@ -20,7 +23,7 @@ dom.window.HTMLMediaElement.prototype.pause = function () {};
 dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
 dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new Event('close')); };
 const { createRoot } = await import('react-dom/client');
-const { ReflectionSharing } = await import('../../app/components/reflections.tsx');
+const { ReflectionRead, ReflectionSharing } = await import('../../app/components/reflections.tsx');
 const h = React.createElement;
 const bootstrap = { actorId: 'A', siteUserId: 'A', me: { user: { id: 'user-A', status: 'active' }, membership: { status: 'active', role: 'admin', epoch: 1 } } };
 const reflection = { id: 'r', title: '合成复盘', text: '原始正文', date: '2026-10-16', isAuthor: true, author: { id: 'user-A', discName: '合成作者', jerseyNumber: '07' }, version: 1, sharingVersion: 1, generation: 1, scope: 'private', published: false, trainingId: null, videoId: null, link: null };
@@ -48,6 +51,7 @@ const buttons = text => [...document.querySelectorAll('button')].filter(b => b.t
 async function click(text) { const b = buttons(text).find(b => b.closest('dialog[open]')) ?? buttons(text)[0]; assert.ok(b, text); await act(async () => b.click()); await flush(); }
 async function selectScope(value) { const node = document.querySelector(`input[type=radio][value=${value}]`); assert.ok(node); await act(async () => node.click()); await flush(); }
 async function lifecycle(name) { await act(async () => window.dispatchEvent(new Event(name))); await flush(); }
+const activityLink = () => document.querySelector('[role=status] a[href="/activity"]');
 const writes = () => calls.filter(c => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(c.options.method));
 
 test('sharing confirmed summary stays private while dirty choice disables publication and cancel writes nothing', async () => {
@@ -86,7 +90,7 @@ function mutations() {
     };
 }
 for (const scope of ['team', 'private']) {
-    test(`sharing completed ${scope} scope change focuses the title after removing its trigger`, async () => {
+    test(`sharing completed ${scope} scope change focuses the next action or returns to the title`, async () => {
         setup(); mutations();
         if (scope === 'private') data['reflections/r/edit'] = { ...reflection, scope: 'team', published: true };
         const grant = scope === 'team';
@@ -98,17 +102,35 @@ for (const scope of ['team', 'private']) {
             await confirmIntent(trigger, grant ? '允许全队阅读' : trigger);
             assert.equal(document.querySelector('dialog').open, false);
             assert.equal(button.isConnected, false);
-            assert.ok(document.activeElement.matches('.sharing-title'), 'focus moves to the visible title');
+            if (grant) {
+                const publish = buttons('发布到动态')[0];
+                assert.equal(publish.disabled, false);
+                assert.ok(document.activeElement === publish, 'a verified grant leads to a separate publication action');
+                assert.match(document.getElementById(publish.getAttribute('aria-describedby')).textContent, /尚未发布/);
+            } else {
+                assert.ok(document.activeElement.matches('.sharing-title'), 'focus moves to the visible title');
+            }
             assert.equal(document.activeElement.closest('[hidden]'), null);
         } finally { await unmount(); }
     });
 }
+test('author with a team-readable unpublished reflection has an explicit publication entry', async () => {
+    setup(); data['reflections/r'] = { ...reflection, scope: 'team' };
+    try {
+        await mount(h(ReflectionRead, { actorId: 'A', id: 'r', saved: false }));
+        const link = [...document.querySelectorAll('a')].find(node => node.textContent === '发布到队内动态');
+        assert.ok(link);
+        assert.equal(link.getAttribute('href'), '/reflections/r/sharing');
+        assert.equal(writes().length, 0);
+    } finally { await unmount(); }
+});
 test('sharing grant publish withdraw revoke uses one dialog per intent and verified success messages', async () => {
     setup(); mutations();
     try {
         await mount(h(ReflectionSharing, { actorId: 'A', id: 'r' }));
         await selectScope('team'); await confirmIntent('确认全队可读', '允许全队阅读');
         assert.match(document.body.textContent, /全队已可阅读，尚未发布到动态。/);
+        assert.equal(activityLink(), null);
         assert.equal(writes().length, 1);
         assert.equal(writes()[0].path, 'reflections/r/grants');
         const publicationTrigger = buttons('发布到动态')[0];
@@ -117,13 +139,98 @@ test('sharing grant publish withdraw revoke uses one dialog per intent and verif
         assert.ok(document.activeElement === publicationTrigger, 'focus returns to the enabled publication trigger');
         assert.match(document.querySelector('.sharing-summary').textContent, /阅读：全队动态：已发布/);
         assert.match(document.body.textContent, /已发布到队内动态。/);
+        assert.equal(activityLink()?.textContent, '查看动态');
         await confirmIntent('撤回动态', '撤回动态');
         assert.match(document.querySelector('.sharing-summary').textContent, /阅读：全队动态：未发布/);
         assert.match(document.body.textContent, /动态已撤回，全队仍可阅读。/);
+        assert.equal(activityLink(), null);
         await selectScope('private'); await confirmIntent('收回阅读权限', '收回阅读权限');
         assert.match(document.querySelector('.sharing-summary').textContent, /阅读：仅自己动态：未发布/);
         assert.match(document.body.textContent, /已收回阅读权限，现在仅自己可读。/);
         assert.equal(writes().length, 4);
+    } finally { await unmount(); }
+});
+test('sharing UI publishes against real D1 and safely reconciles a lost response', async t => {
+    setup();
+    const { service, db, dispose } = await createSharingFixture();
+    t.after(dispose);
+    const author = await actorKey(principals.author);
+    const r = await service.saveReflection(principals.author, null, syntheticContent, 'ui-create');
+    const path = `reflections/${r.id}`;
+    const publishPath = `${path}/publication`;
+    const origin = 'https://kapok.local';
+    const dispatch = (principal, endpoint, options = {}) => {
+        const headers = new Headers(options.headers);
+        headers.set('Origin', origin);
+        return dispatchApi(new Request(`${origin}/api/v1/${endpoint}`, { ...options, headers }), endpoint.split('/'), principal, service);
+    };
+    let loseResponse = true;
+    override = async (endpoint, options) => {
+        const result = await dispatch(principals.author, endpoint, options);
+        if (loseResponse && endpoint === publishPath) {
+            assert.ok(result.ok);
+            loseResponse = false;
+            throw new Error('synthetic transport loss after D1 commit');
+        }
+        return result;
+    };
+    async function waitFor(condition) {
+        const deadline = performance.now() + 5000;
+        while (!condition() && performance.now() < deadline) await flush();
+        assert.ok(condition());
+    }
+    const stored = () => db.prepare('SELECT scope, published_at FROM reflections WHERE id=?').bind(r.id).first();
+    const member = endpoint => dispatch(principals.member, endpoint);
+    const activity = async () => (await (await member('activity')).json()).data.items;
+    try {
+        await mount(h(ReflectionSharing, { actorId: author, id: r.id }));
+        await waitFor(() => document.querySelector('.sharing-summary'));
+        await selectScope('team'); await confirmIntent('确认全队可读', '允许全队阅读');
+        await waitFor(() => document.querySelector('[role=status].success'));
+        assert.ok(document.activeElement === buttons('发布到动态')[0]);
+        assert.deepEqual(writes().map(write => write.path), [`${path}/grants`]);
+        assert.deepEqual(await stored(), { scope: 'team', published_at: null });
+        assert.deepEqual(await activity(), []);
+
+        await confirmIntent('发布到动态', '发布到动态');
+        await waitFor(() => buttons('核对结果').some(button => !button.disabled));
+        assert.match(document.querySelector('[role=alert]').textContent, /暂未确认操作结果/);
+        assert.equal(document.querySelector('[role=status].success'), null);
+        assert.equal(activityLink(), null);
+        const committed = await stored();
+        assert.equal(committed.scope, 'team');
+        assert.ok(committed.published_at);
+        const [item] = await activity();
+        assert.equal(item.href, `/${path}`);
+        assert.equal(item.publishedAt, committed.published_at);
+        assert.equal((await (await member(item.href.slice(1))).json()).data.text, syntheticContent.text);
+        assert.deepEqual(await activity(), [item]);
+
+        await click('核对结果');
+        await waitFor(() => document.querySelector('[role=status].success'));
+        assert.match(document.querySelector('[role=status].success').textContent, /已发布到队内动态/);
+        const link = activityLink();
+        assert.ok(link);
+        assert.equal(link.textContent, '查看动态');
+        const linkedActivity = await member(link.getAttribute('href').slice(1));
+        assert.equal(linkedActivity.status, 200);
+        assert.deepEqual((await linkedActivity.json()).data.items, [item]);
+        const [first, retry] = writes().filter(write => write.path === publishPath);
+        assert.equal(retry.options.body, first.options.body);
+        assert.equal(retry.options.headers['Idempotency-Key'], first.options.headers['Idempotency-Key']);
+        assert.deepEqual(await stored(), committed);
+        assert.deepEqual(await activity(), [item]);
+
+        await confirmIntent('撤回动态', '撤回动态');
+        await waitFor(() => document.querySelector('[role=status].success'));
+        assert.deepEqual(await activity(), []);
+        assert.equal((await member(path)).status, 200);
+        assert.deepEqual(await stored(), { scope: 'team', published_at: null });
+
+        await selectScope('private'); await confirmIntent('收回阅读权限', '收回阅读权限');
+        await waitFor(() => document.querySelector('[role=status].success'));
+        assert.equal((await member(path)).status, 404);
+        assert.deepEqual(await stored(), { scope: 'private', published_at: null });
     } finally { await unmount(); }
 });
 test('sharing committed receipt with failed read retains immutable body and key and blocks other payloads across navigation', async () => {
@@ -197,6 +304,7 @@ test('sharing explicit conflict reconciles current state and read failure never 
         assert.equal(writes().length, 1);
         assert.match(document.querySelector('[role=alert]').textContent, /分享状态已变化/);
         assert.match(document.querySelector('.sharing-summary').textContent, /阅读：仅自己/);
+        assert.equal(activityLink(), null);
     } finally { await unmount(); }
 });
 test('sharing dialog Escape restores trigger and temporary lock closes top layer synchronously', async () => {

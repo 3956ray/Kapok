@@ -3,32 +3,28 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { controlledBackSource } from '../../lib/client/navigation-state';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, House, PanelLeft, Plus, Sprout, UserRound, UsersRound } from 'lucide-react';
+import { BookOpen, NotebookPen, CalendarDays, ChevronLeft, ChevronRight, Clock, House, PanelLeft, Plus, Sprout, UserRound } from 'lucide-react';
 
 const home = { href: '/', text: '首页', Icon: House };
 const trainings = { href: '/trainings', text: '训练', Icon: CalendarDays };
 const growth = { href: '/growth', text: '成长', Icon: Sprout };
 const account = { href: '/me', text: '我的', Icon: UserRound };
-const mobileItems = [home, trainings, growth, account];
-const desktopItems = [
-    { ...home, text: '总览' },
-    { ...trainings, text: '训练记录' },
-    { ...growth, text: '我的成长' },
-    { href: '/activity', text: '队内动态', Icon: Clock },
-    { href: '/members', text: '队伍成员', Icon: UsersRound },
-];
+const mobileItems = [home, trainings, { href: '/reflections/new', text: '写复盘', Icon: NotebookPen }, growth, account];
+const desktopItems = [home, { href: '/activity', text: '队内动态', Icon: Clock }, trainings, { href: '/learn', text: '学习库', Icon: BookOpen }, growth];
 
 function destination(path: string) {
     const root = '/' + (path.split('/')[1] ?? '');
     if (root === '/home') return '/';
     if (root === '/videos') return '/trainings';
     if (root === '/reflections') return '/growth';
+    if (root === '/members') return '/';
     if (root === '/announcements') return '/activity';
     return root;
 }
 
-export function Navigation() {
-  const current = destination(usePathname());
+export function Navigation({ canCompose = false }: { canCompose?: boolean }) {
+  const pathname = usePathname();
+  const current = destination(pathname);
   const owner = current === '/members' || current === '/activity' ? '/' : current;
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -43,23 +39,30 @@ export function Navigation() {
       document.documentElement.style.removeProperty('--nav-height');
     };
   }, []);
-  return <nav className="bottom-nav" aria-label="主要导航" ref={ref}>{mobileItems.map(({ href, text, Icon }) => {
-    const selected = href === owner;
+  return <nav className="bottom-nav" aria-label="主要导航" ref={ref}>{mobileItems.filter(item => canCompose || item.href !== '/reflections/new').map(({ href, text, Icon }) => {
+    const selected = pathname === '/reflections/new' && canCompose ? href === '/reflections/new' : href === owner;
     return <Link href={href} prefetch={false} key={href} aria-current={selected ? 'page' : undefined} className={selected ? 'selected' : ''}><Icon size={22} aria-hidden="true" /><span>{text}</span></Link>;
   })}</nav>;
 }
 
-// The sidebar is mounted by each page shell. Keep the display preference across client navigation.
+// Device-only visual preference. Read after mount so SSR and hydration start expanded.
+const sidebarPreferenceKey = 'kapok:sidebar-collapsed';
 let collapsed = false;
+let preferenceLoaded = false;
 const sidebarListeners = new Set<() => void>();
 const sidebarSnapshot = () => collapsed;
 const initialSidebarSnapshot = () => false;
 function subscribeSidebar(listener: () => void) {
+    if (!preferenceLoaded && typeof window !== 'undefined') {
+        preferenceLoaded = true;
+        try { collapsed = window.localStorage.getItem(sidebarPreferenceKey) === 'true'; } catch { /* Storage may be disabled; in-memory preference still works. */ }
+    }
     sidebarListeners.add(listener);
     return () => { sidebarListeners.delete(listener); };
 }
 function toggleSidebar() {
     collapsed = !collapsed;
+    try { window.localStorage.setItem(sidebarPreferenceKey, String(collapsed)); } catch { /* A blocked preference write must not block navigation. */ }
     for (const listener of sidebarListeners) listener();
 }
 

@@ -24,7 +24,7 @@ async function fixture(t, legacy = false) {
         modules: true,
         script: 'export default {fetch(){return new Response("test")}}',
         compatibilityDate: '2026-05-22',
-        d1Databases: ['DB'],
+        d1Databases: ['DB'], r2Buckets: ['BUCKET'],
     });
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
@@ -36,7 +36,8 @@ async function fixture(t, legacy = false) {
         }
     }
     let time = new Date('2026-10-16T12:00:00.000Z');
-    const options = { db, clock: () => time, bootstrapSiteUserId: admin.subject };
+    const bucket = await mf.getR2Bucket('BUCKET');
+    const options = { db, bucket, clock: () => time, bootstrapSiteUserId: admin.subject };
     const s = createService(options);
     await s.bootstrap(admin, { discName: '管理员', jerseyNumber: '01' }, 'bootstrap');
     for (const p of [author, member, coach]) {
@@ -299,4 +300,66 @@ test('paused member can explicitly leave; suppressed lifecycle audit rolls back 
     const audit = await db.prepare("SELECT reason FROM moderation_audit WHERE actor_id=? AND action='member-leave'").bind(ids.author).first();
     assert.equal(JSON.parse(audit.reason).from.status, 'paused');
     assert.equal(JSON.parse(audit.reason).to.status, 'left');
+});
+
+test('one export snapshot includes both own learning and topic revisions, owned ready images and only typed foreign references', async t => {
+    const { s, db, ids, membership, pausedBatch } = await fixture(t);
+    const input = { kind: 'article', category: '战术', title: '本人旧发布标题', body: '本人旧发布正文' };
+    const publish = d => ({ expectedVersion: d.version, expectedMembershipEpoch: d.membershipEpoch });
+    const version = d => ({ expectedVersion: d.version });
+    let own = await s.saveLearningPost(author, null, input, 'own');
+    const fixturePng = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWNY6W680t2YAUIBACG6BI0c0mdzAAAAAElFTkSuQmCC', 'base64'));
+    const image = await s.reserveLearningImage(author, own.id, {}, 'reserve');
+    await s.uploadLearningImage(author, own.id, image.id, new Response(fixturePng).body, 'image/png', 'upload');
+    await s.completeLearningImage(author, own.id, image.id, {}, 'complete');
+    own = await s.getLearningPost(author, own.id, 'draft');
+    own = await s.saveLearningPost(author, own.id, { ...input, ...version(own), images: [{ id: image.id, alt: '合成图', decorative: false }] }, 'describe');
+    own = await s.publishLearningPost(author, own.id, publish(own), 'publish');
+    own = await s.saveLearningPost(author, own.id, { ...input, ...version(own), title: '本人新草稿标题', body: '本人新草稿正文', images: [] }, 'edit');
+    let foreign = await s.saveLearningPost(member, null, { ...input, title: '他人来源密题', body: '他人来源密文' }, 'foreign');
+    foreign = await s.publishLearningPost(member, foreign.id, publish(foreign), 'foreign-publish');
+    await s.saveLearningPost(member, null, { ...input, title: '他人私稿严禁导出' }, 'foreign-draft');
+    let topic = await s.saveTopicCollection(author, null, { title: '本人旧专题' }, 'topic');
+    const item = { kind: 'post', id: foreign.id };
+    ({ collection: topic } = await s.addTopicItems(author, topic.id, { ...version(topic), items: [item] }, 'items'));
+    topic = await s.publishTopicCollection(author, topic.id, publish(topic), 'topic-publish');
+    topic = await s.saveTopicCollection(author, topic.id, { ...version(topic), title: '本人专题新草稿' }, 'topic-edit');
+    const before = await s.exportOwnData(author);
+    assert.equal(before.learningPosts[0].draft.body, '本人新草稿正文');
+    assert.equal(before.learningPosts[0].publication.body, input.body);
+    assert.deepEqual(before.learningPosts[0].draft.images, []);
+    assert.deepEqual(before.learningPosts[0].publication.images, [{ id: image.id, position: 0, alt: '合成图', decorative: false }]);
+    assert.deepEqual(before.learningImages.map(i => [i.id, i.postId, i.mimeType, i.bytes]), [[image.id, own.id, 'image/png', fixturePng.length]]);
+    assert.equal(before.topicCollections[0].draft.title, '本人专题新草稿');
+    assert.equal(before.topicCollections[0].publication.title, '本人旧专题');
+    assert.deepEqual(before.topicCollections[0].publication.items, [{ ...item, position: 0, sourceAvailable: true }]);
+    const object = await db.prepare('SELECT object_key FROM learning_images WHERE id=?').bind(image.id).first();
+    assert.equal(JSON.stringify(before).includes(object.object_key), false);
+    assert.doesNotMatch(JSON.stringify(before), /他人来源密题|他人来源密文|他人私稿严禁导出/);
+
+    const held = pausedBatch();
+    const heldExport = held.delayed.exportOwnData(author);
+    await held.ready;
+    await s.leaveTeam(member, expected(await membership(member)), 'leave-member');
+    held.release();
+    assert.deepEqual((await heldExport).topicCollections[0].publication.items, [{ ...item, position: 0, sourceAvailable: false }]);
+    await denied(s.getLearningPost(author, foreign.id), 'NOT_FOUND');
+    assert.deepEqual((await s.getTopicCollection(admin, topic.id)).items, []);
+
+    const replacement = pausedBatch();
+    const oldOwner = replacement.delayed.exportOwnData(author);
+    const identityCheck = denied(oldOwner, 'FORBIDDEN');
+    await replacement.ready;
+    await db.prepare('UPDATE auth_identities SET subject=? WHERE user_id=?').bind('replacement-member', ids.member).run();
+    await db.prepare('UPDATE auth_identities SET subject=? WHERE user_id=?').bind('replacement-author', ids.author).run();
+    await db.prepare('UPDATE auth_identities SET subject=? WHERE user_id=?').bind(author.subject, ids.member).run();
+    replacement.release();
+    await identityCheck;
+    await db.prepare('UPDATE auth_identities SET subject=? WHERE user_id=?').bind(member.subject, ids.member).run();
+    await db.prepare('UPDATE auth_identities SET subject=? WHERE user_id=?').bind(author.subject, ids.author).run();
+    await s.leaveTeam(author, expected(await membership(author)), 'leave-author');
+    await denied(s.getTopicCollection(author, topic.id, 'draft'), 'FORBIDDEN');
+    await denied(s.getLearningImage(author, own.id, image.id, 'draft'), 'FORBIDDEN');
+    await denied(s.getLearningImage(admin, own.id, image.id), 'NOT_FOUND');
+    await denied(s.getTopicCollection(admin, topic.id), 'NOT_FOUND');
 });

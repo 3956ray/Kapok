@@ -11,6 +11,7 @@ const deploy = deployPath ? JSON.parse(readFileSync(deployPath, "utf8")) as {
   databaseId: string;
   accessIssuer: string;
   accessAudience: string;
+  bucketName: string;
 } : null;
 
 if (deployPath && (!deploy || !/^[a-z0-9-]{1,63}$/.test(deploy.worker) ||
@@ -19,7 +20,9 @@ if (deployPath && (!deploy || !/^[a-z0-9-]{1,63}$/.test(deploy.worker) ||
     !/^[a-zA-Z0-9_-]{1,64}$/.test(deploy.databaseName) ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(deploy.databaseId) ||
     !/^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(deploy.accessIssuer) ||
-    !/^[a-f0-9]{64}$/.test(deploy.accessAudience))) {
+    !/^[a-f0-9]{64}$/.test(deploy.accessAudience) ||
+    typeof deploy.bucketName !== "string" ||
+    !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(deploy.bucketName))) {
   throw new Error("KAPOK_DEPLOY_CONFIG_PATH must point to a valid deployment configuration.");
 }
 if (deploy && batch.status === "PUBLIC_TEST_FIXTURE") {
@@ -38,6 +41,7 @@ export const stagingWorkerConfig = {
   preview_urls: false,
   routes: deploy ? [{ pattern: host, custom_domain: true }] : [],
   assets: { binding: "ASSETS", run_worker_first: true },
+  r2_buckets: [{ binding: "BUCKET", bucket_name: deploy?.bucketName ?? "kapok-local-media" }],
   d1_databases: [{
     binding: "DB",
     database_name: deploy?.databaseName ?? "kapok-local",

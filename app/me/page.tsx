@@ -5,14 +5,18 @@ import { SignOut } from '../components/signout';
 export const dynamic = 'force-dynamic';
 export default async function Page() {
     const context = await getPageContext();
-    return <Shell title="我的账户" surface="index" eyebrow="Kapok Bloom" description="查看队内资料，管理你的个人记录和登录会话。" canCompose={isMember(context.me)}>
-        <EnvironmentNote />
-        {context.user && canReadPersonal(context.user, context.me) ? <MyScreen actorId={context.user.userId} /> : <AccessState context={context} returnTo="/me" />}
-        {context.user && <section className="panel account-session">
-            <h2>登录会话</h2>
-            <p>退出会清理当前账号在这台设备上的未保存草稿。</p>
-            <SignOut key={context.user.userId} actorId={context.user.userId} href={chatGPTSignOutPath('/')} />
-            <p className="small">如需更换已绑定的邮箱，请联系管理员核实账号归属。</p>
-        </section>}
+    return <Shell title="我的账户" surface="index" description="管理队内资料，查看自己的记录与创作。" canCompose={isMember(context.me)}>
+        <div className="account-page">
+            <EnvironmentNote />
+            {context.user && canReadPersonal(context.user, context.me) ? <MyScreen actorId={context.user.userId} /> : <AccessState context={context} returnTo="/me" />}
+            {context.user && <section className="account-session" aria-labelledby="account-session-title">
+                <div>
+                    <h2 id="account-session-title">登录会话</h2>
+                    <p>退出会清理当前账号在这台设备上的未保存草稿。</p>
+                    <p className="small">如需更换已绑定的邮箱，请联系管理员核实账号归属。</p>
+                </div>
+                <SignOut key={context.user.userId} actorId={context.user.userId} href={chatGPTSignOutPath('/')} />
+            </section>}
+        </div>
     </Shell>;
 }

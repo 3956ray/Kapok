@@ -1,3 +1,5 @@
+import type { LearningAssociation, TopicAddOutcome, TopicPolicy } from '../contracts/topic-collections';
+import type { LearningPolicy } from '../contracts/learning';
 import type { MediaPolicy } from '../contracts/media';
 import type { BootstrapResult, BootstrapStatus, InviteResult, JoinResult, Me, Principal, WriteResult } from '../contracts/index';
 import { safeReturnTo } from './return-to.ts';
@@ -5,6 +7,10 @@ export { safeReturnTo } from './return-to.ts';
 import { createDataRightsService } from './data-rights.ts';
 import { createReflectionService } from './reflections.ts';
 import { createTrainingService } from './training.ts';
+import { createTopicCollections } from './topic-collections.ts';
+import { createLearningActivity } from './learning-activity.ts';
+import { createLearningDiscussion } from './learning-discussion.ts';
+import { createLearningService } from './learning.ts';
 import { LEGACY_SITES_ISSUER } from '../contracts/index.ts';
 import { accessMembershipFence, actorKey, identityFor, identityTuple, sha256 } from './identity.ts';
 
@@ -37,17 +43,17 @@ export function assertGuard(db: D1Database, opId: string, phase: string, predica
   return db.prepare(`INSERT INTO write_guards (op_id, phase, pass) VALUES (?, ?, CASE WHEN (${predicate}) THEN 1 ELSE 0 END)`).bind(opId, phase, ...values);
 }
 type OperationRow = { id: string; input_hash: string; status: string; result_json: string | null };
-export type StoredResult = { partNumber?: number; etag?: string; digest?: string; id?: string; videoId?: string; requestHash?: string; sourceKind?: string; sourceId?: string; timestampSec?: number | null; userId?: string; membershipId?: string; returnTo?: string; inviteId?: string; expiresAt?: string; membershipEpoch?: number };
-export type ServiceOptions = { db: D1Database; bucket?: R2Bucket; clock?: () => Date; bootstrapSiteUserId?: string; accessInitialAdminEmail?: string; mediaPolicy?: MediaPolicy };
+export type StoredResult = { partNumber?: number; etag?: string; digest?: string; id?: string; videoId?: string; requestHash?: string; sourceKind?: string; sourceId?: string; timestampSec?: number | null; userId?: string; membershipId?: string; returnTo?: string; inviteId?: string; expiresAt?: string; membershipEpoch?: number; topicOutcomes?: TopicAddOutcome[]; learningAssociation?: LearningAssociation };
+export type ServiceOptions = { db: D1Database; bucket?: R2Bucket; clock?: () => Date; bootstrapSiteUserId?: string; accessInitialAdminEmail?: string; mediaPolicy?: MediaPolicy; learningPolicy?: LearningPolicy; topicPolicy?: TopicPolicy };
 
 const systemClock = () => new Date();
 
-export function createService({ db, bucket, clock = systemClock, bootstrapSiteUserId, accessInitialAdminEmail, mediaPolicy }: ServiceOptions) {
+export function createService({ db, bucket, clock = systemClock, bootstrapSiteUserId, accessInitialAdminEmail, mediaPolicy, learningPolicy, topicPolicy }: ServiceOptions) {
   const statement = (sql: string, ...values: unknown[]) => db.prepare(sql).bind(...values);
   async function me(principal: Principal | null): Promise<Me> {
     const current = authenticated(principal);
     const userId = await identityFor(db, current);
-    const row = await statement(`SELECT u.id, u.status, p.disc_name, p.jersey_number, p.version AS profile_version,
+    const row = await statement(`SELECT u.id, u.status, p.disc_name, p.jersey_number, p.bio, p.version AS profile_version,
       m.id AS member_id, m.team_id, m.role, m.status AS member_status, m.epoch, m.version AS member_version,
       t.name AS team_name, t.description AS team_description
       FROM users u JOIN auth_identities a ON a.user_id = u.id AND a.provider=? AND a.issuer=? AND a.subject=?
@@ -57,7 +63,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
     if (row.status !== 'active') return { user: { id: String(row.id), status: 'deleted' }, profile: null, membership: null, team: null };
     return {
       user: { id: String(row.id), status: row.status as 'active' | 'deleted' },
-      profile: row.disc_name === null ? null : { discName: String(row.disc_name), jerseyNumber: String(row.jersey_number), version: Number(row.profile_version) },
+      profile: row.disc_name === null ? null : { discName: String(row.disc_name), jerseyNumber: String(row.jersey_number), bio: String(row.bio ?? ''), version: Number(row.profile_version) },
       membership: row.member_id === null ? null : { id: String(row.member_id), teamId: String(row.team_id), role: row.role as 'admin' | 'coach' | 'member', status: row.member_status as 'active' | 'paused' | 'left', epoch: Number(row.epoch), version: Number(row.member_version) },
       team: row.member_status === 'active' ? { id: String(row.team_id), name: String(row.team_name), description: String(row.team_description) } : null,
     };
@@ -283,8 +289,9 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   }
   async function updateProfile(principal: Principal | null, input: unknown, key: string): Promise<WriteResult> {
     const current = authenticated(principal);
-    const raw = object(input, ['discName', 'jerseyNumber', 'expectedVersion']);
-    const details = profile(raw);
+    const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'expectedVersion']);
+    const details = { ...profile(raw), bio: raw.bio === undefined ? undefined : raw.bio };
+    if (details.bio !== undefined && (typeof details.bio !== 'string' || details.bio.trim().length > 160)) throw new DomainError('INVALID_INPUT', '简介最多160字。');
     if (!Number.isSafeInteger(raw.expectedVersion) || Number(raw.expectedVersion) < 1) throw new DomainError('INVALID_INPUT', '请重新加载资料后再保存。');
     const context = await businessAccount(current);
     if (context.user?.status !== 'active' || !context.profile) throw new DomainError('FORBIDDEN', '请先完成建档。', 403);
@@ -297,7 +304,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
           ? assertGuard(db, op.opId, 'identity', access.predicate, access.values)
           : identityGuard(op.opId, context.user.id, current),
         assertGuard(db, op.opId, 'version', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, raw.expectedVersion]),
-        statement('UPDATE profiles SET disc_name=?,jersey_number=?,version=version+1 WHERE user_id=? AND version=?', details.discName, details.jerseyNumber, context.user.id, raw.expectedVersion),
+        statement('UPDATE profiles SET disc_name=?,jersey_number=?,bio=COALESCE(?,bio),version=version+1 WHERE user_id=? AND version=?', details.discName, details.jerseyNumber, typeof details.bio === 'string' ? details.bio.trim() : null, context.user.id, raw.expectedVersion),
         assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, Number(raw.expectedVersion) + 1]),
       ], { userId: context.user.id });
       return { operationId: committed.operationId, me: await me(current) };
@@ -329,8 +336,13 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   }
   const businessAccount = (p: Principal | null) => p?.provider === 'access' ? activeMember(p) : me(p);
   const reflections = createReflectionService({ db, clock, activeMember, me: businessAccount, operation });
+  const { attemptLearningInclusion, ...topics } = createTopicCollections({ db, clock, activeMember, operation, topicPolicy });
   return { me, getAccount, getBootstrap, bootstrap, join, updateProfile, createInvite, activeMember, ...reflections,
     ...createDataRightsService({ db, clock, activeMember, me: businessAccount, operation }),
+    ...topics,
+    ...createLearningActivity({ db, clock, activeMember, operation }),
+    ...createLearningDiscussion({ db, clock, activeMember, operation }),
+    ...createLearningService({ db, bucket, clock, learningPolicy, activeMember, operation, attemptLearningInclusion }),
     ...createTrainingService({ db, bucket, clock, mediaPolicy, activeMember, me: businessAccount, operation, getReflection: reflections.getReflection }) };
 }
 export type Service = ReturnType<typeof createService>;

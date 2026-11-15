@@ -10,7 +10,7 @@ import { confirmNavigationActor, clearNavigationActor, clearNavigationRoute, cur
 import { reconcileRegistrationActor } from '../../lib/client/registration-draft';
 import type { SessionSignal } from '../../lib/client/session-guard';
 type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>);
-export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnprofiled = false) {
+export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnprofiled = false, adjacentSurfaces?: readonly HTMLElement[]) {
     const [data, setData] = useState<T | null>(null);
     const [locked, setLocked] = useState(true);
     const [checking, setChecking] = useState(true);
@@ -38,15 +38,18 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
         (node: HTMLDivElement | null) => {
             container.current = node;
             // Reveal only in React's commit, after the current verified data was rendered.
-            if (node) node.hidden = !guard.current.current(guard.current.token());
+            const hidden = !node || !guard.current.current(guard.current.token());
+            if (node) node.hidden = hidden;
+            for (const surface of adjacentSurfaces ?? []) surface.toggleAttribute('hidden', hidden);
         },
-        []
+        [adjacentSurfaces]
     );
     const conceal = useCallback(
         (revalidation: unknown = false) => {
             if (revalidation !== true) interruption.current += 1;
             guard.current.conceal();
             if (container.current) container.current.hidden = true;
+            for (const surface of adjacentSurfaces ?? []) surface.setAttribute('hidden', '');
             setLocked(true);
             setChecking(false);
             verification.current?.abort();
@@ -58,7 +61,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 return false;
             }
         },
-        [notify]
+        [notify, adjacentSurfaces]
     );
     useLayoutEffect(() => {
         const activeGuard = guard.current;
@@ -68,16 +71,20 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             interruption.current += 1;
             activeGuard.conceal();
             if (surface) surface.hidden = true;
+            for (const adjacent of adjacentSurfaces ?? []) adjacent.setAttribute('hidden', '');
             verification.current?.abort();
             try { notify(false); } catch { /* The removed surface remains concealed. */ }
         };
-    }, [notify]);
+    }, [notify, adjacentSurfaces]);
     const processSignal = useCallback((signal: SessionSignal) => {
         clearRegistrationPrefill();
         interruption.current += 1;
         const result = handleSessionSignal(guard.current, actorId, signal, {
             surface: container.current,
-            lock: () => { setLocked(true); setChecking(false); verification.current?.abort(); notify(signal.actorId === actorId && signal.kind === 'ended'); },
+            lock: () => {
+                for (const surface of adjacentSurfaces ?? []) surface.setAttribute('hidden', '');
+                setLocked(true); setChecking(false); verification.current?.abort(); notify(signal.actorId === actorId && signal.kind === 'ended');
+            },
             clearResource: () => { if (signal.actorId === actorId && signal.kind === 'ended') setData(null); },
             endEditor: () => {
                 clearNavigationActor(actorId);
@@ -94,7 +101,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             setError('账号会话已变化，请重新加载。');
         }
         return result.action;
-    }, [actorId, notify]);
+    }, [actorId, notify, adjacentSurfaces]);
     const runVerification = useCallback(
         async (message = '') => {
             // All verification entry points invalidate/hide/lock before fallible stop/capture effects.
@@ -195,9 +202,12 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 // Focusing the official embedded player stays inside this visible page.
                 // A real window/tab departure still hasFocus=false or visibility=hidden.
                 const active = document.activeElement;
-                if (document.visibilityState === 'visible' && document.hasFocus() &&
-                    active?.tagName === 'IFRAME' && active.getAttribute('data-kapok-player') === 'bilibili' &&
-                    container.current?.contains(active)) { playerFocused = true; return; }
+                const youtube = active?.localName === 'youtube-video' ? active.shadowRoot?.activeElement : null;
+                const trustedYouTube = youtube?.localName === 'iframe' && youtube.getAttribute('data-kapok-player') === 'youtube' &&
+                    /^https:\/\/www\.youtube-nocookie\.com\/embed\/[\w-]{11}\?/.test(youtube.getAttribute('src') ?? '');
+                const trustedBilibili = active?.tagName === 'IFRAME' && active.getAttribute('data-kapok-player') === 'bilibili';
+                if (document.visibilityState === 'visible' && document.hasFocus() && active &&
+                    (trustedYouTube || trustedBilibili) && (container.current?.contains(active) || adjacentSurfaces?.some(surface => surface.contains(active)))) { playerFocused = true; return; }
                 playerFocused = false;
                 conceal();
             };
@@ -233,7 +243,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 document.removeEventListener('visibilitychange', visibility);
             };
         },
-        [conceal, processSignal, verify]
+        [conceal, processSignal, verify, adjacentSurfaces]
     );
     useEffect(() => {
         if (locked || !data || !container.current) return;
@@ -353,14 +363,15 @@ type BoundaryProps<T> = {
     allowUnprofiled?: boolean;
     checkingMessage?: string;
     reverifyHref?: string;
+    adjacentSurfaces?: readonly HTMLElement[];
     children: (data: T) => ReactNode;
 };
 export function AccountBoundary<T>(props: BoundaryProps<T>) {
     // A new official actor always receives new in-memory state, even on a retained route component.
     return <AccountBoundarySession key={props.actorId} {...props} />;
 }
-function AccountBoundarySession<T>({ actorId, load, allowUnprofiled = false, checkingMessage, reverifyHref, children }: BoundaryProps<T>) {
-    const secure = useSecureResource<T>(actorId, load, allowUnprofiled);
+function AccountBoundarySession<T>({ actorId, load, allowUnprofiled = false, checkingMessage, reverifyHref, adjacentSurfaces, children }: BoundaryProps<T>) {
+    const secure = useSecureResource<T>(actorId, load, allowUnprofiled, adjacentSurfaces);
     return <>
         <SecureStatus locked={secure.locked} error={secure.error} checking={secure.checking} checkingMessage={secure.verificationMessage || checkingMessage} retry={() => void secure.verify()} reverifyHref={reverifyHref} />
         <div data-kapok-sensitive ref={node => secure.attach(node)} hidden={secure.locked}>

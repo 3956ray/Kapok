@@ -100,7 +100,7 @@ export function PersonalData({ actorId }: { actorId: string }) {
                 </section>
                 <section className="panel" aria-busy={action === 'export'}>
                     <h2>导出本人数据</h2>
-                    <p>下载本人资料、复盘、收藏引用、私人备注、秒数和本人评论。当前无权读取的来源仅保留引用与不可用标记。</p>
+                    <p>下载本人资料、复盘、收藏引用、私人备注、秒数、本人评论、本人学习资料与主题合集，以及配图元数据。当前无权读取的来源仅保留引用与不可用标记。</p>
                     <p className="muted">请自行保管下载的文件。</p>
                     <button disabled={!!action || secure.locked} onClick={() => void download()}><Download size={17} aria-hidden="true" />{action === 'export' ? '正在导出…' : exportFeedback?.error ? '重新导出' : '下载本人 JSON'}</button>
                     {exportFeedback && <p className={exportFeedback.error ? 'notice error' : 'notice success'} role={exportFeedback.error ? 'alert' : 'status'}>{exportFeedback.text}</p>}

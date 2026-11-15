@@ -61,7 +61,7 @@ export function Shell({ title, children, nav = true, back, surface, eyebrow, des
       </div>}
       {children}
     </main>
-    {nav && <Navigation />}
+    {nav && <Navigation canCompose={canCompose} />}
   </div>;
 }
 export function AccessState({ context, returnTo = '/' }: { context: Awaited<ReturnType<typeof getPageContext>>; returnTo?: string }) {

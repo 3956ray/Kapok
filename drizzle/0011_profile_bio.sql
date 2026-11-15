@@ -1,0 +1,1 @@
+ALTER TABLE profiles ADD COLUMN bio TEXT NOT NULL DEFAULT '' CHECK(length(bio) <= 160);

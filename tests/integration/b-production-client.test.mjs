@@ -138,7 +138,16 @@ test('B browser UI bounds do not expose mutable snapshots or initialize server u
  const descriptor=Object.getOwnPropertyDescriptor(globalThis,'window');Object.defineProperty(globalThis,'window',{configurable:true,value:undefined});try{confirmNavigationActor('server','secret');assert.equal(navigationBuffer('server','/','private').read(),null);assert.equal(pendingMutationKey('server','POST','trainings',{title:'x'},'native-key'),'native-key');}finally{Object.defineProperty(globalThis,'window',descriptor);}
 });
 test('B My summary has default avatar/edit entry and profile conflict keeps input until explicit retry',async()=>{
- setup('/me');const {MyScreen}=await import('../../app/components/legacy-screens.tsx');try{await mount(MyScreen);assert.ok(document.querySelector('.default-avatar'));assert.equal(document.querySelector('form'),null);assert.ok(document.querySelector('a[href="/me/edit"]'));await unmount();
+ setup('/me');const {MyScreen}=await import('../../app/components/legacy-screens.tsx');try{await mount(MyScreen);
+ assert.equal(document.querySelector('.account-profile-identity .default-avatar').textContent,'木');
+ assert.equal(document.querySelector('form'),null);
+ assert.ok(document.querySelector('a[href="/me/edit"]'));
+ assert.ok(document.querySelector('a[href="/me/preview"]'));
+ assert.ok(document.querySelector('.account-privacy a[href="/me/data"]'));
+ assert.deepEqual([...document.querySelectorAll('#account-records + ul a')].map(link => link.getAttribute('href')), [
+  '/growth?filter=reflections', '/growth?filter=bookmarks', '/me/recycle', '/learn/mine',
+ ]);
+ await unmount();
  dom.window.history.replaceState({},'','/me/edit');await mount(ProfileEditor);await input(document.querySelector('[name=discName]'),'冲突输入');override=(path,options)=>path==='me'&&options.method==='PATCH'?new Response(JSON.stringify({error:{code:'VERSION_CONFLICT',message:'资料版本冲突',retryable:false}}),{status:409,headers:{'X-Kapok-Actor':'A'}}):null;await click('保存资料');assert.equal(document.querySelector('[name=discName]').value,'冲突输入');assert.match(document.body.textContent,/资料已在其他位置更新/);assert.ok(!document.body.textContent.includes('资料已保存到账号。'));
  }finally{await unmount();}
 });
@@ -148,7 +157,7 @@ test('B manual time editing confirms or cancels before changing the frozen annot
  }finally{await unmount();}
 });
 test('B unavailable reply keeps private draft and target while blocking silent top-level submission',async()=>{
- setup();try{await mount(VideoDiscussion);await click('回复');await input(document.querySelector('#comment-input'),'仅本人的未提交回复');await unmount();data['videos/v/comments']=[{...comment,text:null,status:'deleted'}];await mount(VideoDiscussion);assert.equal(document.querySelector('#comment-input').value,'仅本人的未提交回复');const composer=document.querySelector('[data-own-buffer]');assert.match(composer.textContent,/回复 当前不可用的讨论/);assert.ok(!composer.textContent.includes('阿禾'));await click('发送回复');assert.equal(writes().length,0);await click('取消回复');assert.equal(document.querySelector('#comment-input').value,'');
+ setup();try{await mount(VideoDiscussion);await click('回复');await input(document.querySelector('#comment-input'),'仅本人的未提交回复');await unmount();data['videos/v/comments']=[{...comment,text:null,status:'deleted'}];await mount(VideoDiscussion);assert.equal(document.querySelector('#comment-input').value,'仅本人的未提交回复');const composer=document.querySelector('form.discussion-composer[data-own-buffer]');assert.match(composer.textContent,/回复 当前不可用的讨论/);assert.ok(!composer.textContent.includes('阿禾'));await click('发送回复');assert.equal(writes().length,0);await click('取消回复');assert.equal(document.querySelector('#comment-input').value,'');
  }finally{await unmount();}
 });
 test('B explicit new-version profile submit uses freshly read truth without replacing the owner input',async()=>{
@@ -376,12 +385,14 @@ test('B8 official Bilibili frame is bounded and unloads synchronously on account
  setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/?spm_id_from=333&p=2',durationSec:null};
  try {
   await mount(VideoDiscussion);
+  assert.equal(document.querySelector('iframe'),null);
+  await click('载入 B 站视频');
   const frame=document.querySelector('iframe'); assert.ok(frame);
   const url=new URL(frame.src); assert.equal(url.origin,'https://player.bilibili.com'); assert.equal(url.searchParams.get('bvid'),'BV1KapokTest'); assert.equal(url.searchParams.get('p'),'2'); assert.equal(url.searchParams.get('autoplay'),'0'); assert.equal(url.searchParams.has('spm_id_from'),false);
   assert.equal(document.querySelector('video'),null);
   await act(async()=>window.dispatchEvent(new Event('blur')));
   assert.equal(frame.getAttribute('src'),'about:blank'); assert.equal(document.querySelector('iframe'),null);
-  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.ok(document.querySelector('iframe'));
+  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(document.querySelector('iframe'),null);await click('载入 B 站视频');assert.ok(document.querySelector('iframe'));
   await act(async()=>window.dispatchEvent(new CustomEvent('kapok-account-changed',{detail:'A'})));await flush();assert.equal(document.querySelector('iframe'),null);
  } finally {await unmount();}
 });
@@ -391,7 +402,7 @@ test('B8 focusing official iframe is not leaving the page; actual window departu
  setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  const original=document.hasFocus;
  try {
-  await mount(VideoDiscussion); const frame=document.querySelector('iframe');
+  await mount(VideoDiscussion); await click('载入 B 站视频'); const frame=document.querySelector('iframe');
   await act(async()=>frame.focus());
   document.hasFocus=()=>true;
   await act(async()=>window.dispatchEvent(new Event('blur')));
@@ -566,6 +577,8 @@ test('Bilibili time clicks reload only on explicit navigation, preserve drafts/p
  dom.window.HTMLElement.prototype.scrollIntoView=function(){scrolled.push(this);};
  try {
   await mount(()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:90}));
+  assert.equal(document.querySelector('iframe'),null);
+  await click('载入 B 站视频');
   let frame=document.querySelector('iframe');assert.equal(new URL(frame.src).searchParams.get('t'),'90');
   await click('回复');
   await input(document.querySelector('#comment-input'),'保留的讨论草稿');
@@ -580,6 +593,8 @@ test('Bilibili time clicks reload only on explicit navigation, preserve drafts/p
   await act(async()=>window.dispatchEvent(new Event('blur')));assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
   data['videos/v']={...data['videos/v'],url:'https://www.bilibili.com/video/BV1KapokTest/?p=3'};
   await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  assert.equal(document.querySelector('iframe'),null);
+  await click('载入 B 站视频');
   frame=document.querySelector('iframe');url=new URL(frame.src);assert.equal(url.searchParams.get('t'),'90');assert.equal(url.searchParams.get('p'),'3');assert.equal(document.querySelector('#comment-input').value,'继续输入不重载');
   await click('讨论时间点 01:30');assert.notEqual(document.querySelector('iframe'),frame);frame=document.querySelector('iframe');
   await act(async()=>window.dispatchEvent(new CustomEvent('kapok-account-changed',{detail:'A'})));await flush();assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
@@ -592,8 +607,10 @@ test('Bilibili invalid initial time is bounded and reports the error without a r
  setup('/videos/v?t=bad');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  try {
   await mount(()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:NaN}));
-  assert.equal(new URL(document.querySelector('iframe').src).searchParams.get('t'),'0');
   assert.match(document.body.textContent,/有效的非负整数秒/);
+  assert.equal(document.querySelector('iframe'),null);
+  await click('载入 B 站视频');
+  assert.equal(new URL(document.querySelector('iframe').src).searchParams.get('t'),'0');
  } finally {await unmount();}
 });
 
@@ -602,12 +619,14 @@ test('Bilibili changed deep-link time cannot reopen a locked same snapshot befor
  setup('/videos/v?t=90');data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
  let target=90;const Screen=()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:target});
  try {
-  await mount(Screen);const frame=document.querySelector('iframe');
+  await mount(Screen);await click('载入 B 站视频');const frame=document.querySelector('iframe');
   await act(async()=>window.dispatchEvent(new Event('blur')));
   assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
   target=180;await act(async()=>root.render(React.createElement(Screen)));await flush();
   assert.equal(document.querySelector('iframe'),null,'changing query props alone must not recreate third-party media while locked');
   await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  assert.equal(document.querySelector('iframe'),null);
+  await click('载入 B 站视频');
   assert.equal(new URL(document.querySelector('iframe').src).searchParams.get('t'),'180');
   assert.equal(writes().length,0);
  } finally {await unmount();}
@@ -724,4 +743,176 @@ test('collection recovery never falls back on forbidden or failed seed reads',as
 test('late missing-collection response cannot read back an ended actor draft or reveal cached text',async()=>{
  setup('/reflections/new?collection=saved');localStorage.clear();const {ReflectionEditor}=await import('../../app/components/reflections.tsx');const {draftKey}=await import('../../lib/client/session-guard.ts');const key=draftKey('A','collection:saved');localStorage.setItem(key,JSON.stringify({schema:1,title:'',text:'不能恢复到其他账号',date:'2026-10-19',trainingId:'',videoId:'',cloud:null,pending:null,updatedAt:'2026-10-19T01:00:00.000Z'}));let finish;override=path=>path==='collections/saved/reflection-seed'?new Promise(resolve=>{finish=resolve;}):null;
  try{await mount(()=>React.createElement(ReflectionEditor,{actorId:'A',collectionId:'saved'}));assert.ok(finish);await act(async()=>window.dispatchEvent(new CustomEvent('kapok-account-changed',{detail:'A'})));await act(async()=>finish(new Response(JSON.stringify({error:{code:'NOT_FOUND',message:'内容不可用或当前无权查看。',retryable:false}}),{status:404,headers:{'X-Kapok-Actor':'A'}})));await flush();assert.equal(document.querySelector('textarea'),null);assert.ok(!document.body.textContent.includes('不能恢复到其他账号'));assert.equal(localStorage.getItem(key),null);assert.equal(writes().length,0);}finally{await unmount();localStorage.clear();}
+});
+
+
+test('v072 profile saves all three sequential fields and bio-only conflict shows latest truth',async()=>{
+ setup('/me/edit');try {
+ await mount(ProfileEditor);
+ await input(document.querySelector('[name=discName]'),'Three Fields');
+ await input(document.querySelector('[name=jerseyNumber]'),'009');
+ await input(document.querySelector('[name=bio]'),'Owner biography');
+ let first=true;
+ override=(path,options)=>{
+  if(path!=='me'||options.method!=='PATCH')return null;
+  const body=JSON.parse(options.body);
+  assert.equal(body.discName,'Three Fields');assert.equal(body.jerseyNumber,'009');assert.equal(body.bio,'Owner biography');
+  if(first){first=false;data.me={...me,profile:{...me.profile,bio:'Other session biography',version:2}};return new Response(JSON.stringify({error:{code:'VERSION_CONFLICT',message:'changed',retryable:false}}),{status:409,headers:{'X-Kapok-Actor':'A'}});}
+  assert.equal(body.expectedVersion,2);
+  return response({me:{...data.me,profile:{...data.me.profile,...body,version:3}}});
+ };
+ await click('保存资料');
+ assert.equal(document.querySelector('[name=bio]').value,'Owner biography');
+ assert.equal(document.querySelector('[name=discName]').value,'Three Fields');
+ assert.equal(document.querySelector('[name=jerseyNumber]').value,'009');
+ assert.match(document.body.textContent,/Other session biography/);
+ await click('基于当前资料版本保存输入');assert.equal(writes().length,2);
+ assert.match(document.body.textContent,/资料已保存到账号/);
+ }finally{await unmount();}
+});
+
+test('account UI keeps failed edits and ordinary return, confirms cancel and reads back a saved profile', async () => {
+ setup('/me/edit');
+ const field = name => document.querySelector(`[name="${name}"]`);
+ try {
+  await mount(ProfileEditor);
+  assert.equal(document.querySelector('.account-profile-card'), null);
+  assert.match(document.querySelector('.account-editor-role').textContent, /队内角色.*普通队员.*只读/);
+  assert.equal(field('role'), null);
+  assert.equal(field('discName').maxLength, 20);
+  assert.equal(field('jerseyNumber').required, true);
+  assert.equal(field('jerseyNumber').maxLength, 4);
+  assert.equal(field('bio').maxLength, 160);
+  assert.deepEqual([...document.querySelectorAll('.account-editor-actions > button')].map(node => node.type), ['button', 'submit']);
+
+  await input(field('discName'), '取消前输入');
+  await input(field('jerseyNumber'), '');
+  await click('保存资料');
+  assert.equal(writes().length, 0);
+  assert.equal(document.querySelector('form').checkValidity(), false);
+
+  await input(field('jerseyNumber'), '009');
+  await input(field('bio'), '失败后保留的简介');
+  override = (_path, options) => options.method === 'PATCH'
+   ? new Response(JSON.stringify({error: {code: 'INVALID_INPUT', message: '服务端拒绝输入', retryable: false}}), {status: 400, headers: {'X-Kapok-Actor': 'A'}})
+   : null;
+  await click('保存资料');
+  assert.match(document.querySelector('[role="alert"]').textContent, /服务端拒绝输入/);
+  assert.equal(field('discName').value, '取消前输入');
+  assert.equal(field('jerseyNumber').value, '009');
+  assert.equal(field('bio').value, '失败后保留的简介');
+  assert.doesNotMatch(document.body.textContent, /资料已保存到账号/);
+  await unmount();
+  dom.window.history.replaceState({}, '', '/me');
+  dom.window.history.replaceState({}, '', '/me/edit');
+  await mount(ProfileEditor);
+  assert.equal(field('discName').value, '取消前输入');
+  assert.equal(field('jerseyNumber').value, '009');
+  assert.equal(field('bio').value, '失败后保留的简介');
+
+  await click('取消修改');
+  assert.equal(writes().length, 1);
+  assert.match(document.body.textContent, /已丢弃本次输入/);
+  assert.match(document.querySelector('.account-profile-card').textContent, /木棉.*07/);
+  assert.ok(document.querySelector('a[href="/me"]'));
+  await click('编辑个人资料');
+  assert.equal(field('discName').value, '木棉');
+  assert.equal(field('bio').value, '');
+
+  override = (path, options) => {
+   if (path !== 'me' || options.method !== 'PATCH') return null;
+   const body = JSON.parse(options.body);
+   assert.deepEqual(body, {discName: '已保存盘名', jerseyNumber: '009', bio: '已保存简介', expectedVersion: 1});
+   data.me = {...data.me, profile: {...body, version: 2}};
+   data.bootstrap.me = data.me;
+   return response({me: data.me});
+  };
+  await input(field('discName'), '已保存盘名');
+  await input(field('jerseyNumber'), '009');
+  await input(field('bio'), '已保存简介');
+  await click('保存资料');
+  assert.match(document.body.textContent, /资料已保存到账号/);
+  assert.equal(document.querySelector('form'), null);
+  assert.match(document.querySelector('.account-profile-card').textContent, /已保存盘名.*009.*已保存简介/);
+  await unmount();
+  await mount(ProfileEditor);
+  assert.equal(field('jerseyNumber').value, '009');
+  assert.equal(field('bio').value, '已保存简介');
+ } finally { await unmount(); }
+});
+
+test('account UI previews only the signed-in member’s public profile and rejects stale or missing access', async () => {
+ const { AccountPreview } = await import('../../app/components/account-preview.tsx');
+ setup('/me/preview?member=someone-else');
+ data['members/u'] = {id: 'u', discName: '队内公开盘名', jerseyNumber: '002', role: 'coach', bio: '公开简介', reflections: [{id: 'r', title: '公开复盘不在资料卡中'}]};
+ data.me = {...me, profile: {...me.profile, bio: '本人接口内容'}};
+ data.bootstrap.me = data.me;
+ try {
+  await mount(AccountPreview);
+  assert.deepEqual(calls.map(call => call.path), ['bootstrap', 'members/u', 'bootstrap']);
+  assert.match(document.querySelector('.account-profile-card').textContent, /队内公开盘名.*教练.*002.*公开简介/);
+  assert.doesNotMatch(document.body.textContent, /本人接口内容|公开复盘不在资料卡中/);
+  assert.ok(document.querySelector('a[href="/me"]'));
+  assert.ok(document.querySelector('a[href="/me/edit"]'));
+
+  data['members/u'] = {...data['members/u'], id: 'wrong-id', bio: '不应可见'};
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  await flush();
+  assert.equal(document.querySelector('.account-profile-card'), null);
+  assert.doesNotMatch(document.body.textContent, /不应可见|队内公开盘名/);
+
+  data.bootstrap.me = {...data.me, membership: {...me.membership, status: 'left'}};
+  calls.length = 0;
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  await flush();
+  assert.deepEqual(calls.map(call => call.path), ['bootstrap', 'bootstrap']);
+  assert.match(document.body.textContent, /无法预览队内资料/);
+  assert.equal(document.querySelector('a[href="/me/edit"]'), null);
+ } finally { await unmount(); }
+});
+
+test('account UI allows only the own preview route in return and navigation state', async () => {
+ const { controlledBackSource } = await import('../../lib/client/navigation-state.ts');
+ assert.equal(safeReturnTo('/me/preview'), '/me/preview');
+ for (const path of ['/me/preview/u', '/me/preview?member=u', '/me/preview#bio', '//elsewhere.test/me/preview']) {
+  assert.equal(safeReturnTo(path), '/');
+ }
+ setup('/me');
+ confirmNavigationActor('A', 'account-navigation-test');
+ const track = href => {
+  const link = document.createElement('a');
+  link.setAttribute('href', href);
+  link.addEventListener('click', event => event.preventDefault());
+  document.body.append(link);
+  link.click();
+  link.remove();
+ };
+ track('/me/preview');
+ track('/me/preview/u');
+ dom.window.history.replaceState({}, '', '/me/preview');
+ assert.equal(controlledBackSource(), '/me');
+ dom.window.history.replaceState({}, '', '/me/preview/u');
+ assert.equal(controlledBackSource(), null);
+ dom.window.history.replaceState({}, '', '/me/preview?member=u#bio');
+ track('/me/edit');
+ dom.window.history.replaceState({}, '', '/me/edit');
+ assert.equal(controlledBackSource(), '/me/preview');
+ clearNavigationActor('A');
+});
+
+
+test('U1 return targets allow only learning root and supported growth filters', () => {
+ for(const target of ['/learn','/growth?filter=bookmarks','/growth?filter=reflections']) assert.equal(safeReturnTo(target),target);
+ for(const target of ['/learn/mine','/learn/posts/x','/learn?tab=contents','/growth?filter=all','/growth?filter=unknown','/growth?filter=bookmarks&filter=reflections','/growth?filter=bookmarks&filter=bookmarks','/growth?filter=bookmarks&returnTo=https://evil.test','https://evil.test/learn','//evil.test/learn','/learn%2Fmine']) assert.equal(safeReturnTo(target),'/');
+});
+
+test('U1 controlled back keeps the approved growth filter and learning source only',async()=>{
+ const {confirmNavigationActor,controlledBackSource,clearNavigationActor}=await import('../../lib/client/navigation-state.ts');
+ for(const [source,expected] of [['/growth?filter=bookmarks','/growth?filter=bookmarks'],['/growth?filter=reflections','/growth?filter=reflections'],['/growth?filter=unknown','/growth'],['/growth?filter=bookmarks&filter=bookmarks','/growth'],['/learn','/learn'],['/learn/mine',null]]){
+  setup(source);confirmNavigationActor('A','u1');
+  const link=document.createElement('a');link.href='/reflections/u1';document.body.append(link);
+  link.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));link.remove();
+  window.history.replaceState({},'','/reflections/u1');assert.equal(controlledBackSource(),expected);
+  clearNavigationActor('A');
+ }
 });

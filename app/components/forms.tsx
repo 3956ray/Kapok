@@ -8,6 +8,7 @@ import { acknowledgeMutation, clearNavigationRoute, currentRoute, navigationBuff
 import { consumeRegistrationPrefill } from '../../lib/client/registration-prefill';
 import { registrationDraft } from '../../lib/client/registration-draft';
 import type { PendingRegistration } from '../../lib/client/registration-draft';
+import { accountRoleLabel } from './account-profile-card';
 import { useAccountSession } from './secure-resource';
 import { preserveTargetHash } from './navigation';
 
@@ -217,22 +218,23 @@ export function ProfileForm({ me, actorId, onSaved, onCancel }: { me: Me; actorI
     const [receipt, setReceipt] = useState<Me | null>(null);
     const current = receipt?.profile && (!me.profile || receipt.profile.version >= me.profile.version) ? receipt : me;
     const [pendingBuffer] = useState(() => navigationBuffer(actorId, currentRoute(), 'profile-pending'));
-    const pending = useRef<{ body: Fields & { expectedVersion: number }; key: string } | null>(pendingBuffer.read());
-    const [fields, setFields] = useState<Fields>({ discName: me.profile?.discName ?? '', jerseyNumber: me.profile?.jerseyNumber ?? '' });
+    const pending = useRef<{ body: Fields & { bio?: string; expectedVersion: number }; key: string } | null>(pendingBuffer.read());
+    const [fields, setFields] = useState<Fields & { bio: string }>({ discName: me.profile?.discName ?? '', jerseyNumber: me.profile?.jerseyNumber ?? '', bio: me.profile?.bio ?? '' });
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'edited' | 'conflict'>('idle');
     const editVersion = useRef(0);
     if (!current.user || !current.profile) return null;
-    const matchesCurrent = current.profile.discName === fields.discName.trim() && current.profile.jerseyNumber === fields.jerseyNumber.trim();
+    const matchesCurrent = current.profile.discName === fields.discName.trim() && current.profile.jerseyNumber === fields.jerseyNumber.trim() && (current.profile.bio ?? '') === fields.bio.trim();
     const conflict = saveStatus === 'conflict' || (!matchesCurrent && saveStatus !== 'edited');
     return <form onSubmit={async event => {
         event.preventDefault();
         if (s.busy || s.submitting.current || !current.profile) return;
         const form = event.currentTarget;
         const errors = validate(fields);
+        if (fields.bio.trim().length > 160) { s.setError('简介最多160字。'); return; }
         s.setErrors(errors);
         if (Object.keys(errors).length) { focusError(event.currentTarget, errors); return; }
         const previous = pending.current;
-        const request = previous && previous.body.discName === fields.discName && previous.body.jerseyNumber === fields.jerseyNumber
+        const request = previous && previous.body.discName === fields.discName && previous.body.jerseyNumber === fields.jerseyNumber && previous.body.bio === fields.bio
             ? previous
             : { body: { ...fields, expectedVersion: current.profile.version }, key: '' };
         const body = request.body;
@@ -250,7 +252,7 @@ export function ProfileForm({ me, actorId, onSaved, onCancel }: { me: Me; actorI
             pendingBuffer.clear();
             if (result.me.user?.status !== 'active' || !result.me.profile) { await s.session.verify(); return; }
             setReceipt(result.me);
-            const matches = result.me.profile?.discName === fields.discName.trim() && result.me.profile?.jerseyNumber === fields.jerseyNumber.trim();
+            const matches = result.me.profile?.discName === fields.discName.trim() && result.me.profile?.jerseyNumber === fields.jerseyNumber.trim() && (result.me.profile?.bio ?? '') === fields.bio.trim();
             setSaveStatus(editVersion.current !== submittedVersion ? 'edited' : matches ? 'saved' : 'conflict');
             if (editVersion.current === submittedVersion && matches && onSaved) { clearNavigationRoute(actorId, currentRoute()); onSaved(result.me); }
         } catch (e) {
@@ -264,13 +266,22 @@ export function ProfileForm({ me, actorId, onSaved, onCancel }: { me: Me; actorI
         }
         finally { s.setBusy(false); }
     }}>
-        <ProfileFields fields={fields} errors={s.errors} setFields={next => { editVersion.current += 1; setFields(next); setSaveStatus('edited'); }} />
+        <ProfileFields fields={fields} errors={s.errors} setFields={next => { editVersion.current += 1; setFields(previous => ({ ...previous, ...(typeof next === 'function' ? next(previous) : next) })); setSaveStatus('edited'); }} />
+        <label>简介（选填）<textarea name="bio" maxLength={160} placeholder="最多 160 字" value={fields.bio} onChange={event => {
+            const bio = event.target.value;
+            editVersion.current += 1;
+            setFields(previous => ({ ...previous, bio }));
+            setSaveStatus('edited');
+        }} /></label>
+        <p className="account-editor-role"><span>队内角色</span><strong>{accountRoleLabel(me.membership?.status === 'active' ? me.membership.role : undefined)}</strong><span>（只读）</span></p>
         {s.error && <p className="form-error" role="alert">{s.error}</p>}
-        <button disabled={s.busy}>{s.busy ? '正在保存…' : saveStatus === 'conflict' ? '基于当前资料版本保存输入' : '保存资料'}</button>
-        {onCancel && <button type="button" className="secondary" disabled={s.busy} onClick={() => { pendingBuffer.clear(); clearNavigationRoute(actorId, currentRoute()); onCancel(); }}>取消修改</button>}
         {saveStatus === 'saved' && matchesCurrent && <p className="notice success" role="status">资料已保存到账号。</p>}
         {saveStatus === 'edited' && !s.busy && <p className="muted" role="status">有尚未保存的修改。</p>}
+        {conflict && <p className="notice" role="status">上方输入与当前账号资料不同，仍未保存；当前账号资料为 {current.profile.discName} / {current.profile.jerseyNumber}；简介：{current.profile.bio || '（未填写）'}。请核对后再保存。</p>}
         {saveStatus === 'conflict' && <button type="button" className="secondary" disabled={s.busy} onClick={() => void s.session.verify()}>重新载入当前资料（保留输入）</button>}
-        {conflict && <p className="notice" role="status">上方输入与当前账号资料不同，仍未保存；当前账号资料为 {current.profile.discName} / {current.profile.jerseyNumber}。请核对后再保存。</p>}
+        <div className="account-editor-actions">
+            {onCancel && <button type="button" className="secondary" disabled={s.busy} onClick={() => { pendingBuffer.clear(); clearNavigationRoute(actorId, currentRoute()); onCancel(); }}>取消修改</button>}
+            <button type="submit" disabled={s.busy}>{s.busy ? '正在保存…' : saveStatus === 'conflict' ? '基于当前资料版本保存输入' : '保存资料'}</button>
+        </div>
     </form>;
 }

@@ -9,6 +9,8 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    "public/vendor/kapok-player/**",
+    "vendor/kapok-player/**",
     "out/**",
     "build/**/*",
     "!build/staging-worker.ts",

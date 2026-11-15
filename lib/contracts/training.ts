@@ -1,3 +1,5 @@
+import type { LearningSourceKind, LearningSourceRef } from './reflections';
+
 export type Training = {
     id: string;
     title: string;
@@ -11,7 +13,7 @@ export type Video = {
     id: string;
     trainingId: string;
     title: string;
-    source: 'bilibili' | 'upload';
+    source: 'bilibili' | 'youtube' | 'upload';
     url: string | null;
     position: number;
     status: string;
@@ -42,7 +44,7 @@ export type Comment = {
 };
 export type Collection = {
     id: string;
-    sourceKind: 'video' | 'comment' | 'reflection';
+    sourceKind: 'video' | 'comment' | 'reflection' | LearningSourceKind;
     sourceId: string;
     timestampSec: number | null;
     privateNote: string;
@@ -57,6 +59,7 @@ export type Collection = {
 
 export type CollectionReflectionSeed = {
     text: string;
+    sourceRef?: LearningSourceRef | null;
     trainingId: string | null;
     videoId: string | null;
 };

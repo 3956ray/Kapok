@@ -88,6 +88,9 @@ test('video workspace keeps media, secondary actions and threads in the scroll r
         const scroll = document.querySelector('.video-discussion-scroll');
         assert.deepEqual([...scroll.querySelector('.video-content').children].map(node => node.className),
             ['video-stage', 'video-actions', 'video-detail-header', 'video-discussion-list']);
+        assert.equal(scroll.querySelector('iframe'), null);
+        assert.equal(scroll.querySelector('.training-stage-identity'), null);
+        await click(button('载入 B 站视频', scroll));
         assert.equal(scroll.querySelector('iframe').dataset.kapokPlayer, 'bilibili');
         assert.equal(scroll.querySelector('.video-reflection-link').getAttribute('href'), '/reflections/new?training=t&video=v');
         assert.equal(scroll.querySelector('.video-detail-header a').getAttribute('href'), '/trainings/t');

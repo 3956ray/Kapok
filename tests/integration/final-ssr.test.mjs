@@ -81,7 +81,7 @@ sitesTest('B route shells retain the main landmark and show workspace navigation
     const routes = [
         ['', true], ['trainings', true], ['trainings/[id]', true], ['videos/[id]', true], ['growth', true],
         ['reflections/new', true], ['reflections/[id]', true], ['reflections/[id]/edit', true], ['reflections/[id]/sharing', true],
-        ['me', true], ['me/edit', false], ['me/data', true], ['me/recycle', true], ['members', true], ['members/[id]', true],
+        ['me', true], ['me/edit', true], ['me/data', true], ['me/recycle', true], ['members', true], ['members/[id]', true],
         ['activity', true], ['announcements/[id]', true], ['admin/announcements', false], ['admin/members', false],
         ['login', false],
     ];
@@ -161,7 +161,7 @@ test('V2 account and detail shells opt in to compose only for active members', a
                 for (const [i, Page] of pages.entries()) {
                     const stream = await renderToReadableStream(await Page({ params: Promise.resolve({ id: 'resource' }) }));
                     const html = await new Response(stream).text();
-                    assert.equal(html.includes('class="workspace-compose"'), status === 'active' && i < 5, routes[i]);
+                    assert.equal(html.includes('class="workspace-compose"'), status === 'active' && i < 6, routes[i]);
                     if (status === 'active' && i > 5) {
                         assert.match(html, /此页面仅管理员可访问/);
                         assert.doesNotMatch(html, /data-kapok-sensitive|<form/);
@@ -225,12 +225,12 @@ sitesTest('training management SSR denies direct member access and fixes the adm
         assert.match(denied, /此页面仅管理员可访问/);
         assert.doesNotMatch(denied, /data-kapok-sensitive/);
         const ordinary = await ssr(await TrainingPage({ params, searchParams: Promise.resolve({ view: ['member', 'member'] }) }));
-        assert.match(ordinary, /class="app-shell with-nav" data-surface="detail"/);
+        assert.match(ordinary, /class="app-shell with-nav video-workspace" data-surface="video"/);
         assert.match(ordinary, /data-kapok-sensitive/);
         assert.doesNotMatch(ordinary, /返回训练管理/);
         setServerMe(me);
         const preview = await ssr(await TrainingPage({ params, searchParams: Promise.resolve({ view: 'member' }) }));
-        assert.match(preview, /class="app-shell with-nav" data-surface="detail"/);
-        assert.match(preview, /href="\/admin\/trainings\/t">返回训练管理/);
+        assert.match(preview, /class="app-shell with-nav video-workspace" data-surface="video"/);
+        assert.match(preview, /href="\/admin\/trainings\/t" class="back-link video-back"/);
     } finally { setServerMe(undefined); }
 });

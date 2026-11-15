@@ -24,7 +24,7 @@ async function fixture(t, persistent = false) {
   const make = () => new Miniflare({ modules: true, script: 'export default { fetch() { return new Response("test"); } }', compatibilityDate: '2026-05-22', d1Databases: ['DB'], ...(persistent ? { d1Persist: directory } : {}) });
   let mf = make();
   let db = await mf.getD1Database('DB');
-  for (const file of ['0000_identity.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql']) await migrate(db, file);
+  for (const file of ['0000_identity.sql', '0011_profile_bio.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql']) await migrate(db, file);
   let service = createService({ db, clock: now, bootstrapSiteUserId: owner.subject });
   t.after(async () => { await mf.dispose(); await rm(directory, { recursive: true, force: true }); });
   return { get db() { return db; }, get service() { return service; }, async restart() { await mf.dispose(); mf = make(); db = await mf.getD1Database('DB'); service = createService({ db, clock: now, bootstrapSiteUserId: owner.subject }); } };
@@ -98,10 +98,18 @@ test('profile updates belong only to authenticated actor; version/role/owner spo
   const { f, token } = await seeded(t);
   await f.service.join(alice, { ...profile, token }, 'join');
   const before = await f.service.me(owner);
+  const ownBefore = await f.service.me(alice);
+  for (const [index, jerseyNumber] of ['', '   ', '12345'].entries()) {
+    await rejectsCode(f.service.updateProfile(alice, { discName: 'Must not persist', jerseyNumber, bio: 'Must not persist', expectedVersion: 1 }, 'invalid-jersey-' + index), 'INVALID_INPUT');
+    assert.deepEqual(await f.service.me(alice), ownBefore);
+  }
   await rejectsCode(f.service.updateProfile(alice, { discName: '伪造', jerseyNumber: '10', expectedVersion: 1, userId: before.user.id }, 'spoof'), 'INVALID_INPUT');
   await rejectsCode(f.service.join(bob, { ...profile, token, role: 'admin' }, 'role'), 'INVALID_INPUT');
-  const changed = await f.service.updateProfile(alice, { discName: '新盘名', jerseyNumber: '07', expectedVersion: 1 }, 'edit');
+  const changed = await f.service.updateProfile(alice, { discName: '新盘名', jerseyNumber: '07', bio: '  Synthetic bio  ', expectedVersion: 1 }, 'edit');
   assert.equal(changed.me.profile.version, 2);
+  assert.equal(changed.me.profile.bio, 'Synthetic bio');
+  await rejectsCode(f.service.updateProfile(alice, { discName: 'name', jerseyNumber: '07', bio: 'x'.repeat(161), expectedVersion: 2 }, 'longbio'), 'INVALID_INPUT');
+  await rejectsCode(f.service.updateProfile(alice, { discName: 'name', jerseyNumber: '07', role: 'admin', expectedVersion: 2 }, 'rolepatch'), 'INVALID_INPUT');
   await rejectsCode(f.service.updateProfile(alice, { discName: '旧写入', jerseyNumber: '07', expectedVersion: 1 }, 'stale'), 'VERSION_CONFLICT');
   assert.deepEqual(await f.service.me(owner), before);
 });
@@ -246,6 +254,7 @@ test('forward migration preserves an existing Sites binding and foreign key chec
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
   await migrate(db, '0000_identity.sql');
+  await migrate(db, '0011_profile_bio.sql');
   await db.prepare("INSERT INTO users (id,created_at) VALUES ('existing-id','synthetic-time')").run();
   await db.prepare("INSERT INTO auth_identities VALUES ('existing-binding','site',?,'existing-id')").bind(owner.subject).run();
   await migrate(db, '0006_identity_namespace.sql');
@@ -287,7 +296,7 @@ test('Access pre-membership HTTP surface only exposes own minimal state and reje
   await f.db.batch([
     f.db.prepare("INSERT INTO users (id,created_at) VALUES (?,'synthetic-time')").bind(id),
     f.db.prepare("INSERT INTO auth_identities VALUES ('access-binding','access',?,?,?)").bind(principal.issuer, principal.subject, id),
-    f.db.prepare("INSERT INTO profiles VALUES (?,'合成 Access', '08', 1)").bind(id),
+    f.db.prepare("INSERT INTO profiles (user_id,disc_name,jersey_number,version) VALUES (?,'合成 Access', '08', 1)").bind(id),
     f.db.prepare("INSERT INTO memberships (id,team_id,user_id,role,status,epoch,joined_at) VALUES ('access-member','kapok',?,'member','active',1,'synthetic-time')").bind(id),
   ]);
   const active = (await (await endpoint('bootstrap')).json()).data.me;

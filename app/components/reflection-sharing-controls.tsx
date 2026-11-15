@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { LockKeyhole, UsersRound } from 'lucide-react';
 import type { ReflectionAuthor } from '../../lib/contracts/reflections';
@@ -35,10 +36,11 @@ export function ReflectionSharingControls({ actorId, reflection: r, authorize, i
     const [buffer, setBuffer] = useNavigationField<Buffer>(actorId, 'sharing-control:' + r.id, { base: stamp(r), scope: r.scope, pending: null });
     const [intent, setIntent] = useState<Intent | null>(null);
     const [busy, setBusy] = useState(false);
-    const [feedback, setFeedback] = useState<{ text: string; error?: boolean; success?: boolean } | null>(null);
+    const [feedback, setFeedback] = useState<{ text: string; error?: boolean; success?: boolean; viewActivity?: boolean } | null>(null);
     const [copyFeedback, setCopyFeedback] = useState('');
     const surface = useRef<HTMLElement>(null);
     const title = useRef<HTMLHeadingElement>(null);
+    const publication = useRef<HTMLButtonElement>(null);
     const reconcile = useRef<HTMLButtonElement>(null);
     const completionFocus = useRef<HTMLButtonElement | null>(null);
     const dialog = useRef<HTMLDialogElement>(null);
@@ -52,6 +54,7 @@ export function ReflectionSharingControls({ actorId, reflection: r, authorize, i
     const scopeId = useId();
     const titleId = useId();
     const descriptionId = useId();
+    const publicationDescriptionId = useId();
     const scope = buffer.base === stamp(r) || buffer.pending ? buffer.scope : r.scope;
     const dirty = scope !== r.scope;
     const invalid = r.scope === 'private' && r.published;
@@ -117,6 +120,7 @@ export function ReflectionSharingControls({ actorId, reflection: r, authorize, i
         let sent = !!pending || operation.refused === true;
         let receipt: ReflectionAuthor | null = null;
         let refused = operation.refused === true;
+        let focusAfter = original;
         setFeedback({ text: pending ? '正在核对上次操作，请稍候' : operation.intent === 'publish' ? '正在发布…' : operation.intent === 'withdraw' ? '正在撤回动态…' : '正在更新阅读范围…' });
         try {
             const token = await authorize();
@@ -140,14 +144,15 @@ export function ReflectionSharingControls({ actorId, reflection: r, authorize, i
                 setFeedback({ text: '分享状态已变化，请核对后重新选择', error: true });
             } else {
                 synchronize(fresh);
-                setFeedback({ text: content[operation.intent].success, success: true });
+                setFeedback({ text: content[operation.intent].success, success: true, viewActivity: operation.intent === 'publish' });
+                if (operation.intent === 'team') focusAfter = publication.current;
             }
         } catch {
             if (!current.signal.aborted) setFeedback({ text: sent ? '暂未确认操作结果。你的选择仍保留，请重试核对。' : '尚未确认账号与权限，请重新确认后操作。', error: true });
         } finally {
             flight.current = false;
             dialog.current?.close();
-            if (!current.signal.aborted) completionFocus.current = original;
+            if (!current.signal.aborted) completionFocus.current = focusAfter;
             if (controller.current === current) controller.current = null;
             setIntent(null);
             setBusy(false);
@@ -172,19 +177,21 @@ export function ReflectionSharingControls({ actorId, reflection: r, authorize, i
             <fieldset className="scope-choice" disabled={busy || !!pending || invalid}>
                 <legend className="sr-only">谁可以阅读</legend>
                 <label className="permission"><span className="detail-tile"><LockKeyhole size={18} aria-hidden="true" /></span><span>仅自己<small>默认私密，留给自己</small></span><input type="radio" name={scopeId} value="private" checked={scope === 'private'} onChange={() => { writeBuffer({ base: stamp(r), scope: 'private', pending: null }); setFeedback(null); }} /></label>
-                <label className="permission"><span className="detail-tile"><UsersRound size={18} aria-hidden="true" /></span><span>全队<small>现有及未来的有效成员可阅读，并可在你的队内档案中看到</small></span><input type="radio" name={scopeId} value="team" checked={scope === 'team'} onChange={() => { writeBuffer({ base: stamp(r), scope: 'team', pending: null }); setFeedback(null); }} /></label>
+                <label className="permission"><span className="detail-tile"><UsersRound size={18} aria-hidden="true" /></span><span>全队<small>现有及未来的有效成员可阅读，并可在你的队内档案中看到。动态发布需另行确认。</small></span><input type="radio" name={scopeId} value="team" checked={scope === 'team'} onChange={() => { writeBuffer({ base: stamp(r), scope: 'team', pending: null }); setFeedback(null); }} /></label>
             </fieldset>
             {dirty ? <><p>{scope === 'team' ? '仅授权阅读范围，不会发布到动态。' : '收回后，其他队员将无法继续阅读，相关动态也会撤回。'}</p><div className="sharing-actions"><button className={scope === 'private' ? 'secondary danger' : ''} disabled={busy || !!pending || invalid} onClick={e => open(scope, e.currentTarget)}>{scope === 'team' ? '确认全队可读' : '收回阅读权限'}</button><button className="secondary" disabled={busy || !!pending || invalid} onClick={() => { synchronize(r); setFeedback(null); }}>取消修改</button></div></> : <p className="muted">{invalid ? '正在核对分享状态' : '当前阅读范围已生效'}</p>}
         </section>
         <section className="sharing-card">
             <h2>队内动态</h2>
-            <p>{invalid ? '正在核对分享状态' : r.scope === 'private' ? '全队可读后，你可以另行发布到队内动态。' : r.published ? '撤回后，全队仍可通过已有链接和队内档案阅读。' : '全队可通过阅读链接和你的队内档案查看。发布后才会进入首页和队内动态。'}</p>
+            <p id={publicationDescriptionId}>{invalid ? '正在核对分享状态' : r.scope === 'private' ? '全队可读后，你可以另行发布到队内动态。' : r.published ? '撤回后，全队仍可通过已有链接和队内档案阅读。' : '全队已可阅读，尚未发布。确认发布后，这篇复盘会出现在首页和队内动态。'}</p>
             {dirty && <p className="muted">请先确认或取消阅读范围修改</p>}
-            <button className={r.published ? 'secondary' : ''} disabled={busy || !!pending || invalid || dirty || r.scope !== 'team'} onClick={e => open(r.published ? 'withdraw' : 'publish', e.currentTarget)}>{r.published ? '撤回动态' : '发布到动态'}</button>
+            <button ref={publication} aria-describedby={publicationDescriptionId} className={r.published ? 'secondary' : ''} disabled={busy || !!pending || invalid || dirty || r.scope !== 'team'} onClick={e => open(r.published ? 'withdraw' : 'publish', e.currentTarget)}>{r.published ? '撤回动态' : '发布到动态'}</button>
         </section>
         {pending && <p><button ref={reconcile} className="secondary" disabled={busy} onClick={e => void run(pending, e.currentTarget)}>核对结果</button></p>}
         {invalid && <p><button className="secondary" disabled={busy} onClick={() => void refresh()}>核对分享状态</button></p>}
-        {feedback && <p role={feedback.error ? 'alert' : 'status'} aria-live={feedback.error ? undefined : 'polite'} className={`notice ${feedback.error ? 'error' : feedback.success ? 'success' : ''}`}>{feedback.text}</p>}
+        {feedback && <p role={feedback.error ? 'alert' : 'status'} aria-live={feedback.error ? undefined : 'polite'} className={`notice ${feedback.error ? 'error' : feedback.success ? 'success' : ''}`}>
+            {feedback.text}{feedback.viewActivity && r.published && <> <Link href="/activity" className="underline">查看动态</Link></>}
+        </p>}
         <p><button className="secondary" disabled={busy} onClick={async () => { setCopyFeedback('正在复制阅读链接…'); try { const token = await authorize(); await navigator.clipboard.writeText(window.location.origin + '/reflections/' + r.id); if (isCurrent(token)) setCopyFeedback('阅读链接已复制。'); } catch { setCopyFeedback('未能复制，请使用浏览器地址栏复制阅读页地址。'); } }}>复制阅读链接</button><small className="sharing-link-note">链接不会改变阅读范围</small></p>
         {copyFeedback && <p role={copyFeedback.startsWith('未能') ? 'alert' : 'status'} aria-live="polite">{copyFeedback}</p>}
         <dialog ref={dialog} className="sharing-dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={e => { e.preventDefault(); closeDialog(); }} onKeyDown={e => { if (e.key === 'Tab') { const nodes = [cancel.current, dialog.current?.querySelector<HTMLButtonElement>('[data-confirm]')].filter((node): node is HTMLButtonElement => !!node && !node.disabled); if (!nodes.length) { e.preventDefault(); return; } if (e.shiftKey && document.activeElement === nodes[0]) { e.preventDefault(); nodes[nodes.length - 1].focus(); } else if (!e.shiftKey && document.activeElement === nodes[nodes.length - 1]) { e.preventDefault(); nodes[0].focus(); } } }}>

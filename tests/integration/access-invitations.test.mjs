@@ -31,6 +31,7 @@ async function fixture(t, stopAt) {
     if (stopAt && file >= stopAt) break;
     await migrate(file);
   }
+  if (stopAt && stopAt <= '0011_profile_bio.sql') await migrate('0011_profile_bio.sql');
   const make = (binding = db, config = ' OWNER@example.test ') => createService({ db: binding, accessInitialAdminEmail: config });
   const service = make();
   const count = async table => (await db.prepare('SELECT count(*) AS n FROM ' + table).first()).n;

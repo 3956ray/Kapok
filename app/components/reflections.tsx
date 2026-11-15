@@ -6,7 +6,8 @@ import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useSt
 import { CalendarDays, ChevronRight, LockKeyhole, Pencil, UsersRound } from 'lucide-react';
 import type { Training, Video, CollectionReflectionSeed } from '../../lib/contracts/training';
 import type { BootstrapStatus } from '../../lib/contracts';
-import type { Reflection, ReflectionAuthor } from '../../lib/contracts/reflections';
+import { isLearningSourceId, isLearningSourceKind, isLearningSourceRef, learningReflectionHref,
+    type LearningSourceKind, type Reflection, type ReflectionAuthor } from '../../lib/contracts/reflections';
 import { transferNavigationSource } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { prepareDraftRequest, reconcileDraft, revision } from '../../lib/client/reflection-draft';
@@ -22,8 +23,8 @@ const versions = (r: ReflectionAuthor) => ({
     expectedGeneration: r.generation
 });
 const errorMessage = (e: unknown) => e instanceof Error ? e.message : '未能保存，请保留内容重试。';
-type RecoveredCollectionDraft = { localDraft: Draft };
-function readCollectionDraftForRecovery(storageKey: string): Draft | null {
+type RecoveredSeedDraft = { localDraft: Draft };
+function readLocalDraft(storageKey: string): Draft | null {
     const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const local = JSON.parse(raw) as Draft;
@@ -31,15 +32,17 @@ function readCollectionDraftForRecovery(storageKey: string): Draft | null {
     const validFields = (value: { title?: unknown; text?: unknown; date?: unknown } | null) => value &&
         typeof value.title === 'string' && value.title.length <= 60 && typeof value.text === 'string' && value.text.length <= 5000 &&
         typeof value.date === 'string' && (value.date === '' || /^\d{4}-\d{2}-\d{2}$/.test(value.date));
+    const validSource = (value: Pick<Draft, 'sourceRef'> & { trainingId?: string | null; videoId?: string | null }) =>
+        value.sourceRef === undefined || value.sourceRef === null || (isLearningSourceRef(value.sourceRef) && !value.trainingId && !value.videoId);
     const validVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 1;
-    if (!local || local.schema !== 1 || !validFields(local) || typeof local.updatedAt !== 'string' ||
+    if (!local || local.schema !== 1 || !validFields(local) || typeof local.updatedAt !== 'string' || !validSource(local) ||
         !(local.trainingId === '' || validId(local.trainingId)) || !(local.videoId === '' || validId(local.videoId))) return null;
     if (local.cloud !== null && (!local.cloud || !validId(local.cloud.id) || !validVersion(local.cloud.version) ||
         !validVersion(local.cloud.sharingVersion) || !validVersion(local.cloud.generation))) return null;
     if (local.pending !== null) {
         const pending = local.pending;
         if (!pending || typeof pending.key !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(pending.key) ||
-            pending.targetId !== (local.cloud?.id ?? null) || !validFields(pending.body) ||
+            pending.targetId !== (local.cloud?.id ?? null) || !validFields(pending.body) || !validSource(pending.body) ||
             !(pending.body.trainingId === null || validId(pending.body.trainingId)) || !(pending.body.videoId === null || validId(pending.body.videoId))) return null;
         if (local.cloud && (pending.body.expectedVersion !== local.cloud.version || pending.body.expectedSharingVersion !== local.cloud.sharingVersion || pending.body.expectedGeneration !== local.cloud.generation)) return null;
     }
@@ -50,33 +53,40 @@ export function ReflectionEditor({
     actorId,
     id,
     collectionId,
+    sourceKind,
+    sourceId,
     trainingId = '',
     videoId = ''
 }: {
     actorId: string;
     id?: string;
     collectionId?: string;
+    sourceKind?: LearningSourceKind;
+    sourceId?: string;
     trainingId?: string;
     videoId?: string;
 }) {
     const router = useRouter();
-    const storageKey = draftKey(actorId, id ?? (collectionId ? `collection:${collectionId}` : 'new'));
-    const loadCollection = useCallback(async (_account: BootstrapStatus, signal: AbortSignal): Promise<CollectionReflectionSeed | RecoveredCollectionDraft> => {
+    const seedPath = collectionId ? `collections/${collectionId}/reflection-seed` : sourceKind && sourceId
+        ? `learning/${sourceKind === 'learning_post' ? 'posts' : 'collections'}/${sourceId}/reflection-seed` : null;
+    const storageKey = draftKey(actorId, id ?? (collectionId ? `collection:${collectionId}` : sourceKind && sourceId ? `${sourceKind}:${sourceId}` : 'new'));
+    const loadSeed = useCallback(async (_account: BootstrapStatus, signal: AbortSignal): Promise<CollectionReflectionSeed | RecoveredSeedDraft> => {
         try {
-            return await api<CollectionReflectionSeed>(`collections/${collectionId}/reflection-seed`, undefined, actorId, signal);
+            return await api<CollectionReflectionSeed>(seedPath!, undefined, actorId, signal);
         } catch (e) {
             signal.throwIfAborted();
             if (e instanceof ApiError && e.code === 'NOT_FOUND') {
                 try {
-                    const localDraft = readCollectionDraftForRecovery(storageKey);
-                    if (localDraft) return { localDraft };
-                } catch { /* Unreadable or malformed local storage cannot authorize an empty conversion. */ }
+                    const localDraft = readLocalDraft(storageKey);
+                    if (localDraft) return { localDraft: localDraft.pending || !localDraft.sourceRef
+                        ? localDraft : { ...localDraft, sourceRef: null } };
+                } catch { /* Malformed local storage cannot authorize a conversion. */ }
             }
             throw e;
         }
-    }, [actorId, collectionId, storageKey]);
+    }, [actorId, seedPath, storageKey]);
     // The loader runs between the secure resource's before/after account checks.
-    const secure = useSecureResource<ReflectionAuthor | BootstrapStatus | CollectionReflectionSeed | RecoveredCollectionDraft>(actorId, id ? `reflections/${id}/edit` : collectionId ? loadCollection : 'bootstrap');
+    const secure = useSecureResource<ReflectionAuthor | BootstrapStatus | CollectionReflectionSeed | RecoveredSeedDraft>(actorId, id ? `reflections/${id}/edit` : seedPath ? loadSeed : 'bootstrap');
     const [draft, setDraft] = useState<Draft | null>(null);
     const [status, setStatus] = useState('');
     const [error, setError] = useState('');
@@ -131,8 +141,8 @@ export function ReflectionEditor({
                 initialized.current = true;
                 const saved = id ? secure.data as ReflectionAuthor : null;
                 setBase(saved);
-                const recovered = collectionId && !id && secure.data && 'localDraft' in secure.data ? secure.data.localDraft : null;
-                const seed = collectionId && !id && !recovered ? secure.data as CollectionReflectionSeed : null;
+                const recovered = seedPath && !id && secure.data && 'localDraft' in secure.data ? secure.data.localDraft : null;
+                const seed = seedPath && !id && !recovered ? secure.data as CollectionReflectionSeed : null;
                 let initial: Draft = recovered ?? {
                     schema: 1,
                     pending: null,
@@ -142,22 +152,21 @@ export function ReflectionEditor({
                     date: saved?.date ?? new Date().toISOString().slice(0, 10),
                     trainingId: saved?.trainingId ?? (seed ? seed.trainingId ?? '' : trainingId),
                     videoId: saved?.videoId ?? (seed ? seed.videoId ?? '' : videoId),
+                    ...((saved ?? seed)?.sourceRef !== undefined ? { sourceRef: (saved ?? seed)?.sourceRef } : {}),
                     updatedAt: new Date().toISOString()
                 };
                 let restored = recovered !== null;
                 if (recovered) setStatus(recovered.pending ? '上次云保存结果待确认；将核对上次保存，当前输入仍在本机。' : '已恢复本机草稿 · 仅存此设备，尚未上云');
                 try {
-                    const raw = recovered ? null : localStorage.getItem(storageKey);
-                    if (raw) {
-                        const local = JSON.parse(raw) as Draft;
-                        if (local.schema === 1 && typeof local.text === 'string' && typeof local.title === 'string' && typeof local.date === 'string' && typeof local.trainingId === 'string' && typeof local.videoId === 'string') {
-                            initial = local;
-                            restored = true;
-                            setStatus(local.pending ? '上次云保存结果待确认；将核对上次保存，当前输入仍在本机。' : '已恢复本机草稿 · 仅存此设备，尚未上云');
-                            if (saved && !local.pending && (local.cloud?.version !== saved.version || local.cloud.sharingVersion !== saved.sharingVersion || local.cloud.generation !== saved.generation)) {
-                                setCloudConflict(saved);
-                                setError('云端记录已变化。本机稿仍保留，请先对照当前云端记录；可保留本机输入并基于当前云端版本继续，或放弃本机稿。');
-                            }
+                    const local = recovered ? null : readLocalDraft(storageKey);
+                    if (local) {
+                        // A fresh seed without a source can still recover the owner's text.
+                        initial = seed && !seed.sourceRef && local.sourceRef && !local.pending ? { ...local, sourceRef: null } : local;
+                        restored = true;
+                        setStatus(local.pending ? '上次云保存结果待确认；将核对上次保存，当前输入仍在本机。' : '已恢复本机草稿 · 仅存此设备，尚未上云');
+                        if (saved && !local.pending && (local.cloud?.version !== saved.version || local.cloud.sharingVersion !== saved.sharingVersion || local.cloud.generation !== saved.generation)) {
+                            setCloudConflict(saved);
+                            setError('云端记录已变化。本机稿仍保留，请先对照当前云端记录；可保留本机输入并基于当前云端版本继续，或放弃本机稿。');
                         }
                     } else if (!recovered) setStatus(saved ? '已保存到账号；修改后需再次保存。' : '输入后仅保存到本机，正式保存后才会上云。');
                 } catch {
@@ -174,9 +183,9 @@ export function ReflectionEditor({
                 mounted = false;
             };
         },
-        [secure.data, secure.locked, id, collectionId, storageKey, trainingId, videoId]
+        [secure.data, secure.locked, id, seedPath, storageKey, trainingId, videoId]
     );
-    function change(field: keyof Draft, value: string) {
+    function change(field: 'title' | 'text' | 'date' | 'videoId' | 'sourceRef', value: string | null) {
         if (!draft || secure.locked) return;
         const latest = {
             ...draft,
@@ -287,8 +296,10 @@ export function ReflectionEditor({
             }}>
 
                 <p className="privacy-line"><LockKeyhole size={16} aria-hidden="true" />{needsConfirmation ? '保存前需确认收回分享' : '保存后仅自己可读'}</p>
-                {collectionId && <p className="notice">{secure.data && 'localDraft' in secure.data ? '原收藏当前不可用，已恢复此设备上的独立草稿；复盘仍需明确保存，默认仅自己可见。' : '从本人已保存的私人备注开始，关联仅在来源仍可访问时带入。原收藏会保留；这份复盘需明确保存到账号，保存后默认仅自己可见。'}</p>}
+                {collectionId && <p className="notice">{secure.data && 'localDraft' in secure.data ? '原收藏当前不可用，已恢复本机草稿。保存后仅自己可见。' : '从本人已保存的私人备注开始，关联仅在来源仍可访问时带入。原收藏会保留；这份复盘需明确保存到账号，保存后默认仅自己可见。'}</p>}
 
+                {sourceKind && !collectionId && <p className="notice">{secure.data && 'localDraft' in secure.data
+                    ? '学习来源当前不可用，已恢复本机草稿。' : '添加自己的复盘内容，保存后仅自己可见。'}</p>}
                 <label className="reflection-title-field"><span className="sr-only">标题（可选，最多60字）</span>
                     <input value={draft.title} placeholder="标题（选填）" maxLength={60} onChange={e => change('title', e.target.value)} />
                 </label>
@@ -309,7 +320,7 @@ export function ReflectionEditor({
 
                 <details className="reflection-fields">
 
-                    <summary><CalendarDays size={16} aria-hidden="true" />日期与关联 <span className="muted">{draft.videoId ? '已关联视频' : draft.trainingId ? '已关联训练' : '未关联训练'}</span></summary>
+                    <summary><CalendarDays size={16} aria-hidden="true" />日期与关联 <span className="muted">{draft.sourceRef ? '已关联学习来源' : draft.videoId ? '已关联视频' : draft.trainingId ? '已关联训练' : '未关联来源'}</span></summary>
                     <label>记录日期
                         <input type="date" required value={draft.date} onChange={e => change('date', e.target.value)} onInvalid={e => {
                             const details = e.currentTarget.closest('details');
@@ -317,6 +328,8 @@ export function ReflectionEditor({
                         }} />
                     </label>
 
+                    {draft.sourceRef ? <button type="button" className="secondary" disabled={busy || draft.pending !== null}
+                        onClick={() => change('sourceRef', null)}>移除学习来源关联</button> : <>
                     <button
                         type="button"
                         className="secondary"
@@ -389,6 +402,7 @@ export function ReflectionEditor({
                         </select>
                     </label>}
 
+                    </>}
                 </details>
 
                 {cloudConflict && <section className="notice">
@@ -409,7 +423,9 @@ export function ReflectionEditor({
                             const latest = {
                                 ...draft,
                                 pending: null,
-                                cloud: revision(cloudConflict)
+                                cloud: revision(cloudConflict),
+                                ...(!draft.trainingId && draft.sourceRef === undefined && cloudConflict.sourceRef
+                                    ? { sourceRef: cloudConflict.sourceRef } : {})
                             };
                             latestDraft.current = latest;
                             setDraft(latest);
@@ -561,7 +577,7 @@ function AuthorActions({
     return <section className="section reflection-author-actions" aria-label="本人记录操作">
         <div className="actions">
             <Link className="button secondary" href={`/reflections/${r.id}/edit`}><Pencil size={16} aria-hidden="true" />编辑记录</Link>
-            <Link className="button" href={`/reflections/${r.id}/sharing`}>管理分享与发布</Link>
+            <Link className="button" href={`/reflections/${r.id}/sharing`}>{r.scope === 'team' && !r.published ? '发布到队内动态' : '管理分享与发布'}</Link>
         </div>
         <div className="actions">
             <button
@@ -647,8 +663,13 @@ export function LocalDrafts({
                         const draft = JSON.parse(localStorage.getItem(key) ?? '{}') as Draft;
                         if (!draft.text?.trim()) continue;
                         const id = decodeURIComponent(key.slice(prefix.length));
+                        const [kind, sourceId] = id.split(':');
+                        const href = id === 'new' ? '/reflections/new' : kind === 'collection' && isLearningSourceId(sourceId)
+                            ? `/reflections/new?collection=${encodeURIComponent(sourceId)}`
+                            : isLearningSourceKind(kind) && isLearningSourceId(sourceId)
+                                ? learningReflectionHref(kind, sourceId) : `/reflections/${encodeURIComponent(id)}/edit`;
                         found.push({
-                            href: id === 'new' ? '/reflections/new' : id.startsWith('collection:') ? `/reflections/new?collection=${encodeURIComponent(id.slice('collection:'.length))}` : `/reflections/${encodeURIComponent(id)}/edit`,
+                            href,
                             updatedAt: draft.updatedAt
                         });
                     }

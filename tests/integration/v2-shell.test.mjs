@@ -68,14 +68,14 @@ function setup(t, path, resources = {}) {
     return { data, calls, render };
 }
 
-test('V2 shell preserves four mobile roots and selects a single desktop destination, even when collapsed', async t => {
+test('V2 shell preserves five mobile destinations and selects a single desktop destination, even when collapsed', async t => {
     const { render } = setup(t, '/home');
     const shell = key => h(Shell, { title: '训练', key, canCompose: true }, '内容');
     const current = nav => query(nav + ' [aria-current=page]')?.getAttribute('href');
     await render(shell('home'));
     assert.equal(query('.topbar').textContent, 'Kapok. / 队伍工作区');
     assert.equal(query('.topbar-account').getAttribute('href'), '/me');
-    assert.deepEqual([...rootNode.querySelectorAll('.bottom-nav a')].map(a => a.getAttribute('href')), ['/', '/trainings', '/growth', '/me']);
+    assert.deepEqual([...rootNode.querySelectorAll('.bottom-nav a')].map(a => a.getAttribute('href')), ['/', '/trainings', '/reflections/new', '/growth', '/me']);
     assert.equal(current('.bottom-nav'), '/');
     assert.equal(current('.workspace-sidebar'), '/');
     const toggle = query('.workspace-toggle');
@@ -86,14 +86,14 @@ test('V2 shell preserves four mobile roots and selects a single desktop destinat
     assert.equal(toggle.getAttribute('aria-label'), '展开侧栏');
     assert.equal(document.activeElement, toggle);
     assert.equal(query('.workspace-sidebar').dataset.collapsed, 'true');
-    assert.equal(query('.workspace-nav a[href="/"]').getAttribute('aria-label'), '总览');
+    assert.equal(query('.workspace-nav a[href="/"]').getAttribute('aria-label'), '首页');
     for (const [path, mobile, desktop] of [
         ['/videos/v', '/trainings', '/trainings'],
         ['/reflections/r', '/growth', '/growth'],
-        ['/reflections/new', '/growth', '/growth'],
+        ['/reflections/new', '/reflections/new', '/growth'],
         ['/reflections/r/edit', '/growth', '/growth'],
         ['/reflections/r/sharing', '/growth', '/growth'],
-        ['/members/p', '/', '/members'],
+        ['/members/p', '/', '/'],
         ['/announcements/a', '/', '/activity'],
         ['/me/data', '/me', '/me'],
     ]) {
@@ -309,4 +309,41 @@ test('V2 navigation stylesheet retains 44px targets, desktop widths, focus and r
     assert.match(css, /\.workspace-sidebar :focus-visible/);
     assert.match(css, /@media\(prefers-reduced-motion:reduce\)[^\n]*transition:none !important/);
     assert.match(css, /\[hidden\] \{ display:none !important/);
+});
+
+
+test('V07 sidebar refresh restores device preference, invalid or blocked storage stays usable', async t => {
+    const { render } = setup(t, '/home');
+    const { WorkspaceSidebar: First } = await import('../../app/components/navigation.tsx?sidebar-first');
+    await render(h(First, { canCompose: true }));
+    assert.equal(query('.workspace-sidebar').dataset.collapsed, 'false');
+    await act(async () => query('.workspace-toggle').click());
+    assert.equal(localStorage.getItem('kapok:sidebar-collapsed'), 'true');
+    await render(null);
+    // A fresh module models a page reload: no prior in-memory collapsed state survives.
+    const { WorkspaceSidebar: Reloaded } = await import('../../app/components/navigation.tsx?sidebar-reloaded');
+    const { renderToString } = await import('react-dom/server');
+    const serverMarkup = renderToString(h(Reloaded, { canCompose: true }));
+    assert.match(serverMarkup, /data-collapsed="false"/);
+    await render(h(Reloaded, { canCompose: true }));
+    assert.equal(query('.workspace-sidebar').dataset.collapsed, 'true');
+    assert.equal(query('.workspace-toggle').getAttribute('aria-expanded'), 'false');
+    await act(async () => query('.workspace-toggle').click());
+    assert.equal(localStorage.getItem('kapok:sidebar-collapsed'), 'false');
+    await render(null);
+    localStorage.setItem('kapok:sidebar-collapsed', 'malformed');
+    const { WorkspaceSidebar: Invalid } = await import('../../app/components/navigation.tsx?sidebar-invalid');
+    await render(h(Invalid, { canCompose: false }));
+    assert.equal(query('.workspace-sidebar').dataset.collapsed, 'false');
+    await render(null);
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
+    try {
+        const { WorkspaceSidebar: Blocked } = await import('../../app/components/navigation.tsx?sidebar-blocked');
+        await render(h(Blocked, { canCompose: false }));
+        assert.equal(query('.workspace-sidebar').dataset.collapsed, 'false');
+        await act(async () => query('.workspace-toggle').click());
+        assert.equal(query('.workspace-sidebar').dataset.collapsed, 'true');
+        assert.ok(query('.workspace-nav a[href="/trainings"]'));
+    } finally { Object.defineProperty(window, 'localStorage', descriptor); }
 });

@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useCallback, useRef, useState } from 'react';
-import { ChevronRight, Megaphone, NotebookPen, Video } from 'lucide-react';
-import type { ActivityPage, Announcement, PublicMember, PublicProfile } from '../../lib/contracts/reflections';
+import { BookOpen, ChevronRight, Megaphone, NotebookPen, Video } from 'lucide-react';
+import type { ActivityItem, ActivityPage, Announcement, PublicMember, PublicProfile } from '../../lib/contracts/reflections';
 import { acknowledgeMutation, clearFormUI, navigationBuffer, currentRoute, useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { SecureStatus, useSecureResource } from './secure-resource';
@@ -36,7 +36,7 @@ export function MemberDirectory({
                 <section className="panel account-profile">
                     <p className="workspace-overline">队内资料</p>
                     <ProfileSummary name={profile.discName} number={profile.jerseyNumber} role={profile.role === 'coach' ? '教练' : profile.role === 'admin' ? '管理员' : '队员'} large />
-                </section>
+                <p>{profile.bio}</p></section>
                 <section className="section" aria-labelledby="member-shared-reflections">
                     <div className="account-card-heading"><h2 id="member-shared-reflections">分享给全队的复盘</h2><span className="status-label">全队可读</span></div>
                     <div className="panel member-reflections">
@@ -49,9 +49,27 @@ export function MemberDirectory({
 }
 const activityKinds = {
     reflection: { label: '主动发布的复盘', Icon: NotebookPen },
+    learning: { label: '分享的学习资料', Icon: BookOpen },
     video: { label: '新视频', Icon: Video },
     announcement: { label: '队伍公告', Icon: Megaphone },
 };
+
+async function refreshLearningItems(items: ActivityItem[], actorId: string, signal?: AbortSignal) {
+    const ids = [...new Set(items.filter(item => item.kind === 'learning').map(item => item.id.slice('learning:'.length)))];
+    if (!ids.length) return items;
+    const lookups: Promise<Extract<ActivityItem, { kind: 'learning' }>[]>[] = [];
+    for (let start = 0; start < ids.length; start += 100) {
+        lookups.push(api('activity/learning?ids=' + ids.slice(start, start + 100).join(','), undefined, actorId, signal));
+    }
+    const current = new Map((await Promise.all(lookups)).flat().map(item => [item.id, item]));
+    return items.flatMap<ActivityItem>(item => {
+        if (item.kind !== 'learning') return [item];
+        const latest = current.get(item.id);
+        if (!latest) return [];
+        current.delete(item.id);
+        return [latest];
+    });
+}
 
 export function Activity({
     actorId,
@@ -68,7 +86,7 @@ export function Activity({
             const page: ActivityPage = await api<ActivityPage>('activity?limit=' + (home ? 3 : 20) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), undefined, actorId, signal);
             items.push(...page.items); cursor = page.nextCursor;
         } while (!home && cursor && items.length < count);
-        return { items, nextCursor: cursor };
+        return { items: await refreshLearningItems(items, actorId, signal), nextCursor: cursor };
     }, [actorId, home]);
     const secure = useSecureResource<ActivityPage>(actorId, loadInitial);
     const [pages, setPages] = useState<{
@@ -95,10 +113,11 @@ export function Activity({
                 items.push(...page.items);
                 cursor = page.nextCursor;
             } while (cursor && items.length < requested);
+            const current = await refreshLearningItems(items, actorId);
             await secure.authorize();
-            if (secure.isCurrent(token)) { navigationBuffer(actorId, currentRoute(), 'activity-count').write(Math.min(200, items.length)); setPages({
+            if (secure.isCurrent(token)) { navigationBuffer(actorId, currentRoute(), 'activity-count').write(Math.min(200, current.length)); setPages({
                 source: secure.data,
-                items,
+                items: current,
                 next: cursor
             }); }
         } catch (e) {

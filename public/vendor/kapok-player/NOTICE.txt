@@ -1,0 +1,9 @@
+Kapok YouTube IFrame Player adapter
+Copyright 2026 Kapok contributors.
+
+player-island.js is Kapok source. It contains no third-party library code.
+When the user loads a player, the adapter requests the YouTube IFrame Player
+API from YouTube. The API and embedded player are provided by YouTube.
+
+API documentation: https://developers.google.com/youtube/iframe_api_reference
+YouTube API Services terms: https://developers.google.com/youtube/terms/api-services-terms-of-service

@@ -1,14 +1,18 @@
 'use client';
 import { Fragment, useCallback, useEffect } from 'react';
 import Link from 'next/link';
-import { Bookmark, CalendarDays, ChevronRight, LockKeyhole, Megaphone, Pencil, Play, Sprout, UserRound, UsersRound } from 'lucide-react';
+import { BookOpen, Bookmark, CalendarDays, ChevronRight, LockKeyhole, Megaphone, Pencil, Sprout, Trash2, UsersRound } from 'lucide-react';
 import type { BootstrapStatus, Me } from '../../lib/contracts';
-import type { Training, Video } from '../../lib/contracts/training';
+import type { Training } from '../../lib/contracts/training';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError } from '../../lib/client/api';
+import { AccountProfileCard } from './account-profile-card';
 import { AccountBoundary } from './secure-resource';
+import { HomeFeaturedTopics } from './topic-featured';
+import { manageFeatured } from './topic-paths';
+import { TrainingWatch } from './training-watch';
 import { Activity } from './community';
-import { DateGroup, ProfileSummary } from './presentation';
+import { DateGroup } from './presentation';
 import { LocalDrafts, MyReflections } from './reflections';
 import { JoinForm } from './forms';
 import { registrationDraft } from '../../lib/client/registration-draft';
@@ -76,6 +80,7 @@ export function HomeScreen({ actorId }: { actorId: string }) {
                     {me.membership?.role === 'admin' && <Link className="button secondary" href="/admin/trainings/new">创建训练</Link>}
                 </div>}
             </section>
+            <HomeFeaturedTopics actorId={actorId} />
             <Activity actorId={actorId} home />
         </div>
         <div className="home-rail">
@@ -90,6 +95,7 @@ export function HomeScreen({ actorId }: { actorId: string }) {
             </section>
             <section className="section home-quick-links">
                 <h2>快速访问</h2>
+                <Link className="row-link" href="/learn"><span className="quick-icon"><BookOpen size={18} aria-hidden="true" /></span><span>学习库<small>浏览队友分享的资料与合集</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
                 <Link className="row-link" href="/growth"><span className="quick-icon"><Bookmark size={18} aria-hidden="true" /></span><span>成长记录<small>复盘、收藏与私人备注</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
                 <Link className="row-link" href="/members"><span className="quick-icon"><UsersRound size={18} aria-hidden="true" /></span><span>队伍成员<small>认识一起训练的人</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
             </section>
@@ -112,45 +118,7 @@ export function TrainingsScreen({ actorId }: { actorId: string }) {
     </>}</AccountBoundary>;
 }
 export function TrainingScreen({ actorId, id, memberView = false }: { actorId: string; id: string; memberView?: boolean }) {
-    const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
-        requireMember(account.me, memberView);
-        const training = await api<Training & { videos: Video[] }>('trainings/' + encodeURIComponent(id) + (memberView ? '?view=member' : ''), undefined, actorId, signal);
-        return { me: account.me, training };
-    }, [actorId, id, memberView]);
-    return <AccountBoundary key={id + (memberView ? ':member' : '')} actorId={actorId} load={load}>{({ me, training: t }) => {
-        const admin = me.membership?.role === 'admin';
-        const managementPath = '/admin/trainings/' + t.id;
-        const videos = t.videos.filter(v => v.status === 'active');
-        return <>
-            {memberView && <p className="notice training-preview-banner"><strong>队员视角预览</strong></p>}
-            <section className="panel training-detail">
-                <span className="status-label">{trainingStatus[t.status]}</span>
-                <h2 className="detail-title">{t.title}</h2>
-                <p className="detail-meta"><time dateTime={t.date}>{t.date}</time></p>
-                {t.description && <p className="preserve">{t.description}</p>}
-            </section>
-            {t.status === 'archived' && <p className="notice">已归档。历史视频与讨论仍可回看，不能新增视频或讨论。</p>}
-            <section className="section training-detail-section">
-                <div className="section-heading"><h2>训练视频</h2></div>
-                {videos.length ? videos.map(v => <article className="training-video-row" key={v.id}>
-                    <Link className="detail-row" href={'/videos/' + v.id}>
-                        <span className="detail-tile"><Play size={18} aria-hidden="true" /></span>
-                        <span><strong>{v.title}</strong><small>{v.source === 'upload' ? '私有短片' : 'B站引用'}</small></span>
-                        <ChevronRight size={18} aria-hidden="true" />
-                    </Link>
-                </article>) : <p className="panel">本次训练暂无视频。</p>}
-            </section>
-            {admin && !memberView && <Link className="training-inline" href={managementPath}>管理本次训练 <ChevronRight size={16} aria-hidden="true" /></Link>}
-            <section className="section training-detail-section">
-                <h2>训练之后</h2>
-                <div className="panel training-journal">
-                    <p className="privacy-line"><LockKeyhole size={16} aria-hidden="true" />仅自己可读</p>
-                    <p>今天哪一个瞬间，让你有了新的想法？</p>
-                    <Link className="button" href={`/reflections/new?training=${t.id}`}><Pencil size={16} aria-hidden="true" />写本次训练复盘</Link>
-                </div>
-            </section>
-        </>;
-    }}</AccountBoundary>;
+    return <TrainingWatch actorId={actorId} trainingId={id} memberView={memberView} />;
 }
 export function MyScreen({ actorId }: { actorId: string }) {
     return <AccountBoundary<Me> actorId={actorId} load="me">{me => {
@@ -158,35 +126,46 @@ export function MyScreen({ actorId }: { actorId: string }) {
         const member = me.membership?.status === 'active';
         const admin = member && me.membership?.role === 'admin';
         const links = [
-            ...(member ? [{ href: '/members/' + me.user.id, title: '我的队内档案', detail: '预览队友看到的资料和全队可读复盘', Icon: UserRound }] : []),
-            { href: '/growth', title: '成长记录', detail: '本人复盘、收藏与私人备注', Icon: Sprout },
-            ...(member ? [{ href: '/members', title: '队伍成员', detail: '认识一起训练的人', Icon: UsersRound }] : []),
-            { href: '/me/data', title: '隐私与个人数据', detail: '导出、回收站与退出队伍', Icon: LockKeyhole },
+            { href: '/growth?filter=reflections', title: '我的复盘', detail: '回看训练与资料复盘', Icon: Sprout },
+            { href: '/growth?filter=bookmarks', title: '我的收藏与备注', detail: '查看收藏及私人备注', Icon: Bookmark },
+            { href: '/me/recycle', title: '复盘回收站', detail: '恢复 7 天内删除的复盘', Icon: Trash2 },
+            ...(member ? [{ href: '/learn/mine', title: '我的创作', detail: '管理学习资料、合集和草稿', Icon: BookOpen }] : []),
+        ];
+        const managementLinks = [
+            { href: '/admin/trainings', title: '训练管理', detail: '新建、编辑与归档训练', Icon: CalendarDays },
+            { href: manageFeatured, title: '精选管理', detail: '安排首页展示的合集', Icon: BookOpen },
+            { href: '/admin/members', title: '成员角色与状态', detail: '管理队内访问权限', Icon: UsersRound },
+            { href: '/admin/announcements', title: '公告管理', detail: '编辑草稿与发布公告', Icon: Megaphone },
+        ];
+        const groups = [
+            { id: 'account-records', title: '个人记录', entries: links },
+            ...(admin ? [{ id: 'account-admin', title: '队伍管理', entries: managementLinks }] : []),
         ];
         return <div className="account-layout">
-            <section className="panel account-profile">
-                <p className="workspace-overline">{member ? me.team?.name : '当前不在有效队伍中'}</p>
-                <ProfileSummary name={me.profile.discName} number={me.profile.jerseyNumber} role={member ? admin ? '管理员' : me.membership?.role === 'coach' ? '教练' : '队员' : undefined} large />
-                <Link className="button secondary" href="/me/edit"><Pencil size={16} aria-hidden="true" />编辑资料</Link>
-            </section>
+            <AccountProfileCard profile={{ ...me.profile, role: member ? me.membership?.role : undefined }}>
+                <Link className="button" href="/me/edit"><Pencil size={16} aria-hidden="true" />编辑个人资料</Link>
+                {member && <Link className="button secondary" href="/me/preview">预览队友看到的我</Link>}
+            </AccountProfileCard>
             <div className="account-links">
-                <section aria-labelledby="account-records">
-                    <h2 id="account-records">资料与记录</h2>
-                    <div className="panel">
-                        {links.map(({ href, title, detail, Icon }) => <Link key={href} className="row-link" href={href}>
-                            <span className="quick-icon"><Icon size={17} aria-hidden="true" /></span>
-                            <span>{title}<small>{detail}</small></span><ChevronRight size={17} aria-hidden="true" />
-                        </Link>)}
-                    </div>
-                </section>
-                {admin && <section aria-labelledby="account-admin">
-                    <h2 id="account-admin">队伍管理</h2>
-                    <div className="panel">
-                        <Link className="row-link" href="/admin/trainings"><span className="quick-icon"><CalendarDays size={17} aria-hidden="true" /></span><span>训练管理<small>发布训练与管理视频</small></span><ChevronRight size={17} aria-hidden="true" /></Link>
-                        <Link className="row-link" href="/admin/announcements"><span className="quick-icon"><Megaphone size={17} aria-hidden="true" /></span><span>公告管理<small>编辑草稿与发布公告</small></span><ChevronRight size={17} aria-hidden="true" /></Link>
-                        <Link className="row-link" href="/admin/members"><span className="quick-icon"><UsersRound size={17} aria-hidden="true" /></span><span>成员角色与状态<small>管理队内访问权限</small></span><ChevronRight size={17} aria-hidden="true" /></Link>
-                    </div>
-                </section>}
+                {groups.map(({ id, title, entries }) => <section key={id} aria-labelledby={id}>
+                    <h2 id={id}>{title}</h2>
+                    <ul className="account-link-list" role="list">
+                        {entries.map(({ href, title, detail, Icon }) => <li key={href}>
+                            <Link className="account-row" href={href}>
+                                <span className="quick-icon"><Icon size={17} aria-hidden="true" /></span>
+                                <span><strong>{title}</strong><small>{detail}</small></span>
+                                <ChevronRight size={16} aria-hidden="true" />
+                            </Link>
+                        </li>)}
+                    </ul>
+                </section>)}
+            </div>
+            <div className="account-privacy">
+                <Link className="account-row" href="/me/data">
+                    <span className="quick-icon"><LockKeyhole size={17} aria-hidden="true" /></span>
+                    <strong>隐私与个人数据</strong>
+                    <ChevronRight size={16} aria-hidden="true" />
+                </Link>
             </div>
         </div>;
     }}</AccountBoundary>;

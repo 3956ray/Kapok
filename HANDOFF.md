@@ -1,5 +1,7 @@
 # Kapok 完整交接
 
+> 2026-11-15：学习库与账号更新的当前状态见 [发布记录](docs/RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
+
 站点：[kapok.party](https://kapok.party)。源码：[3956ray/Kapok](https://github.com/3956ray/Kapok)。项目代号 KPK，当前阶段 CP03。线上运行在 Cloudflare Workers 与 D1，使用 Cloudflare Access 邮箱验证码。项目负责人控制部署、真实数据和验收。
 
 ## 接手先做什么
@@ -21,7 +23,7 @@
 | 复盘和分享 | 新记录默认私密。允许队内阅读和发布动态是两个动作。撤回动态不收回阅读，撤权后旧链接不可读。编辑已共享内容并保存会恢复为私密；取消保持原状态。恢复已删除内容保持私密。 | `app/reflections/`、`lib/server/reflections.ts` |
 | 账号、后台 | 使用服务器判定的成员状态与角色。新成员默认普通队员。管理员可管理成员、训练和公告。不可撤掉最后一位有效管理员。导出只含本人有权数据。退出后清理本账号本机草稿和会话状态。 | `app/me/`、`app/admin/`、`lib/server/identity.ts`、`lib/server/data-rights.ts` |
 
-B 站视频使用链接与播放器，不把外部视频写入 D1。训练、视频元数据、讨论、收藏、复盘、成员权限和提交回执都保存在 D1。当前线上发布不绑定 R2。生产认证适配在 `build/staging-worker.ts` 和 `lib/server/access-identity.ts`，API 分发在 `lib/server/http.ts`。公开入口仅为 `/`、`/login`、`/register`。邮箱准入开放后，业务页面仍需有效登录与成员权限。队员可访问队伍内容，私稿及私人备注仍按所有权隔离。
+B 站视频使用链接与播放器，不把外部视频写入 D1。训练、视频元数据、讨论、收藏、复盘、成员权限和提交回执都保存在 D1。当前线上学习图片通过 BUCKET 绑定私有 R2，由应用执行成员/所有权校验。生产认证适配在 `build/staging-worker.ts` 和 `lib/server/access-identity.ts`，API 分发在 `lib/server/http.ts`。公开入口仅为 `/`、`/login`、`/register`。邮箱准入开放后，业务页面仍需有效登录与成员权限。队员可访问队伍内容，私稿及私人备注仍按所有权隔离。
 
 ## 本地浏览器验证
 

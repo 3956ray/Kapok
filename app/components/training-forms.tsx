@@ -10,6 +10,7 @@ import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { cancelUploadReservation } from '../../lib/client/upload.ts';
 import { MEDIA_PART_BYTES } from '../../lib/contracts/media.ts';
 import type { UploadPage } from '../../lib/contracts/media';
+import { parseYouTubeSource } from '../../lib/video-source';
 import { useAccountSession } from './secure-resource';
 const statusEffects: Record<string, string> = {
     published: '发布后有效队员可阅读与讨论。',
@@ -28,7 +29,7 @@ type FieldError = { field?: string; text: string };
 function videoLinkError(e: unknown, field: string): FieldError {
     const text = message(e);
     const invalidLink = e instanceof ApiError && (['DUPLICATE', 'UPSTREAM_UNAVAILABLE'].includes(e.code) ||
-        (e.code === 'INVALID_INPUT' && /B\s*站|BV|短链|分P|链接/.test(text)));
+        (e.code === 'INVALID_INPUT' && /YouTube|B\s*站|BV|短链|分P|链接/.test(text)));
     return { field: invalidLink ? field : undefined, text };
 }
 function useTrainingError(form: RefObject<HTMLFormElement | null>) {
@@ -47,7 +48,7 @@ function useTrainingError(form: RefObject<HTMLFormElement | null>) {
 }
 type TrainingFields = { title: string; date: string; description: string };
 type TrainingEdit = TrainingFields & { status: string; expectedVersion: number };
-type TrainingPublish = TrainingFields & { video?: { title: string; url: string } };
+type TrainingPublish = TrainingFields & { status?: 'draft'; video?: { title: string; url: string } };
 export function TrainingForm({ actorId, training }: { actorId: string; training?: Training }) {
     const session = useAccountSession();
     const router = useRouter();
@@ -92,13 +93,13 @@ export function TrainingForm({ actorId, training }: { actorId: string; training?
             clearFormUI(actorId, bufferId);
             const saved = 'training' in result ? result.training : result;
             const destination = saved.status === 'deleted' ? '/admin/trainings' : '/admin/trainings/' + saved.id;
-            if (!training) navigationBuffer(actorId, destination, 'training-published').write(true);
+            if (!training) navigationBuffer(actorId, destination, 'training-created').write(saved.status);
             router.push(destination);
             navigating = true;
         } catch (e) {
             if (generation === undefined || session.isCurrent(generation)) {
                 if (!training && generation !== undefined && !(e instanceof ApiError)) {
-                    validation.setError({ text: '请求结果尚未确认。请保留输入，再次确认发布会沿用原请求标识。' });
+                    validation.setError({ text: '请求结果尚未确认。请保留输入，重试同一操作会沿用原请求标识。' });
                 } else {
                     validation.setError(!training && 'video' in body ? videoLinkError(e, 'videoLink') : { text: message(e) });
                 }
@@ -125,10 +126,12 @@ export function TrainingForm({ actorId, training }: { actorId: string; training?
             if (fields.description.length > 2000) return fail('description', '训练简介最多 2000 字。');
             if (!training) {
                 const video = { title: readField(data, 'videoTitle'), url: readField(data, 'videoLink') };
-                if (video.title && !video.url) return fail('videoLink', '请输入 B 站链接或 BV 号。');
+                if (video.title && !video.url) return fail('videoLink', '请输入 YouTube 或 B 站链接，也可填写 BV 号。');
                 if (video.url && (!video.title || video.title.length > 80)) return fail('videoTitle', '请输入 1–80 字的视频标题。');
-                if (video.url.length > 2000) return fail('videoLink', 'B 站分享内容最多 2000 字。');
-                void save({ ...fields, ...(video.url ? { video } : {}) });
+                if (video.url.length > 2000) return fail('videoLink', '视频链接或分享内容最多 2000 字。');
+                const submitter = (e.nativeEvent as SubmitEvent).submitter;
+                const draft = (submitter as HTMLButtonElement | null)?.value === 'draft';
+                void save({ ...fields, ...(draft ? { status: 'draft' } : {}), ...(video.url ? { video } : {}) });
                 return;
             }
             const body = { ...fields, status: readField(data, 'status'), expectedVersion: training.version };
@@ -166,9 +169,9 @@ export function TrainingForm({ actorId, training }: { actorId: string; training?
         </div> : <fieldset className="training-optional-video">
             <legend>训练视频 <small>选填</small></legend>
             <div>
-                <label htmlFor={id + '-video-link'}>B 站链接或 BV 号</label>
+                <label htmlFor={id + '-video-link'}>YouTube 或 B 站链接</label>
                 <textarea id={id + '-video-link'} disabled={busy} name="videoLink" maxLength={2000} rows={2} autoCapitalize="none" autoCorrect="off"
-                    spellCheck={false} placeholder="粘贴 B 站分享内容、完整链接或 BV 号" {...validation.field('videoLink')} />
+                    spellCheck={false} placeholder="粘贴 YouTube 链接、B 站分享内容或 BV 号" {...validation.field('videoLink')} />
             </div>
             <div>
                 <label htmlFor={id + '-video-title'}>视频标题</label>
@@ -178,7 +181,8 @@ export function TrainingForm({ actorId, training }: { actorId: string; training?
         {validation.alert}
         {!training && <p className="training-publish-note">发布后全队可见。</p>}
         <div className="training-actions">
-            <button ref={submitButton} type="submit" disabled={busy}>{busy ? (training ? '正在保存…' : '正在发布…') : (training ? '保存训练信息' : '确认发布')} <ChevronRight size={17} aria-hidden="true" /></button>
+            <button ref={submitButton} type="submit" disabled={busy}>{busy ? '正在保存…' : (training ? '保存训练信息' : '确认发布')} <ChevronRight size={17} aria-hidden="true" /></button>
+            {!training && <button type="submit" className="secondary" value="draft" disabled={busy}>保存草稿</button>}
             <Link className="button secondary" href={detailPath}>返回</Link>
         </div>
         {training && <dialog ref={confirmation} className="add-video-dialog" aria-labelledby={confirmationId}
@@ -298,7 +302,7 @@ export function AddVideoDialog({ actorId, trainingId, nextPosition, memberVisibl
         {notice && <p role="status" className="muted">{notice}</p>}
         <dialog ref={dialog} className="add-video-dialog" aria-labelledby={titleId} onCancel={e => { e.preventDefault(); close(); }}>
             <div className="section-heading">
-                <h2 id={titleId}>添加 B 站视频</h2>
+                <h2 id={titleId}>添加视频</h2>
                 <button type="button" className="secondary dialog-close" aria-label="关闭添加视频" onClick={close}>关闭</button>
             </div>
             <p className="muted">{memberVisible ? '添加后队员可立即在本次训练中看到视频。' : '训练发布后，队员可在本次训练中看到视频。'}</p>
@@ -327,8 +331,9 @@ export function AddVideoForm({ actorId, trainingId, defaultPosition = 0, onAdded
             if (submitting.current) return;
             const form = e.currentTarget, d = new FormData(form);
             const position = readField(d, 'position');
-            const body = { title: readField(d, 'title'), position: position === '' ? defaultPosition : Number(position), source: 'bilibili', url: readField(d, 'url') };
-            if (!body.url || body.url.length > 2000) return validation.setError({ field: 'url', text: '请输入 B 站链接、分享内容或 BV 号（最多 2000 字）。' });
+            const url = readField(d, 'url');
+            const body = { title: readField(d, 'title'), position: position === '' ? defaultPosition : Number(position), source: parseYouTubeSource(url) ? 'youtube' : 'bilibili', url };
+            if (!body.url || body.url.length > 2000) return validation.setError({ field: 'url', text: '请输入 YouTube 或 B 站链接、B 站分享内容或 BV 号（最多 2000 字）。' });
             if (!body.title || body.title.length > 80) return validation.setError({ field: 'title', text: '请输入 1–80 字的视频标题。' });
             const positionInput = form.elements.namedItem('position') as HTMLInputElement;
             if (positionInput.validity.badInput || !Number.isSafeInteger(body.position) || body.position < 0 || body.position > 10000) {
@@ -360,9 +365,9 @@ export function AddVideoForm({ actorId, trainingId, defaultPosition = 0, onAdded
             }
         }}>
         <div>
-            <label htmlFor={id + '-url'}>B 站分享内容、链接或 BV 号</label>
+            <label htmlFor={id + '-url'}>YouTube 或 B 站链接</label>
             <textarea id={id + '-url'} disabled={busy} name="url" required rows={2} maxLength={2000} autoCapitalize="none" autoCorrect="off" spellCheck={false}
-                placeholder="粘贴 B 站分享内容或完整视频地址" {...validation.field('url')} />
+                placeholder="粘贴 YouTube 链接、B 站分享内容或 BV 号" {...validation.field('url')} />
         </div>
         <div>
             <label htmlFor={id + '-title'}>视频标题</label>
