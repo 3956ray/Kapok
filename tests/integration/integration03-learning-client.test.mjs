@@ -394,7 +394,7 @@ test('confirmed hiding replaces the article and late verification only renders t
     await click('确认隐藏', document.querySelector('dialog[open]'));
     assert.match(document.body.textContent, /此内容已从队内阅读中移除/);
     assert.equal(document.querySelector('.learning-article'), null);
-    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
     await settle();
     assert.equal(document.querySelector('.learning-article'), null);
     assert.match(document.body.textContent, /暂时无法加载/);

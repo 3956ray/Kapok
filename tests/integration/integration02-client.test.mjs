@@ -199,10 +199,10 @@ test('video switch fences stale callbacks, lock disposes a mounted player, and s
         await act(async () => old.handlers.ready(old.element));
         await click('讨论时间点选项');
         await click('添加当前视频时间');
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.equal(old.frame.isConnected, false);
         assert.equal(old.destroys, 1);
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause();
         assert.equal(composer().value, '第一个视频的草稿');
         assert.ok(button('已添加时间点 00:00（已固定）'));
@@ -230,7 +230,7 @@ test('video switch fences stale callbacks, lock disposes a mounted player, and s
     } finally { await unmount(); }
 });
 
-test('focus inside the authorized YouTube media shadow iframe permits playback; outside or wrong-origin markers lock', async () => {
+test('app focus does not gate YouTube playback; real page departure always locks', async () => {
     for (const fake of [null, 'outside', 'wrong-origin', 'wrong-marker']) {
         setup();
         const original = document.hasFocus;
@@ -247,14 +247,10 @@ test('focus inside the authorized YouTube media shadow iframe permits playback; 
             assert.equal(element.shadowRoot.activeElement, frame);
             document.hasFocus = () => true;
             await act(async () => window.dispatchEvent(new Event('blur')));
-            assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, fake !== null);
-            if (fake === null) {
-                assert.equal(frame.isConnected, true);
-                document.hasFocus = () => false;
-                await act(async () => window.dispatchEvent(new Event('blur')));
-                assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
-                assert.equal(frame.isConnected, false);
-            }
+            assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, false);
+            await act(async () => window.dispatchEvent(new Event('pagehide')));
+            assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
+
         } finally {
             document.hasFocus = original;
             await unmount();

@@ -1,10 +1,17 @@
 'use client';
 import { ReflectionIcon } from './reflection-icon';
-import Link from 'next/link';
+import Link, { useLinkStatus } from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { controlledBackSource } from '../../lib/client/navigation-state';
-import { BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock, House, PanelLeft, Sprout, UserRound } from 'lucide-react';
+import { BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock, House, LoaderCircle, PanelLeft, Sprout, UserRound } from 'lucide-react';
+
+function NavigationGlyph({ Icon, size }: { Icon: typeof House; size: number }) {
+    const { pending } = useLinkStatus();
+    return pending
+        ? <LoaderCircle size={size} className="navigation-pending" role="status" aria-label="正在打开页面" />
+        : <Icon size={size} aria-hidden="true" />;
+}
 
 const home = { href: '/', text: '首页', Icon: House };
 const trainings = { href: '/trainings', text: '训练', Icon: CalendarDays };
@@ -42,7 +49,7 @@ export function Navigation({ canCompose = false }: { canCompose?: boolean }) {
   }, []);
   return <nav className="bottom-nav" aria-label="主要导航" ref={ref}>{mobileItems.filter(item => canCompose || item.href !== '/reflections/new').map(({ href, text, Icon }) => {
     const selected = pathname === '/reflections/new' && canCompose ? href === '/reflections/new' : href === owner;
-    return <Link href={href} prefetch={false} key={href} aria-current={selected ? 'page' : undefined} className={selected ? 'selected' : ''}><Icon size={22} aria-hidden="true" /><span>{text}</span></Link>;
+    return <Link href={href} prefetch={false} key={href} aria-current={selected ? 'page' : undefined} className={selected ? 'selected' : ''}><NavigationGlyph Icon={Icon} size={22} /><span>{text}</span></Link>;
   })}</nav>;
 }
 
@@ -84,7 +91,7 @@ export function WorkspaceSidebar({ canCompose }: { canCompose: boolean }) {
             <p className="workspace-nav-label">工作区</p>
             <nav className="workspace-nav" aria-label="工作区导航">{desktopItems.map(({ href, text, Icon }) =>
                 <Link key={href} href={href} prefetch={false} title={text} aria-label={text} aria-current={href === current ? 'page' : undefined}>
-                    <Icon size={19} aria-hidden="true" /><span>{text}</span>
+                    <NavigationGlyph Icon={Icon} size={19} /><span>{text}</span>
                 </Link>
             )}</nav>
             <div className="workspace-account">

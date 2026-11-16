@@ -102,7 +102,7 @@ for (const [index, scenario] of cases.entries()) {
                 assert.match(document.body.textContent, /核对上次入队请求/);
                 assert.equal(navigation.length, 0);
                 expired = true;
-                await act(async () => window.dispatchEvent(new Event('focus')));
+                await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
                 await settle();
                 assert.match(document.body.textContent, /登录已过期/);
                 await act(async () => root.unmount());
@@ -156,7 +156,7 @@ test('verified same actor restores an unsent draft after expiry and reload, but 
         await input('discName', 'Original actor');
         await input('jerseyNumber', '0017');
         expired = true;
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await settle();
         assert.match(document.body.textContent, /登录已过期/);
         assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
@@ -227,7 +227,7 @@ for (const { name, account, intent, page = Continue, expected } of [
             assert.equal(saved.fields.jerseyNumber, '0017');
             assert.ok(saved.pending.key);
             expired = true;
-            await act(async () => window.dispatchEvent(new Event('focus')));
+            await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
             await settle();
             assert.match(document.body.textContent, /登录已过期/);
             assert.ok(window.sessionStorage.getItem(draftStorageKey), 'ordinary expiry preserves the draft');

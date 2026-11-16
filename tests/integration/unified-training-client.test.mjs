@@ -137,7 +137,7 @@ test('selected rail label and authorized waiting stage follow the full video nam
 test('Bilibili keeps one original-site link and restores the waiting identity on iframe error', async () => {
     setup();
     function originalLink() {
-        const links = stage().querySelectorAll('a');
+        const links = document.querySelectorAll('.training-title-provider a');
         assert.equal(links.length, 1);
         assert.equal(links[0].href, videos[0].url);
         assert.equal(links[0].target, '_blank');
@@ -396,7 +396,7 @@ test('private note save, failure, cancel, selection and account switches keep va
     } finally { await unmount(); }
 });
 
-test('registered provider focus remains allowed, outside focus locks and unloads, and account-change rejects late discussion', async () => {
+test('provider focus and app switching stay usable; page departure unloads and account change rejects late discussion', async () => {
     setup();
     let late, lateSignal;
     override = (route, options, actor) => {
@@ -421,7 +421,7 @@ test('registered provider focus remains allowed, outside focus locks and unloads
         assert.equal(notePanel.closest('[hidden]'), null);
         assert.match(frame.src, /^https:/);
         cards()[0].focus();
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.ok(frame.closest('[hidden]') || !frame.isConnected);
         assert.equal(frame.getAttribute('src'), 'about:blank');
         assert.ok(bookmark.closest('[hidden]'));
@@ -429,7 +429,7 @@ test('registered provider focus remains allowed, outside focus locks and unloads
         const waitingTitle = stage()?.querySelector('.training-stage-video-title');
         assert.ok(!waitingTitle || waitingTitle.closest('[hidden]'));
 
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause(); await pause();
         await type(activeComposer(), '账号 A 的私文');
         await act(async () => activeComposer().form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
@@ -549,7 +549,8 @@ test('V5.1 groups the title and date beside named circular actions and opens the
         const date = title.querySelector('time');
         assert.equal(heading.parentElement, date.parentElement);
         assert.equal(heading.nextElementSibling, date);
-        const [bookmark, reflection] = title.querySelectorAll('.training-title-action');
+        const bookmark = title.querySelector('.training-title-bookmark');
+        const reflection = title.querySelector('[aria-label="写复盘"]');
         assert.ok(bookmark instanceof window.HTMLButtonElement);
         assert.equal(bookmark.getAttribute('aria-label'), '收藏与备注');
         assert.equal(reflection.getAttribute('aria-label'), '写复盘');
@@ -602,12 +603,12 @@ test('the YouTube title link uses the verified source and follows video switches
 
         const link = youtubeAction();
         const providerSlot = link.parentElement;
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.ok(providerSlot.hidden);
         const click = new window.MouseEvent('click', { bubbles: true, cancelable: true });
         assert.equal(link.dispatchEvent(click), false);
 
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause();
         assert.equal(youtubeAction().closest('[hidden]'), null);
         await pick('c');
@@ -629,7 +630,7 @@ test('the YouTube title link uses the verified source and follows video switches
         await pick('a');
         assert.ok(youtubeAction());
         revoked = true;
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause(); await pause();
         assert.equal(youtubeAction(), null);
         assert.equal(stage().querySelector('strong').textContent, videos[1].title);

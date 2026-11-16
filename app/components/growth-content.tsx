@@ -1,7 +1,7 @@
 'use client';
 import { ReflectionIcon } from './reflection-icon';
 import { Bookmark, Layers, LockKeyhole } from 'lucide-react';
-import { useCallback } from 'react';
+import { useMemo } from 'react';
 import Link from 'next/link';
 import type { ReflectionAuthor } from '../../lib/contracts/reflections';
 import type { Collection } from '../../lib/contracts/training';
@@ -13,13 +13,13 @@ import { DateGroup, RecordRow } from './presentation';
 
 type GrowthRows = { reflections: ReflectionAuthor[]; collections: Collection[] };
 export function GrowthContent({ actorId, initialFilter = 'all' }: { actorId: string; initialFilter?: 'all' | 'reflections' | 'collections' }) {
-    const load = useCallback(async (_account: unknown, signal: AbortSignal) => {
+    const load = useMemo(() => ({ read: async (signal: AbortSignal) => {
         const [reflections, collections] = await Promise.all([
             api<ReflectionAuthor[]>('reflections', undefined, actorId, signal),
             api<Collection[]>('collections', undefined, actorId, signal),
         ]);
         return { reflections, collections };
-    }, [actorId]);
+    } }), [actorId]);
     return <AccountBoundary<GrowthRows> actorId={actorId} load={load}>{data => <Tabs key={initialFilter} actorId={actorId} data={data} initialFilter={initialFilter} />}</AccountBoundary>;
 }
 function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthRows; initialFilter: 'all' | 'reflections' | 'collections' }) {

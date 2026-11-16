@@ -50,7 +50,7 @@ async function unmount() { await act(async () => root?.unmount()); root = null; 
 const buttons = text => [...document.querySelectorAll('button')].filter(b => b.textContent === text);
 async function click(text) { const b = buttons(text).find(b => b.closest('dialog[open]')) ?? buttons(text)[0]; assert.ok(b, text); await act(async () => b.click()); await flush(); }
 async function selectScope(value) { const node = document.querySelector(`input[type=radio][value=${value}]`); assert.ok(node); await act(async () => node.click()); await flush(); }
-async function lifecycle(name) { await act(async () => window.dispatchEvent(new Event(name))); await flush(); }
+async function lifecycle(name) { await act(async () => window.dispatchEvent(Object.assign(new Event(name), name === 'pageshow' ? { persisted: true } : {}))); await flush(); }
 const activityLink = () => document.querySelector('[role=status] a[href="/activity"]');
 const writes = () => calls.filter(c => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(c.options.method));
 
@@ -317,11 +317,11 @@ test('sharing dialog Escape restores trigger and temporary lock closes top layer
         assert.equal(dialog.open, false);
         assert.equal(document.activeElement.textContent, '确认全队可读');
         await click('确认全队可读');
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.equal(dialog.open, false); assert.equal(dialog.hidden, true);
         assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
         assert.equal(writes().length, 0);
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('input:checked').value, 'team');
     } finally { await unmount(); }
 });
@@ -374,14 +374,14 @@ test('sharing external verified snapshot discards stale radio buffer after lifec
         await mount(h(ReflectionSharing, { actorId: 'A', id: 'r' }));
         await selectScope('team');
         data['reflections/r/edit'] = { ...reflection, sharingVersion: 3 };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('input:checked').value, 'private');
         assert.equal(buttons('确认全队可读').length, 0);
         assert.equal(writes().length, 0);
     } finally { await unmount(); }
 });
 
-test('sharing blur while request is held closes modal, retains exact unresolved request, and rejects late success', async () => {
+test('sharing page departure while request is held closes modal, retains exact unresolved request, and rejects late success', async () => {
     setup(); data['reflections/r/edit'] = { ...reflection, scope: 'team' };
     let finish;
     override = (path, options) => path.endsWith('/publication') && options.method === 'PUT' ? new Promise(resolve => { finish = resolve; }) : null;
@@ -392,7 +392,7 @@ test('sharing blur while request is held closes modal, retains exact unresolved 
         const surface = document.querySelector('[data-kapok-sensitive]');
         let concealedFocus = 0;
         surface.addEventListener('focusin', () => { if (surface.hidden) concealedFocus += 1; });
-        await lifecycle('blur');
+        await lifecycle('pagehide');
         assert.equal(surface.hidden, true);
         assert.equal(document.querySelector('dialog').open, false);
         // The JSDOM dialog stub does not move focus when it closes.
@@ -404,7 +404,7 @@ test('sharing blur while request is held closes modal, retains exact unresolved 
         assert.ok(document.activeElement === retry, 'a late response does not steal focus from the lock controls');
         assert.equal(concealedFocus, 0);
         override = (path, options) => path.endsWith('/publication') && options.method === 'PUT' ? response(data['reflections/r/edit']) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(buttons('核对结果')[0]);
         assert.ok(!document.body.textContent.includes('已发布到队内动态。'));
         data['reflections/r/edit'] = { ...reflection, scope: 'team', published: true, sharingVersion: 2 };

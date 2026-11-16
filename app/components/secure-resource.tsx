@@ -9,7 +9,9 @@ import { handleSessionSignal, createSessionGuard } from '../../lib/client/sessio
 import { confirmNavigationActor, clearNavigationActor, clearNavigationRoute, currentRoute, retainRouteUI } from '../../lib/client/navigation-state';
 import { reconcileRegistrationActor } from '../../lib/client/registration-draft';
 import type { SessionSignal } from '../../lib/client/session-guard';
-type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>);
+// Opt-in for reads whose server endpoints independently authorize the actor.
+// Account-dependent loaders retain their original sequential ordering.
+type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>) | { read: (signal: AbortSignal) => Promise<T> };
 export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnprofiled = false, adjacentSurfaces?: readonly HTMLElement[]) {
     const [data, setData] = useState<T | null>(null);
     const [locked, setLocked] = useState(true);
@@ -115,7 +117,10 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             setError('');
             try {
                 await withRequestDeadline(async signal => {
-                    const before = await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
+                    const [before, parallelData] = await Promise.all([
+                        api<BootstrapStatus>('bootstrap', undefined, actorId, signal),
+                        typeof path === 'object' ? Promise.resolve().then(() => path.read(signal)) : undefined,
+                    ]);
                     if (guard.current.token() !== token) return;
                     if ((before.actorId ?? before.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
@@ -128,9 +133,11 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                         setData(null);
                         throw new Error('当前账号暂不可用，请确认账号状态后重试。');
                     }
-                    const latest = typeof path === 'string' ? await api<T>(path, undefined, actorId, signal) : await path(before, signal);
+                    // An account-only surface has no intervening business read to bracket.
+                    const accountOnly = path === 'bootstrap';
+                    const latest = accountOnly ? before as T : typeof path === 'object' ? parallelData as T : typeof path === 'string' ? await api<T>(path, undefined, actorId, signal) : await path(before, signal);
                     if (guard.current.token() !== token) return;
-                    const after = await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
+                    const after = accountOnly ? before : await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
                     if (guard.current.token() !== token) return;
                     if ((after.actorId ?? after.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
@@ -192,28 +199,15 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             queueMicrotask(() => {
                 if (mounted) void verify();
             });
-            let playerFocused = false;
-            const show = () => { playerFocused = false; void verify(); };
-            const focus = () => {
-                if (playerFocused && activeGuard.current(activeGuard.token())) { playerFocused = false; return; }
-                show();
-            };
-            const blur = () => {
-                // Focusing the official embedded player stays inside this visible page.
-                // A real window/tab departure still hasFocus=false or visibility=hidden.
-                const active = document.activeElement;
-                const youtube = active?.localName === 'youtube-video' ? active.shadowRoot?.activeElement : null;
-                const trustedYouTube = youtube?.localName === 'iframe' && youtube.getAttribute('data-kapok-player') === 'youtube' &&
-                    /^https:\/\/www\.youtube-nocookie\.com\/embed\/[\w-]{11}\?/.test(youtube.getAttribute('src') ?? '');
-                const trustedBilibili = active?.tagName === 'IFRAME' && active.getAttribute('data-kapok-player') === 'bilibili';
-                if (document.visibilityState === 'visible' && document.hasFocus() && active &&
-                    (trustedYouTube || trustedBilibili) && (container.current?.contains(active) || adjacentSurfaces?.some(surface => surface.contains(active)))) { playerFocused = true; return; }
-                playerFocused = false;
-                conceal();
-            };
-            const visibility = () => {
-                if (document.visibilityState === 'visible') void verify();
-                else conceal();
+            // Switching apps/tabs is not a session change: keep the current page
+            // and drafts usable without another bootstrap/data waterfall.
+            let pageHidden = false;
+            const hide = () => { pageHidden = true; conceal(); };
+            const show = (event: PageTransitionEvent) => {
+                if (event.persisted || pageHidden) {
+                    pageHidden = false;
+                    void verify();
+                }
             };
             const sessionSignal = (signal: SessionSignal) => {
                 if (processSignal(signal) === 'recheck') void verify();
@@ -224,11 +218,8 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             channel.onmessage = event => sessionSignal(event.data as SessionSignal);
             window.addEventListener('kapok-account-changed', localChange);
             window.addEventListener('kapok-session-expired', localExpiry);
-            window.addEventListener('pagehide', conceal);
+            window.addEventListener('pagehide', hide);
             window.addEventListener('pageshow', show);
-            window.addEventListener('blur', blur);
-            window.addEventListener('focus', focus);
-            document.addEventListener('visibilitychange', visibility);
             return () => {
                 mounted = false;
                 activeGuard.conceal();
@@ -236,11 +227,8 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                 channel.close();
                 window.removeEventListener('kapok-account-changed', localChange);
                 window.removeEventListener('kapok-session-expired', localExpiry);
-                window.removeEventListener('pagehide', conceal);
+                window.removeEventListener('pagehide', hide);
                 window.removeEventListener('pageshow', show);
-                window.removeEventListener('blur', blur);
-                window.removeEventListener('focus', focus);
-                document.removeEventListener('visibilitychange', visibility);
             };
         },
         [conceal, processSignal, verify, adjacentSurfaces]
@@ -252,7 +240,7 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
     async function authorize() {
         const expectedStamp = confirmedStamp.current;
         const started = interruption.current;
-        // Focus/pageshow can supersede a read while a native confirmation returns.
+        // Restoring a page or rechecking a session can supersede an authorization read.
         // Only repeat authorization reads, never the business mutation, and only
         // after the replacement boundary has verified the same permission stamp.
         for (let attempt = 0; attempt < 3; attempt += 1) {

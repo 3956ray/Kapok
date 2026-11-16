@@ -31,37 +31,33 @@ async function mount(node = h(JoinScreen, { actorId: 'A', returnTo: '/trainings'
     calls = []; state = eligible; override = null;
     globalThis.fetch = async (url, options = {}) => {
         const path = String(url).replace('/api/v1/', ''); calls.push({ path, options });
-        return (await override?.(path, options)) ?? response(path === 'bootstrap' ? state : path === 'me' ? state.me : path.startsWith('activity?') ? { items: [], nextCursor: null } : path === 'videos/v' ? { id: 'v', title: 'synthetic video', source: 'upload', status: 'active', durationSec: 30, training: { id: 't', status: 'published' } } : []);
+        return (await override?.(path, options)) ?? response(path === 'bootstrap' ? state : path === 'me' ? state.me : path === 'learning/featured' ? { collections: [] } : path.startsWith('activity?') ? { items: [], nextCursor: null } : path === 'videos/v' ? { id: 'v', title: 'synthetic video', source: 'upload', status: 'active', durationSec: 30, training: { id: 't', status: 'published' } } : []);
     };
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root'));
     await act(async () => root.render(node)); await settle();
 }
 async function unmount() { await act(async () => root?.unmount()); root = null; }
-async function lifecycle(name) { await act(async () => window.dispatchEvent(new Event(name))); await settle(); }
+async function lifecycle(name) { await act(async () => window.dispatchEvent(name === 'pageshow' ? new dom.window.PageTransitionEvent(name, { persisted: true }) : new Event(name))); await settle(); }
 async function click(text) { const button = [...document.querySelectorAll('button')].find(node => node.textContent.includes(text)); assert.ok(button, text); await act(async () => button.click()); await settle(); }
 const hidden = node => !!node.closest('[hidden]');
 const writes = () => calls.filter(call => call.options.method !== 'GET');
 async function input(node, value) { await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }); }
 async function submit() { await act(async () => document.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); await settle(); }
 
-test('hosted onboarding field focus is stable; passive window blur has honest status and read-only retry', async () => {
+test('app and field focus changes preserve inputs without locking or re-fetching', async () => {
     try {
         await mount();
         const name = document.querySelector('[name=discName]');
         await input(name, 'same A unsent');
         const count = calls.length;
+        assert.equal(count, 1, 'account-only boundary needs one verified bootstrap');
         await act(async () => { name.focus(); document.querySelector('[name=jerseyNumber]').focus(); });
-        assert.equal(calls.length, count, 'ordinary field focus is not window revalidation');
-        assert.equal(hidden(name), false);
         await lifecycle('blur');
-        assert.equal(hidden(name), true);
-        assert.equal(calls.length, count, 'blur conceals without claiming a live request');
-        assert.match(document.querySelector('[role=status]').textContent, /暂时锁定/);
-        assert.equal(document.querySelector('[role=status]').getAttribute('aria-busy'), 'false');
-        await click('重新确认');
+        await lifecycle('focus');
         assert.equal(hidden(name), false);
         assert.equal(name.value, 'same A unsent');
+        assert.equal(calls.length, count, 'app switching does not cause an account/data waterfall');
         assert.equal(writes().length, 0);
     } finally { await unmount(); }
 });
@@ -73,7 +69,7 @@ test('hosted onboarding timeout is finite and retry reads current membership', a
         t.mock.timers.enable({ apis: ['setTimeout'] });
         let finish;
         override = path => path === 'bootstrap' ? new Promise(resolve => { finish = resolve; }) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('[role=status]').getAttribute('aria-busy'), 'true');
         await act(async () => t.mock.timers.tick(15_001)); await settle();
         assert.equal(hidden(name), true);
@@ -94,9 +90,9 @@ test('hosted superseded bootstrap response cannot end or reopen a newer verified
         await mount();
         let finish;
         override = path => path === 'bootstrap' ? new Promise(resolve => { finish = resolve; }) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         const oldSignal = calls.at(-1).options.signal;
-        await lifecycle('blur');
+        await lifecycle('pagehide');
         assert.equal(oldSignal?.aborted, true);
         override = null; state = initialized;
         await lifecycle('pageshow');
@@ -210,9 +206,9 @@ test('hosted actual Home/Video loader transport and body abort suppress late acc
                     if (phase === 'fetch') return new Promise(resolve => { finish = resolve; });
                     return { status: 200, ok: true, headers: new Headers({ 'X-Kapok-Actor': 'A' }), json: () => new Promise(resolve => { finish = resolve; }) };
                 };
-                await lifecycle('focus');
+                await lifecycle('pageshow');
                 assert.ok(finish, 'production callback request reached the selected phase');
-                await lifecycle('blur');
+                await lifecycle('pagehide');
                 assert.equal(oldSignal?.aborted, true, 'callback fetch/body is canceled with its boundary');
                 override = null;
                 await lifecycle('pageshow');
@@ -252,34 +248,27 @@ test('hosted onboarding double submit issues only one enrollment', async () => {
     } finally { await unmount(); }
 });
 
-test('hosted onboarding visibility restore rechecks without flashing or losing same-account inputs', async () => {
+test('tab switching preserves content; real page restoration still verifies current account', async () => {
     const descriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
     try {
         await mount();
         const name = document.querySelector('[name=discName]');
         await input(name, 'retained same A');
-        await act(async () => {
-            Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
-            document.dispatchEvent(new Event('visibilitychange'));
-            assert.equal(hidden(name), true, 'hide occurs synchronously during visibility event');
-        });
-        assert.match(document.querySelector('[role=status]').textContent, /暂时锁定/);
-        let finish;
-        override = path => path === 'bootstrap' ? new Promise(resolve => { finish = resolve; }) : null;
-        await act(async () => {
-            Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-            document.dispatchEvent(new Event('visibilitychange'));
-            assert.equal(hidden(name), true, 'visibility return cannot flash old content before verification');
-        }); await settle();
-        assert.equal(document.querySelector('[role=status]').getAttribute('aria-busy'), 'true');
-        override = null;
-        await act(async () => finish(response(eligible))); await settle();
-        assert.equal(hidden(name), false);
+        const count = calls.length;
+        for (const value of ['hidden', 'visible']) {
+            await act(async () => {
+                Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+                document.dispatchEvent(new Event('visibilitychange'));
+            });
+            assert.equal(hidden(name), false);
+        }
+        assert.equal(calls.length, count);
         assert.equal(name.value, 'retained same A');
         await lifecycle('pagehide');
         assert.equal(hidden(name), true);
         await lifecycle('pageshow');
         assert.equal(hidden(name), false);
+        assert.equal(calls.length, count + 1);
         assert.equal(writes().length, 0);
     } finally {
         if (descriptor) Object.defineProperty(document, 'visibilityState', descriptor);
@@ -293,7 +282,7 @@ test('hosted onboarding network failure keeps safe retry actionable across repea
         await mount();
         const name = document.querySelector('[name=discName]');
         override = () => { throw new Error('连接未完成，暂未能确认当前状态。'); };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         for (let i = 0; i < 2; i++) {
             assert.equal(hidden(name), true);
             assert.match(document.querySelector('[role=alert]').textContent, /连接未完成/);
@@ -306,4 +295,32 @@ test('hosted onboarding network failure keeps safe retry actionable across repea
         assert.equal(document.querySelector('[role=alert]'), null);
         assert.equal(writes().length, 0);
     } finally { await unmount(); }
+});
+
+test('parallel independent reads stay concealed until final identity and membership confirmation', async () => {
+    for (const changed of [false, true]) {
+        try {
+            await mount();
+            state = initialized;
+            let finishBefore, finishData, finishAfter, bootstraps = 0;
+            override = path => path === 'bootstrap' ? new Promise(resolve => {
+                if (++bootstraps === 1) finishBefore = resolve; else finishAfter = resolve;
+            }) : null;
+            const load = { read: () => new Promise(resolve => { finishData = resolve; }) };
+            await act(async () => root.render(h(AccountBoundary, { key: 'parallel', actorId: 'A', load }, value => h('p', null, value))));
+            await settle();
+            assert.equal(typeof finishBefore, 'function');
+            assert.equal(typeof finishData, 'function', 'business read starts without waiting for bootstrap');
+            await act(async () => { finishBefore(response(initialized)); finishData('verified content'); });
+            await settle();
+            assert.equal(typeof finishAfter, 'function');
+            assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
+            assert.ok(!document.body.textContent.includes('verified content'));
+            const latest = changed ? { ...initialized, me: { ...initialized.me, membership: { ...initialized.me.membership, epoch: 2 } } } : initialized;
+            await act(async () => finishAfter(response(latest))); await settle();
+            assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, changed);
+            assert.equal(document.body.textContent.includes('verified content'), !changed);
+            if (changed) assert.match(document.body.textContent, /权限在确认期间已变化/);
+        } finally { await unmount(); }
+    }
 });

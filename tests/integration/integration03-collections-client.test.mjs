@@ -306,13 +306,13 @@ test('published sources and search retain their navigation context; clipboard fa
     const response = await publicAuthEntry(new Request(login), login, 'login');
     assert.match(await response.text(), new RegExp('intent=login&amp;returnTo=' + encodeURIComponent(read)));
     app.setPublished({ ...app.published(), items: [] });
-    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
     await settle();
     assert.match(visible(), /暂没有可阅读的条目/);
     assert.doesNotMatch(visible(), /图文甲|训练乙/);
     assert.equal(document.querySelector('img'), null);
     app.setPublished(null);
-    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
     await settle();
     assert.match(visible(), /此合集暂不可读/);
     assert.doesNotMatch(visible(), /合集一/);
@@ -373,7 +373,7 @@ test('featured management denies members, saves ordered choices as admin, and ho
     await app.render(HomeFeaturedTopics, {}, '/');
     assert.match(visible(), /合集二/);
     app.setOptions([{ ...two, items: [] }]);
-    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
     await settle();
     assert.doesNotMatch(visible(), /首页精选|合集二/);
 });
@@ -452,7 +452,7 @@ test('reading the same collection after republication replaces the local withdra
     const republished = { ...app.draft(), title: '重新发布的合集', status: 'published', version: 4, publishedVersion: 4, items: [video] };
     app.setDraft(republished);
     app.setPublished(snapshot(republished, 4));
-    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
     await settle();
 
     assert.equal(window.location.pathname, read);

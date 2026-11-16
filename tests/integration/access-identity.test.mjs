@@ -98,3 +98,53 @@ test('Sites headers can only be used inside the trusted Sites entry scope', asyn
     ]);
     assert.equal(scopedPrincipal(spoof), null);
 });
+
+test('warm public-key cache removes repeat network waits but verifies each identity and signature', async () => {
+    let requests = 0;
+    const fetcher = async () => { requests++; return Response.json({ keys: [jwk] }); };
+    const check = token => verify(token, production, production.ACCESS_ALLOWED_HOST, fetcher);
+    assert.ok(await check(await sign()));
+    assert.equal((await check(await sign(production, { sub: 'second-member' }))).subject, 'second-member');
+    assert.equal(await check(await sign(production, {}, {}, other.privateKey)), null);
+    assert.equal(await check(await sign(production, { exp: now })), null);
+    assert.equal(requests, 1);
+});
+
+test('unknown signing key refreshes after cooldown and expired keys cannot survive a failed refresh', async t => {
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    let requests = 0;
+    let offline = false;
+    const rotated = { ...await crypto.subtle.exportKey('jwk', other.publicKey), kid: 'rotated-key' };
+    const fetcher = async () => {
+        requests++;
+        if (offline) throw Error('offline');
+        return Response.json({ keys: requests === 1 ? [jwk] : [rotated] });
+    };
+    const check = token => verify(token, production, production.ACCESS_ALLOWED_HOST, fetcher);
+    const original = await sign(production, { exp: now + 3600 });
+    const next = await sign(production, { exp: now + 3600 }, { kid: rotated.kid }, other.privateKey);
+    assert.ok(await check(original));
+    assert.equal(await check(next), null);
+    assert.equal(requests, 1);
+    clock += 30_001;
+    assert.ok(await check(next));
+    assert.equal(requests, 2);
+    assert.equal(await check(original), null);
+    clock += 300_001;
+    offline = true;
+    assert.equal(await check(next), null);
+    assert.equal(requests, 3);
+    offline = false;
+    assert.ok(await check(next));
+    assert.equal(requests, 4);
+});
+
+test('cached key sets remain isolated by issuer and ambiguous keys fail closed', async () => {
+    const second = { ...production, ACCESS_ISSUER: 'https://second-team.cloudflareaccess.com' };
+    const urls = [];
+    const fetcher = async url => { urls.push(url); return Response.json({ keys: url.startsWith(issuer) ? [jwk] : [jwk, jwk] }); };
+    assert.ok(await verify(await sign(), production, production.ACCESS_ALLOWED_HOST, fetcher));
+    assert.equal(await verify(await sign(second), second, second.ACCESS_ALLOWED_HOST, fetcher), null);
+    assert.equal(urls.length, 2);
+});

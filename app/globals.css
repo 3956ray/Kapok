@@ -1031,3 +1031,9 @@ main a.topic-featured-card:hover { background:var(--selected); }
 .reflection-editor .editor-discard { flex:0 0 auto; min-height:48px; padding:12px 16px; white-space:nowrap; font-weight:500; color:var(--muted); border:1px solid var(--border); background:transparent; }
 .reflection-editor .editor-discard:not(:disabled):hover { color:var(--text); border-color:currentColor; background:var(--workspace-bg); }
 .reflection-editor .editor-save [role=status] { font-size:13px; line-height:1.5; }
+
+/* Immediate route feedback; route content still waits for current authorization. */
+.navigation-pending { animation:navigation-spin .8s linear infinite; }
+.workspace-nav a:has(.navigation-pending),.bottom-nav a:has(.navigation-pending) { background:var(--selected); color:var(--primary); }
+@keyframes navigation-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .navigation-pending { animation:none; } }

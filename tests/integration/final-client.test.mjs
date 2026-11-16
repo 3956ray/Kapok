@@ -53,7 +53,7 @@ function resetNetwork() {
         const path = String(url).replace('/api/v1/', '');
         calls.push({ path, options });
         if (override) { const result = await override(path, options); if (result) return result; }
-        const data = path === 'bootstrap' ? state.bootstrap : path === 'me' ? state.me : path === 'videos/v' ? state.video : path === 'videos/v/comments' ? state.comments : path === 'collections' ? state.items : path === 'trainings' ? [training] : path === 'trainings/t' ? { ...training, videos: [video] } : path === 'uploads' ? {items:[],nextCursor:null} : [];
+        const data = path === 'learning/featured' ? { collections: [] } : path === 'bootstrap' ? state.bootstrap : path === 'me' ? state.me : path === 'videos/v' ? state.video : path === 'videos/v/comments' ? state.comments : path === 'collections' ? state.items : path === 'trainings' ? [training] : (path === 'trainings/t' || path.startsWith('trainings/t?')) ? { ...training, videos: [video] } : path === 'uploads' ? {items:[],nextCursor:null} : [];
         return response(data);
     };
 }
@@ -82,7 +82,7 @@ async function input(node, value) {
 }
 async function submit(form) { assert.ok(form, 'form must exist before submitting'); await act(async () => form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))); await flush(); }
 async function signal(type, actor = 'A') { await act(async () => window.dispatchEvent(new CustomEvent(type, { detail: actor }))); await flush(); }
-async function lifecycle(type) { await act(async () => window.dispatchEvent(new dom.window.Event(type))); await flush(); }
+async function lifecycle(type) { await act(async () => window.dispatchEvent(Object.assign(new dom.window.Event(type), type === 'pageshow' ? { persisted: true } : {}))); await flush(); }
 function hidden(node) { return !!node.closest('[hidden]'); }
 function boundary(child) { return h(AccountBoundary, { actorId: 'A', load: 'me' }, () => child); }
 
@@ -90,10 +90,10 @@ test('final I2 video focus installs current comments/training metadata and denie
     try {
         await mount(h(VideoDiscussion, videoProps));
         assert.match(document.body.textContent, /withdrawn body/);
-        await lifecycle('blur');
+        await lifecycle('pagehide');
         state.video = { ...video, title: 'fresh title', training: { ...training, status: 'archived' } };
         state.comments = [{ ...comment, text: null, status: 'hidden' }];
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(!document.body.textContent.includes('withdrawn body'));
         assert.match(document.body.textContent, /fresh title/);
         assert.equal(document.querySelector('#comment-input')?.closest('form')?.hidden ?? true, true);
@@ -106,9 +106,9 @@ test('final I3 collection unsent input survives temporary failure and same A exp
         await click('编辑私人备注');
         const note = document.querySelector('textarea');
         await input(note, 'exact unsent note');
-        await lifecycle('blur');
+        await lifecycle('pagehide');
         override = path => path === 'bootstrap' ? Promise.reject(new Error('offline')) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('textarea')?.value, 'exact unsent note');
         assert.ok(hidden(note));
         override = null;
@@ -120,7 +120,7 @@ test('final I3 collection unsent input survives temporary failure and same A exp
         assert.equal(document.querySelector('textarea').value, 'exact unsent note');
         await signal('kapok-account-changed');
         assert.equal(document.querySelector('textarea'), null);
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('textarea'), null);
     } finally { await unmount(); }
 });
@@ -176,7 +176,7 @@ test('final I4 mounted profile replay reports differing current truth and retain
         const newer = { ...me, profile: { ...me.profile, discName: 'Y', version: 3 } };
         state.me = newer;
         state.bootstrap = { ...bootstrap, me: newer };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         await submit(name.closest('form'));
         assert.equal(name.value, 'X');
         assert.ok(!document.body.textContent.includes('资料已保存到账号。'));
@@ -208,7 +208,7 @@ test('final C1 deleted My and onboarding accounts remain locked', async () => {
         try {
             await mount(h(component, { actorId: 'A', returnTo: '/' }));
             state.bootstrap = { ...bootstrap, me: { user: { id: 'user-A', status: 'deleted' }, profile: null, membership: null, team: null } };
-            await lifecycle('focus');
+            await lifecycle('pageshow');
             assert.ok([...document.querySelectorAll('[data-kapok-sensitive]')].every(node => node.hidden));
             const count = calls.length;
             if (document.querySelector('form')) await submit(document.querySelector('form'));
@@ -248,12 +248,12 @@ test('final C1 all delivered legacy mounted screens synchronously conceal and pe
                 assert.ok(surfaces.every(node => node.hidden));
             });
             await lifecycle('pageshow');
-            assert.ok(!document.querySelector('[data-kapok-sensitive]').hidden);
+            assert.ok(!document.querySelector('[data-kapok-sensitive]').hidden, component.name + ': ' + document.body.textContent);
             await act(async () => {
                 window.dispatchEvent(new CustomEvent('kapok-account-changed', { detail: 'A' }));
                 assert.ok(surfaces.every(node => node.hidden));
             });
-            await lifecycle('focus');
+            await lifecycle('pageshow');
             assert.ok([...document.querySelectorAll('[data-kapok-sensitive]')].every(node => node.hidden));
             assert.ok(!document.body.textContent.includes('private A name'));
         } finally { await unmount(); }
@@ -264,11 +264,11 @@ test('final C1 B between verified bootstrap and resource never installs payload 
         await mount(h(MyScreen, { actorId: 'A' }));
         await input(document.querySelector('[name=discName]'), 'unsent A secret');
         override = path => path === 'me' ? response({ ...me, profile: { ...me.profile, discName: 'B secret' } }, 'B') : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('input'), null);
         assert.ok(!document.body.textContent.includes('B secret'));
         override = null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('input'), null);
     } finally { await unmount(); }
 });
@@ -282,8 +282,8 @@ test('final C1 older success after a newer verification failure cannot reveal', 
             requests += 1;
             return requests === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.reject(new Error('newer failure'));
         };
-        await lifecycle('focus');
-        await lifecycle('focus');
+        await lifecycle('pageshow');
+        await lifecycle('pageshow');
         await act(async () => finish(response(me)));
         await flush();
         assert.ok(document.querySelector('[data-kapok-sensitive]').hidden);
@@ -308,7 +308,7 @@ test('final C1 cleanup getter/removal failures still hide actual My and old call
             });
             await signal('kapok-account-changed');
             await act(async () => finish(response({ me })));
-            await lifecycle('focus');
+            await lifecycle('pageshow');
             assert.equal(document.querySelector('input'), null);
             assert.match(document.body.textContent, /未确认清理成功/);
         } finally { Object.defineProperty(globalThis, 'localStorage', descriptor); await unmount(); }
@@ -328,7 +328,7 @@ test('final I3 video exact comment/reply/edit/note/second and actual position su
         media.currentTime = 28.5;
         const previousPauses = pauses;
         override = path => path === 'bootstrap' ? response(null, null, 401) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(hidden(text));
         assert.equal(text.value, 'unsent reply');
         assert.equal(note.value, 'unsent collection note');
@@ -357,7 +357,7 @@ test('final I3 video exact comment/reply/edit/note/second and actual position su
         await signal('kapok-account-changed');
         assert.equal(document.querySelector('#comment-input'), null);
         assert.equal(document.querySelector('video'), null);
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('textarea'), null);
     } finally { await unmount(); }
 });
@@ -367,7 +367,7 @@ test('final C1 late profile/join/training/video responses cannot expose or navig
         { screen: () => h(MyScreen, { actorId: 'A' }), path: 'me', result: { me }, prepare: async () => {} },
         { screen: () => h(JoinScreen, { actorId: 'A', returnTo: '/reflections/r' }), path: 'join', result: { me, returnTo: '/reflections/r' }, prepare: async () => {
             state.bootstrap = { ...bootstrap, me: { user: null, profile: null, membership: null, team: null } };
-            await lifecycle('focus');
+            await lifecycle('pageshow');
             navigation.length = 0;
             await input(document.querySelector('[name=discName]'), 'A'); await input(document.querySelector('[name=jerseyNumber]'), '07');
         } },
@@ -388,7 +388,7 @@ test('final C1 late profile/join/training/video responses cannot expose or navig
             assert.equal(typeof finish, 'function', c.path);
             await signal('kapok-account-changed');
             await act(async () => finish(response(c.result)));
-            await lifecycle('focus');
+            await lifecycle('pageshow');
             assert.equal(document.querySelector('form'), null, c.path);
             assert.equal(document.querySelector('input'), null, c.path);
             assert.deepEqual(navigation, []);
@@ -396,7 +396,7 @@ test('final C1 late profile/join/training/video responses cannot expose or navig
     }
 });
 const linkTitle = '合成B站视频';
-const linkShare = '【合成B站视频】 https://b23.tv/Example01';
+const linkShare = '【合成B站视频】 https://b23.tv/vP9CEuO';
 const linkPath = 'trainings/t/videos';
 const linkPosts = () => calls.filter(call => call.path === linkPath && call.options.method === 'POST');
 
@@ -411,7 +411,7 @@ async function openVideoForm() {
     return { dialog, form };
 }
 
-for (const interruption of ['session end', 'actor replacement', 'blur', 'visible revalidation', 'direct verification']) {
+for (const interruption of ['session end', 'actor replacement', 'page departure', 'page restoration', 'direct verification']) {
     test(`final C1 late Bilibili add cannot reveal success after ${interruption}`, async () => {
         let finish;
         let session;
@@ -436,9 +436,9 @@ for (const interruption of ['session end', 'actor replacement', 'blur', 'visible
                 await act(async () => root.render(h(AccountBoundary, { actorId: 'B', load: 'me' }, () => h('p', null, 'current B surface'))));
                 await flush();
                 assert.match(document.body.textContent, /current B surface/);
-            } else if (interruption === 'blur') await lifecycle('blur');
-            else if (interruption === 'visible revalidation') {
-                await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+            } else if (interruption === 'page departure') await lifecycle('pagehide');
+            else if (interruption === 'page restoration') {
+                await act(async () => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
                 await flush();
             } else {
                 const oldSession = session;
@@ -508,12 +508,12 @@ test('final C1 signout network/storage failure leaves the actual profile surface
         assert.ok([...document.querySelectorAll('[data-kapok-sensitive]')].every(node => node.hidden));
         assert.match(document.body.textContent, /offline/);
         override = null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(!document.querySelector('[data-kapok-sensitive]').hidden);
     } finally { await unmount(); }
 });
 
-test('final C1 cross-tab expiry preserves same A profile, cross-tab end clears, visibility locks first', async () => {
+test('final C1 cross-tab expiry preserves same A profile, cross-tab end clears, page departure locks first', async () => {
     try {
         await mount(h(MyScreen, { actorId: 'A' }));
         await input(document.querySelector('[name=discName]'), 'cross-tab unsent');
@@ -524,11 +524,11 @@ test('final C1 cross-tab expiry preserves same A profile, cross-tab end clears, 
         assert.equal(document.querySelector('[name=discName]').value, 'cross-tab unsent');
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
         await act(async () => {
-            document.dispatchEvent(new dom.window.Event('visibilitychange'));
+            window.dispatchEvent(new Event('pagehide'));
             assert.ok(hidden(document.querySelector('form')));
         });
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-        await act(async () => document.dispatchEvent(new dom.window.Event('visibilitychange')));
+        await act(async () => window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true })));
         await flush();
         assert.equal(document.querySelector('[name=discName]').value, 'cross-tab unsent');
         await act(async () => channel.postMessage({ actorId: 'A', kind: 'ended' }));
@@ -549,7 +549,7 @@ test('final C1 actual signout storage failure ends all marked consumers with exp
         await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })));
         assert.ok([...document.querySelectorAll('[data-kapok-sensitive]')].every(node => node.hidden));
         assert.match(document.body.textContent, /未确认退出成功/);
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('form'), null);
     } finally { Object.defineProperty(globalThis, 'localStorage', descriptor); await unmount(); }
 });
@@ -563,7 +563,7 @@ test('final C1 actor prop replacement immediately drops A buffers and rejects A 
         await submit(document.querySelector('form'));
         state.bootstrap = { ...bootstrap, actorId: 'B', siteUserId: 'B', me: { ...me, user: { ...me.user, id: 'user-B' }, profile: { ...me.profile, discName: 'B profile' } } };
         state.me = state.bootstrap.me;
-        override = (path, options) => options.method === 'GET' ? response(path === 'bootstrap' ? state.bootstrap : state.me, 'B') : null;
+        override = (path, options) => options.method === 'GET' ? response(path === 'learning/featured' ? { collections: [] } : path === 'bootstrap' ? state.bootstrap : state.me, 'B') : null;
         await act(async () => root.render(h(MyScreen, { actorId: 'B' })));
         await flush();
         assert.equal(document.querySelector('[name=discName]').value, 'B profile');
@@ -582,15 +582,15 @@ test('final I2 failed and late video revalidation keeps old body concealed until
             count += 1;
             return count === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.reject(new Error('comments unavailable'));
         };
-        await lifecycle('focus');
-        await lifecycle('focus');
+        await lifecycle('pageshow');
+        await lifecycle('pageshow');
         await act(async () => finish(response([comment])));
         await flush();
         assert.ok(hidden(document.querySelector('video')));
         assert.match(document.body.textContent, /comments unavailable/);
         override = null;
         state.comments = [{ ...comment, text: null, status: 'deleted' }];
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(!document.body.textContent.includes('withdrawn body'));
         assert.match(document.body.textContent, /原讨论已删除/);
     } finally { await unmount(); }
@@ -600,9 +600,9 @@ test('final C1 StrictMode replay still verifies and hides actual My consumer', a
         await mount(h(React.StrictMode, null, h(MyScreen, { actorId: 'A' })));
         assert.equal(document.querySelector('[name=discName]').value, me.profile.discName);
         assert.ok(!hidden(document.querySelector('form')));
-        await lifecycle('blur');
+        await lifecycle('pagehide');
         assert.ok(hidden(document.querySelector('form')));
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.ok(!hidden(document.querySelector('form')));
     } finally { await unmount(); }
 });
@@ -613,11 +613,11 @@ test('final C1 changed role during verification conceals the former admin member
         const demoted = { ...bootstrap, me: { ...me, membership: { ...me.membership, role: 'member', version: 2 } } };
         const privateList = [{ id: 'managed-member', userId: 'user-managed', discName: 'protected-member-name', jerseyNumber: '07', version: 1, epoch: 1, role: 'member', status: 'active' }];
         override = path => path === 'admin/members' ? response(privateList) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.match(document.querySelector('[data-kapok-sensitive]').textContent, /protected-member-name/);
         let checks = 0;
         override = path => path === 'bootstrap' ? response(++checks === 1 ? bootstrap : demoted) : path === 'admin/members' ? response(privateList) : null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('[data-kapok-sensitive]').hidden, true);
         assert.match(document.body.textContent, /成员权限在确认期间已变化/);
     } finally { await unmount(); }
@@ -629,10 +629,10 @@ test('V2 account hides management links when the same account loses its role', a
         assert.ok(document.querySelector('a[href="/admin/trainings"]'));
         assert.ok(document.querySelector('a[href="/admin/members"]'));
         assert.ok(document.querySelector('a[href="/admin/announcements"]'));
-        assert.match(document.querySelector('.account-profile').textContent, /背号 07/);
+        assert.match(document.querySelector('.account-profile-card').textContent, /背号 07/);
         state.me = { ...me, membership: { ...me.membership, role: 'member', version: 2 } };
         state.bootstrap = { ...bootstrap, me: state.me };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('a[href^="/admin/"]'), null);
         assert.equal(document.querySelector('[aria-labelledby="account-admin"]'), null);
         assert.ok(document.querySelector('a[href="/me/data"]'));
@@ -681,10 +681,10 @@ test('V2 recycle can confirm a lost restore response with the original request a
             restored = true;
             return Promise.reject(new Error('恢复响应暂未确认。'));
         };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         await click('仅恢复为私密原稿');
         assert.doesNotMatch(document.body.textContent, /已恢复为私密复盘/);
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.doesNotMatch(document.body.textContent, /本人原稿/);
         await click('重新确认上次恢复请求');
         assert.match(document.body.textContent, /已恢复为私密复盘/);
@@ -822,7 +822,7 @@ test('final M1 server profile and registration errors are adjacent, associated a
             await mount(kind === 'profile' ? h(MyScreen, { actorId: 'A' }) : h(JoinScreen, { actorId: 'A', returnTo: '/' }));
             if (kind === 'join') {
                 state.bootstrap = { ...bootstrap, me: { user: null, profile: null, membership: null, team: null } };
-                await lifecycle('focus');
+                await lifecycle('pageshow');
                 await input(document.querySelector('[name=discName]'), 'new member');
                 await input(document.querySelector('[name=jerseyNumber]'), '07');
             }
@@ -844,7 +844,7 @@ test('final I5 active-left My retains legal own profile while team management di
         const left = { ...me, membership: { ...me.membership, status: 'left', version: 2 }, team: null };
         state.me = left;
         state.bootstrap = { ...bootstrap, me: left };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('[name=discName]').value, me.profile.discName);
         assert.ok(!hidden(document.querySelector('form')));
         assert.match(document.body.textContent, /当前不在有效队伍中/);
@@ -860,7 +860,7 @@ test('final C1 training consumer installs the fresh upload cleanup list after a 
             if (path === 'uploads/u/cancel' && options.method === 'POST') { pending = []; return response({ id: 'u' }); }
             return path === 'uploads' ? response({items:pending,nextCursor:null}) : null;
         };
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.match(document.body.textContent, /本人未挂载上传/);
         await click('取消并清理');
         assert.ok(!document.body.textContent.includes('本人未挂载上传'));
@@ -877,7 +877,7 @@ test('final I4 fresh profile snapshot changes saved truth while retaining visibl
         state.me = newer;
         state.bootstrap = { ...bootstrap, me: newer };
         override = null;
-        await lifecycle('focus');
+        await lifecycle('pageshow');
         assert.equal(document.querySelector('[name=discName]'), null);
         assert.ok(!document.body.textContent.includes('资料已保存到账号。'));
         assert.match(document.body.textContent, /newer Y/);
@@ -940,8 +940,8 @@ test('R1 actual prior 2-second recovery then comment refresh retains current 20 
         await mount(h(VideoDiscussion, videoProps));
         const media = document.querySelector('video');
         media.currentTime = 2;
-        await lifecycle('blur');
-        await lifecycle('focus');
+        await lifecycle('pagehide');
+        await lifecycle('pageshow');
         assert.equal(media.currentTime, 2);
         await input(document.querySelector('#comment-input'), 'comment at current position');
         media.currentTime = 20;

@@ -5,3 +5,5 @@ export function usePathname() { return '/'; }
 export function useRouter() { return router; }
 export function redirect(path) { throw new Error('redirect ' + path); }
 export default function Link(props) { const attributes = { ...props }; delete attributes.prefetch; return React.createElement('a', attributes); }
+
+export function useLinkStatus() { return { pending: false }; }

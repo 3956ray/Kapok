@@ -165,7 +165,7 @@ test('B explicit new-version profile submit uses freshly read truth without repl
  }finally{await unmount();}
 });
 test('B confirmed inactive account drops mounted input and cannot restore it on a later active read',async()=>{
- setup('/me/edit');try{await mount(ProfileEditor);await input(document.querySelector('[name=discName]'),'已失权私密输入');override=(path,options)=>{if(path==='me'&&options.method==='PATCH'){const inactive={user:{id:'u',status:'deleted'},profile:null,membership:null};data.bootstrap={...data.bootstrap,me:inactive};return response({me:inactive});}return null;};await click('保存资料');assert.equal(document.querySelector('form'),null);override=null;data.bootstrap={siteUserId:'A',me};await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(document.querySelector('[name=discName]').value,'木棉');
+ setup('/me/edit');try{await mount(ProfileEditor);await input(document.querySelector('[name=discName]'),'已失权私密输入');override=(path,options)=>{if(path==='me'&&options.method==='PATCH'){const inactive={user:{id:'u',status:'deleted'},profile:null,membership:null};data.bootstrap={...data.bootstrap,me:inactive};return response({me:inactive});}return null;};await click('保存资料');assert.equal(document.querySelector('form'),null);override=null;data.bootstrap={siteUserId:'A',me};await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();assert.equal(document.querySelector('[name=discName]').value,'木棉');
  }finally{await unmount();}
 });
 
@@ -319,7 +319,7 @@ test('B growth fresh source revalidation removes titles from visible and hidden 
  data.collections=[{id:'saved',sourceKind:'video',sourceId:'v',privateNote:'本人备注',timestampSec:null,version:1,createdAt:'2026-10-18',source:{title:'撤权前来源标题',href:'/videos/v'}}];
  try{
   await mount(GrowthContent);assert.ok(document.body.textContent.includes('撤权前来源标题'));await click('复盘');
-  data.collections=[{...data.collections[0],source:null}];await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  data.collections=[{...data.collections[0],source:null}];await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();
   assert.ok(!document.body.textContent.includes('撤权前来源标题'));await click('收藏');assert.match(document.body.textContent,/来源暂不可用/);await click('编辑私人备注');assert.equal(document.querySelector('textarea').value,'本人备注');
   await act(async()=>window.dispatchEvent(new CustomEvent('kapok-account-changed',{detail:'A'})));await flush();assert.ok(!document.body.textContent.includes('来源暂不可用'));assert.equal(document.querySelector('textarea'),null);
  }finally{await unmount();}
@@ -368,10 +368,10 @@ test('B failed or stale private-note verification retains the exact unknown POST
   try{
    await mount(VideoDiscussion);await input(document.querySelector('.private-note textarea'),'尚未确认输入');await click('保存私人备注');
    const request=writes()[0],body=JSON.parse(request.options.body),key=request.options.headers['Idempotency-Key'];
-   if(stale){assert.ok(finish);await act(async()=>window.dispatchEvent(new Event('blur')));await act(async()=>finish(response([{id:'saved',privateNote:'尚未确认输入'}])));await flush();}
+   if(stale){assert.ok(finish);await act(async()=>window.dispatchEvent(new Event('pagehide')));await act(async()=>finish(response([{id:'saved',privateNote:'尚未确认输入'}])));await flush();}
    assert.equal(pendingMutationKey('A','POST','collections',body,'different-candidate'),key);
    assert.equal(document.querySelector('.private-note textarea').value,'尚未确认输入');assert.ok(!document.body.textContent.includes('私人备注已保存到账号'));
-   if(stale){override=(path,options)=>path==='collections'?(options.method==='POST'?response({id:'saved'}):response([{id:'saved',privateNote:'尚未确认输入'}])):null;await act(async()=>window.dispatchEvent(new Event('focus')));await flush();}
+   if(stale){override=(path,options)=>path==='collections'?(options.method==='POST'?response({id:'saved'}):response([{id:'saved',privateNote:'尚未确认输入'}])):null;await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();}
    await click('保存私人备注');assert.equal(writes()[1].options.headers['Idempotency-Key'],key);
   }finally{await unmount();}
  }
@@ -390,30 +390,15 @@ test('B8 official Bilibili frame is bounded and unloads synchronously on account
   const frame=document.querySelector('iframe'); assert.ok(frame);
   const url=new URL(frame.src); assert.equal(url.origin,'https://player.bilibili.com'); assert.equal(url.searchParams.get('bvid'),'BV1KapokTest'); assert.equal(url.searchParams.get('p'),'2'); assert.equal(url.searchParams.get('autoplay'),'0'); assert.equal(url.searchParams.has('spm_id_from'),false);
   assert.equal(document.querySelector('video'),null);
-  await act(async()=>window.dispatchEvent(new Event('blur')));
+  await act(async()=>window.dispatchEvent(new Event('pagehide')));
   assert.equal(frame.getAttribute('src'),'about:blank'); assert.equal(document.querySelector('iframe'),null);
-  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(document.querySelector('iframe'),null);await click('载入 B 站视频');assert.ok(document.querySelector('iframe'));
+  await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();assert.equal(document.querySelector('iframe'),null);await click('载入 B 站视频');assert.ok(document.querySelector('iframe'));
   await act(async()=>window.dispatchEvent(new CustomEvent('kapok-account-changed',{detail:'A'})));await flush();assert.equal(document.querySelector('iframe'),null);
  } finally {await unmount();}
 });
 
 
-test('B8 focusing official iframe is not leaving the page; actual window departure still locks',async()=>{
- setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
- const original=document.hasFocus;
- try {
-  await mount(VideoDiscussion); await click('载入 B 站视频'); const frame=document.querySelector('iframe');
-  await act(async()=>frame.focus());
-  document.hasFocus=()=>true;
-  await act(async()=>window.dispatchEvent(new Event('blur')));
-  assert.equal(document.querySelector('iframe'),frame);assert.equal(frame.closest('[data-kapok-sensitive]').hidden,false);
-  const reads=calls.length;await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(calls.length,reads);assert.equal(document.querySelector('iframe'),frame);
-  await act(async()=>window.dispatchEvent(new Event('blur')));
-  document.hasFocus=()=>false;
-  await act(async()=>window.dispatchEvent(new Event('blur')));
-  assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
- } finally {document.hasFocus=original;await unmount();}
-});
+
 
 test('B8 link-only add form preserves failed inputs and retries the same request before clearing',async()=>{
  setup('/trainings/tr','admin');
@@ -451,7 +436,7 @@ test('B10 video dialog opens from heading, retains cancelled inputs, closes afte
   override=(path,options)=>options.method==='POST'?response({id:'new'}):null;
   await act(async()=>document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));await flush();assert.equal(dialog.open,false);assert.equal(JSON.parse(writes()[0].options.body).position,4);assert.equal(document.querySelector('[name=url]').value,'');
   await act(async()=>document.querySelector('[aria-label="添加视频"]').click());assert.equal(dialog.open,true);
-  await act(async()=>window.dispatchEvent(new Event('blur')));assert.equal(dialog.open,false);
+  await act(async()=>window.dispatchEvent(new Event('pagehide')));assert.equal(dialog.open,false);
  }finally{await unmount();}
 });
 
@@ -470,7 +455,7 @@ test('publish confirmation return waits for superseding same-account verificatio
    if(options.method==='PATCH'){data['trainings/tr']={...data['trainings/tr'],...JSON.parse(options.body),version:2};return response(data['trainings/tr']);}
   };
   await click('保存训练');await click('确认并保存');assert.equal(writes().length,0);
-  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();
   await act(async()=>release());await flush();
   assert.equal(writes().length,1,'confirmation/focus race must not discard the authorized submit');
   assert.equal(data['trainings/tr'].status,'published');assert.equal(document.querySelector('[role=alert]'),null);
@@ -488,7 +473,7 @@ test('publish authorization refuses departure, changed actor, changed rights and
    document.querySelector('[name=status]').value='published';
    override=path=>path==='bootstrap'?new Promise(resolve=>{release=resolve;}):null;
    await click('保存训练');await click('确认并保存');override=null;
-   if(scenario==='blur')await act(async()=>window.dispatchEvent(new Event('blur')));
+   if(scenario==='blur')await act(async()=>window.dispatchEvent(new Event('pagehide')));
    if(scenario==='expired')await act(async()=>window.dispatchEvent(new CustomEvent('kapok-session-expired',{detail:'A'})));
    const state=scenario==='actor'?{...data.bootstrap,siteUserId:'B'}:scenario==='role'?{...data.bootstrap,me:{...data.bootstrap.me,membership:{...data.bootstrap.me.membership,role:'member',epoch:2}}}:data.bootstrap;
    await act(async()=>release(response(state)));await flush();assert.equal(writes().length,0,scenario);
@@ -526,8 +511,8 @@ test('publish late authorization cannot cross replacement actor/permission verif
    if(scenario==='role-epoch')data.bootstrap={...data.bootstrap,me:{...data.bootstrap.me,membership:{...data.bootstrap.me.membership,role:'member',epoch:2}}};
    if(scenario==='epoch-readable'){data.bootstrap={...data.bootstrap,me:{...data.bootstrap.me,membership:{...data.bootstrap.me.membership,epoch:2}}};data['trainings/tr']={...data['trainings/tr'],title:'fresh verified title',description:'fresh verified description'};}
    override=path=>scenario==='role-epoch'&&path==='trainings/tr'?new Response(JSON.stringify({error:{code:'FORBIDDEN',message:'no current access',retryable:false}}),{status:403,headers:{'X-Kapok-Actor':'A'}}):null;
-   if(scenario==='blur-focus')await act(async()=>window.dispatchEvent(new Event('blur')));
-   await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+   if(scenario==='blur-focus')await act(async()=>window.dispatchEvent(new Event('pagehide')));
+   await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();
    const surface=document.querySelector('[data-kapok-sensitive]');
    if(scenario==='blur-focus'||scenario==='epoch-readable')assert.equal(surface.hidden,false,'same-account replacement verification completed');
    else assert.equal(surface.hidden,true,'lost permissions cannot reveal the old surface');
@@ -559,12 +544,12 @@ test('training status dialog cancel close escape and session lock discard intent
    await mount(()=>React.createElement(AccountBoundary,{actorId:'A',load:'trainings/tr'},t=>React.createElement(TrainingForm,{actorId:'A',training:t})));
    document.querySelector('[name=status]').value='published';await click('保存训练');const dialog=document.querySelector('dialog');assert.equal(dialog.open,true);
    if(action==='escape')await act(async()=>dialog.dispatchEvent(new Event('cancel',{cancelable:true})));
-   else if(action==='blur')await act(async()=>{window.dispatchEvent(new Event('blur'));assert.equal(dialog.open,false,'must leave top layer synchronously');});
+   else if(action==='blur')await act(async()=>{window.dispatchEvent(new Event('pagehide'));assert.equal(dialog.open,false,'must leave top layer synchronously');});
    else if(action==='关闭状态确认')await act(async()=>document.querySelector('[aria-label="关闭状态确认"]').click());
    else await click('取消');
    assert.equal(dialog.open,false);await click('确认并保存');assert.equal(writes().length,0,'discarded confirmation cannot later write');
    assert.equal(document.querySelector('[name=title]').value,'retained title');assert.equal(document.querySelector('[name=status]').value,'published');
-   if(action==='blur'){await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(document.querySelector('dialog').open,false);assert.equal(writes().length,0);}
+   if(action==='blur'){await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();assert.equal(document.querySelector('dialog').open,false);assert.equal(writes().length,0);}
   }finally{await unmount();}
  }
 });
@@ -590,9 +575,9 @@ test('Bilibili time clicks reload only on explicit navigation, preserve drafts/p
   assert.equal(scrolled.at(-1),frame);assert.equal(document.querySelector('#comment-input').value,'保留的讨论草稿');assert.ok(button('取消回复'));
   await input(document.querySelector('#comment-input'),'继续输入不重载');assert.equal(document.querySelector('iframe'),frame);
   await click('讨论时间点 03:00');assert.notEqual(document.querySelector('iframe'),frame);frame=document.querySelector('iframe');assert.equal(new URL(frame.src).searchParams.get('t'),'180');
-  await act(async()=>window.dispatchEvent(new Event('blur')));assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
+  await act(async()=>window.dispatchEvent(new Event('pagehide')));assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
   data['videos/v']={...data['videos/v'],url:'https://www.bilibili.com/video/BV1KapokTest/?p=3'};
-  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();
   assert.equal(document.querySelector('iframe'),null);
   await click('载入 B 站视频');
   frame=document.querySelector('iframe');url=new URL(frame.src);assert.equal(url.searchParams.get('t'),'90');assert.equal(url.searchParams.get('p'),'3');assert.equal(document.querySelector('#comment-input').value,'继续输入不重载');
@@ -620,11 +605,11 @@ test('Bilibili changed deep-link time cannot reopen a locked same snapshot befor
  let target=90;const Screen=()=>React.createElement(VideoDiscussion,{actorId:'A',videoId:'v',initialSeconds:target});
  try {
   await mount(Screen);await click('载入 B 站视频');const frame=document.querySelector('iframe');
-  await act(async()=>window.dispatchEvent(new Event('blur')));
+  await act(async()=>window.dispatchEvent(new Event('pagehide')));
   assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
   target=180;await act(async()=>root.render(React.createElement(Screen)));await flush();
   assert.equal(document.querySelector('iframe'),null,'changing query props alone must not recreate third-party media while locked');
-  await act(async()=>window.dispatchEvent(new Event('focus')));await flush();
+  await act(async()=>window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));await flush();
   assert.equal(document.querySelector('iframe'),null);
   await click('载入 B 站视频');
   assert.equal(new URL(document.querySelector('iframe').src).searchParams.get('t'),'180');
@@ -856,14 +841,14 @@ test('account UI previews only the signed-in member’s public profile and rejec
   assert.ok(document.querySelector('a[href="/me/edit"]'));
 
   data['members/u'] = {...data['members/u'], id: 'wrong-id', bio: '不应可见'};
-  await act(async () => window.dispatchEvent(new Event('focus')));
+  await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
   await flush();
   assert.equal(document.querySelector('.account-profile-card'), null);
   assert.doesNotMatch(document.body.textContent, /不应可见|队内公开盘名/);
 
   data.bootstrap.me = {...data.me, membership: {...me.membership, status: 'left'}};
   calls.length = 0;
-  await act(async () => window.dispatchEvent(new Event('focus')));
+  await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
   await flush();
   assert.deepEqual(calls.map(call => call.path), ['bootstrap', 'bootstrap']);
   assert.match(document.body.textContent, /无法预览队内资料/);
@@ -915,4 +900,23 @@ test('U1 controlled back keeps the approved growth filter and learning source on
   window.history.replaceState({},'','/reflections/u1');assert.equal(controlledBackSource(),expected);
   clearNavigationActor('A');
  }
+});
+
+test('B8 focusing official iframe is not leaving the page; app switching stays visible and page departure still locks',async()=>{
+ setup(); data['videos/v']={...video,source:'bilibili',url:'https://www.bilibili.com/video/BV1KapokTest/',durationSec:null};
+ const original=document.hasFocus;
+ try {
+  await mount(VideoDiscussion); await click('载入 B 站视频'); const frame=document.querySelector('iframe');
+  await act(async()=>frame.focus());
+  document.hasFocus=()=>true;
+  await act(async()=>window.dispatchEvent(new Event('blur')));
+  assert.equal(document.querySelector('iframe'),frame);assert.equal(frame.closest('[data-kapok-sensitive]').hidden,false);
+  const reads=calls.length;await act(async()=>window.dispatchEvent(new Event('focus')));await flush();assert.equal(calls.length,reads);assert.equal(document.querySelector('iframe'),frame);
+  await act(async()=>window.dispatchEvent(new Event('blur')));
+  document.hasFocus=()=>false;
+  await act(async()=>window.dispatchEvent(new Event('blur')));
+  assert.equal(document.querySelector('iframe'),frame);
+  await act(async()=>window.dispatchEvent(new Event('pagehide')));
+  assert.equal(frame.getAttribute('src'),'about:blank');assert.equal(document.querySelector('iframe'),null);
+ } finally {document.hasFocus=original;await unmount();}
 });

@@ -10,6 +10,35 @@ const accessAssertion = 'Cf-Access-Jwt-Assertion';
 const rsa = 'RSASSA-PKCS1-v1_5';
 type JwtObject = Record<string, unknown>;
 
+// Cache only public key material, never assertions, identities, or permissions.
+// Like jose's remote JWKS policy: bounded freshness and a rotation cooldown.
+const keyMaxAgeMs = 5 * 60_000;
+const rotationCooldownMs = 30_000;
+type PublicKeys = { fetchedAt: number; keys: JwtObject[]; imported: Map<string, CryptoKey> };
+const keyCaches = new WeakMap<typeof fetch, Map<string, PublicKeys>>();
+
+async function publicKeys(issuer: string, kid: string, fetchKeys: typeof fetch): Promise<PublicKeys> {
+  let cache = keyCaches.get(fetchKeys);
+  if (!cache) { cache = new Map(); keyCaches.set(fetchKeys, cache); }
+  const previous = cache.get(issuer);
+  const now = Date.now();
+  if (previous && now >= previous.fetchedAt && now - previous.fetchedAt < keyMaxAgeMs &&
+      (previous.keys.some(key => key.kid === kid) || now - previous.fetchedAt < rotationCooldownMs)) return previous;
+  // Keep request-owned I/O out of isolate-wide state (Workers can cancel it when
+  // its originating request ends). Only fully read key sets are shared.
+  const response = await fetchKeys(`${issuer}/cdn-cgi/access/certs`, { redirect: 'manual', signal: AbortSignal.timeout(2_000) });
+  if (!response.ok) throw new Error('Public key fetch failed');
+  const { keys } = object(await response.json());
+  if (!Array.isArray(keys) || keys.length === 0 || keys.length > 32) throw new Error('Invalid public key set');
+  const next: PublicKeys = { fetchedAt: now, keys: keys.map(object), imported: new Map() };
+  // A slower request must not overwrite a newer rotation snapshot.
+  if (!cache.get(issuer) || cache.get(issuer)!.fetchedAt <= now) {
+    if (!cache.has(issuer) && cache.size >= 8) cache.delete(cache.keys().next().value!);
+    cache.set(issuer, next);
+  }
+  return next;
+}
+
 function decode(segment: string) {
   if (!/^[A-Za-z0-9_-]+$/.test(segment)) throw new Error('Invalid JWT encoding');
   return Uint8Array.from(atob(segment.replaceAll('-', '+').replaceAll('_', '/')), char => char.charCodeAt(0));
@@ -55,15 +84,15 @@ export async function verifyAccessPrincipal(
         typeof email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)) return null;
 
     const signature = decode(encodedSignature);
-    // Workers support manual redirects. The status check rejects redirects without following them.
-    const response = await fetchKeys(`${issuer}/cdn-cgi/access/certs`, { redirect: 'manual', signal: AbortSignal.timeout(2_000) });
-    if (!response.ok) return null;
-    const { keys } = object(await response.json());
-    if (!Array.isArray(keys)) return null;
-    const matching = keys.filter(key => key?.kid === kid);
+    const keySet = await publicKeys(issuer, kid, fetchKeys);
+    const matching = keySet.keys.filter(key => key.kid === kid);
     const [key] = matching;
     if (matching.length !== 1 || key.kty !== 'RSA' || (key.alg && key.alg !== 'RS256') || (key.use && key.use !== 'sig')) return null;
-    const publicKey = await crypto.subtle.importKey('jwk', key, { name: rsa, hash: 'SHA-256' }, false, ['verify']);
+    let publicKey = keySet.imported.get(kid);
+    if (!publicKey) {
+      publicKey = await crypto.subtle.importKey('jwk', key as JsonWebKey, { name: rsa, hash: 'SHA-256' }, false, ['verify']);
+      keySet.imported.set(kid, publicKey);
+    }
     if (!await crypto.subtle.verify(rsa, publicKey, signature, new TextEncoder().encode(`${encodedHeader}.${encodedClaims}`))) return null;
     if (exp <= Math.floor(Date.now() / 1000)) return null;
     return { provider: 'access', issuer, subject: sub, verifiedEmail: email };

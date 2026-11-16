@@ -209,7 +209,7 @@ test('editing a reply keeps its relation and edit buffer separate from the root 
         assert.equal(input().value, replyComment.text);
         await type('编辑中的内容');
         comments = [rootComment, { ...replyComment, version: 2 }];
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause();
         await click(button('取消编辑', composer()));
         assert.equal(input().value, '根评论草稿');
@@ -287,9 +287,9 @@ test('a temporary lock fences a late reply response and keeps the same draft and
             new Promise(resolve => { finish = () => resolve(response({ id: 'late' }, actor)); }) : null;
         await submit();
         assert.ok(finish);
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.ok(writes()[0].options.signal.aborted);
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await pause();
         await act(async () => finish());
         assert.equal(input().value, '等待确认的回复');

@@ -234,14 +234,14 @@ test('training title source follows authorized YouTube, Bilibili, local and empt
         await act(async () => biliLoad().click());
         assert.ok(stage().querySelector('iframe'));
 
-        await act(async () => window.dispatchEvent(new Event('blur')));
+        await act(async () => window.dispatchEvent(new Event('pagehide')));
         assert.ok(biliLink.closest('[hidden]'));
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await flush();
         assert.equal(titleSource(bili.url, biliLabel).closest('[hidden]'), null);
 
         visible = [youtube, local];
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await flush();
         assert.equal(biliLink.isConnected, false);
         titleSource('https://www.youtube.com/watch?v=aaaaaaaaaaa&t=62s', '在 YouTube 打开（新标签）');
@@ -250,7 +250,7 @@ test('training title source follows authorized YouTube, Bilibili, local and empt
         assert.ok(stage().querySelector('video'));
         assert.deepEqual(sourceLinks(), []);
         visible = [];
-        await act(async () => window.dispatchEvent(new Event('focus')));
+        await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })));
         await flush();
         assert.match(document.body.textContent, /本次训练暂无视频/);
         assert.deepEqual(sourceLinks(), []);

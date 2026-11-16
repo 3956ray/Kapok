@@ -50,7 +50,7 @@ const buttons = text => [...document.querySelectorAll('button')].filter(b => b.t
 async function click(text) { const b = buttons(text).find(b => b.closest('dialog[open]')) ?? buttons(text)[0]; assert.ok(b, text); await act(async () => b.click()); await flush(); }
 async function selectScope(value) { const node = document.querySelector(`input[type=radio][value=${value}]`); assert.ok(node); await act(async () => node.click()); await flush(); }
 async function input(node, value) { await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set.call(node, value); node.dispatchEvent(new Event('input', { bubbles: true })); }); }
-async function lifecycle(name) { await act(async () => window.dispatchEvent(new Event(name))); await flush(); }
+async function lifecycle(name) { await act(async () => window.dispatchEvent(Object.assign(new Event(name), name === 'pageshow' ? { persisted: true } : {}))); await flush(); }
 const writes = () => calls.filter(c => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(c.options.method));
 
 test('two-scope UI offers only private/team, cancels without write and keeps publication independent', async () => {
@@ -86,7 +86,7 @@ test('two-scope author reads and session revalidation never request a coaches li
     setup();
     try {
         await mount(h(ReflectionRead, { actorId: 'A', id: 'r', saved: false }));
-        await lifecycle('blur'); await lifecycle('focus');
+        await lifecycle('pagehide'); await lifecycle('pageshow');
         assert.equal(calls.some(c => c.path === 'coaches'), false);
         assert.equal(document.body.textContent.includes('指定教练'), false);
     } finally { await unmount(); }
