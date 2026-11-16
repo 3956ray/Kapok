@@ -144,7 +144,7 @@ export function createReflectionService({
             href: (r.video_id ? '/videos/' : '/trainings/') + source.id
         } : null;
     }
-    async function present(r: Row, c: Awaited<ReturnType<typeof personal>>): Promise<Reflection> {
+    async function present(r: Row, c: Awaited<ReturnType<typeof personal>>, resolveLink = true): Promise<Reflection> {
         const actor = c.user.id;
         const base: ReflectionReader = {
             id: r.id,
@@ -158,7 +158,7 @@ export function createReflectionService({
                 jerseyNumber: r.jersey_number
             },
             isAuthor: actor === r.owner_id,
-            link: await link(r, c)
+            link: resolveLink ? await link(r, c) : null
         };
         if (actor !== r.owner_id) return base;
         return {
@@ -203,7 +203,14 @@ export function createReflectionService({
     async function withCurrentOwnLinks<T extends ReflectionAuthor>(p: Principal | null, c: Awaited<ReturnType<typeof personal>>, items: T[]) {
         const access = privateOwnerFence(p, c);
         const rows = await q(`WITH viewer(id) AS (SELECT ? WHERE ${access.predicate})
-            SELECT r.id,r.version,r.sharing_version,${publishedLearningLink('r.source_kind', 'r.source_id', 'viewer.id')} AS link
+            SELECT r.id,r.version,r.sharing_version,
+            CASE WHEN r.source_kind IS NOT NULL THEN ${publishedLearningLink('r.source_kind', 'r.source_id', 'viewer.id')}
+            WHEN EXISTS(SELECT 1 FROM memberships lm WHERE lm.user_id=viewer.id AND lm.status='active' AND lm.team_id=r.team_id)
+            THEN CASE WHEN r.video_id IS NOT NULL THEN
+              (SELECT json_object('title',v.title,'href','/videos/'||v.id) FROM videos v JOIN trainings t ON t.id=v.training_id
+               WHERE v.id=r.video_id AND v.training_id=r.training_id AND v.team_id=r.team_id AND v.status='active' AND t.status IN ('published','archived'))
+              ELSE (SELECT json_object('title',t.title,'href','/trainings/'||t.id) FROM trainings t
+               WHERE t.id=r.training_id AND t.team_id=r.team_id AND t.status IN ('published','archived')) END END AS link
             FROM viewer LEFT JOIN reflections r ON r.owner_id=viewer.id`, c.user.id, ...access.values)
             .all<{ id: string | null; version: number; sharing_version: number; link: string | null }>();
         if (!rows.results.length) throw missing();
@@ -211,7 +218,7 @@ export function createReflectionService({
         return items.flatMap(item => {
             const row = links.get(item.id);
             if (!row || row.version !== item.version || row.sharing_version !== item.sharingVersion) return [];
-            return [item.sourceRef ? { ...item, link: parseLearningLink(row.link) } : item];
+            return [{ ...item, link: parseLearningLink(row.link) }];
         });
     }
     async function getOwnReflection(p: Principal | null, id: string, captured?: Awaited<ReturnType<typeof personal>>): Promise<ReflectionAuthor> {
@@ -233,7 +240,7 @@ export function createReflectionService({
         const c = await personal(p);
         const access = privateOwnerFence(p, c);
         const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at IS NULL AND ${access.predicate} ORDER BY r.date DESC,r.id DESC`, c.user.id, ...access.values).all<Row>()).results;
-        const items = await Promise.all(rows.map(r => present(r, c) as Promise<ReflectionAuthor>));
+        const items = await Promise.all(rows.map(r => present(r, c, false) as Promise<ReflectionAuthor>));
         return withCurrentOwnLinks(p, c, items);
     }
     async function association(p: Principal | null, trainingId: unknown, videoId: unknown) {
@@ -590,7 +597,7 @@ export function createReflectionService({
         const rows = (await q(`${select} WHERE r.owner_id=? AND r.deleted_at>? AND EXISTS(SELECT 1 FROM users u WHERE u.id=r.owner_id AND u.status='active')
             AND ${access.predicate} ORDER BY r.deleted_at DESC,r.id DESC`, c.user.id, cutoff, ...access.values).all<Row>()).results;
         const items = await Promise.all(rows.map(async r => ({
-            ...await present(r, c) as ReflectionAuthor,
+            ...await present(r, c, false) as ReflectionAuthor,
             deletedAt: r.deleted_at!,
             recoverUntil: new Date(Date.parse(r.deleted_at!) + 7 * 86400000).toISOString()
         })));

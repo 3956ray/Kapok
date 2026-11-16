@@ -1,6 +1,7 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { programAssetsPlugin } from "./build/program-assets-plugin";
 import { stagingWorkerConfig } from "./build/staging-wrangler";
 
 const outDir = "dist/staging";
@@ -24,6 +25,7 @@ export default defineConfig(({ command, mode }) => {
       ssr: { build: { outDir: `${outDir}/server/ssr` } },
     },
     plugins: [
+      programAssetsPlugin(),
       vinext({
         clientOutDir: `${outDir}/client`,
         rscOutDir: `${outDir}/server`,

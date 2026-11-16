@@ -50,15 +50,18 @@ const systemClock = () => new Date();
 
 export function createService({ db, bucket, clock = systemClock, bootstrapSiteUserId, accessInitialAdminEmail, mediaPolicy, learningPolicy, topicPolicy }: ServiceOptions) {
   const statement = (sql: string, ...values: unknown[]) => db.prepare(sql).bind(...values);
-  async function me(principal: Principal | null): Promise<Me> {
-    const current = authenticated(principal);
-    const userId = await identityFor(db, current);
-    const row = await statement(`SELECT u.id, u.status, p.disc_name, p.jersey_number, p.bio, p.version AS profile_version,
+  type AccountRow = Record<string, string | number | null>;
+  function accountStatement(current: Principal) {
+    // The unique identity tuple already selects the user; a separate identityFor
+    // lookup adds a remote D1 round trip without strengthening this join.
+    return statement(`SELECT u.id, u.status, p.disc_name, p.jersey_number, p.bio, p.version AS profile_version,
       m.id AS member_id, m.team_id, m.role, m.status AS member_status, m.epoch, m.version AS member_version,
       t.name AS team_name, t.description AS team_description
       FROM users u JOIN auth_identities a ON a.user_id = u.id AND a.provider=? AND a.issuer=? AND a.subject=?
       LEFT JOIN profiles p ON p.user_id = u.id LEFT JOIN memberships m ON m.user_id = u.id
-      LEFT JOIN teams t ON t.id = m.team_id WHERE u.id = ?`, ...identityTuple(current), userId).first<Record<string, string | number | null>>();
+      LEFT JOIN teams t ON t.id = m.team_id`, ...identityTuple(current));
+  }
+  function accountFromRow(row: AccountRow | null | undefined): Me {
     if (!row) return { user: null, profile: null, membership: null, team: null };
     if (row.status !== 'active') return { user: { id: String(row.id), status: 'deleted' }, profile: null, membership: null, team: null };
     return {
@@ -67,6 +70,9 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
       membership: row.member_id === null ? null : { id: String(row.member_id), teamId: String(row.team_id), role: row.role as 'admin' | 'coach' | 'member', status: row.member_status as 'active' | 'paused' | 'left', epoch: Number(row.epoch), version: Number(row.member_version) },
       team: row.member_status === 'active' ? { id: String(row.team_id), name: String(row.team_name), description: String(row.team_description) } : null,
     };
+  }
+  async function me(principal: Principal | null): Promise<Me> {
+    return accountFromRow(await accountStatement(authenticated(principal)).first<AccountRow>());
   }
   async function getAccount(principal: Principal | null): Promise<Me> {
     const current = authenticated(principal);
@@ -150,8 +156,13 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   }
   async function getBootstrap(principal: Principal | null): Promise<BootstrapStatus> {
     const current = authenticated(principal);
-    const initialized = !!await statement("SELECT id FROM bootstraps WHERE id = 'site'").first();
-    const account = await me(current);
+    // A read-only batch keeps initialization and account reads in one D1 request.
+    const [initialization, accountRows] = await db.batch<AccountRow>([
+      statement("SELECT id FROM bootstraps WHERE id = 'site'"),
+      accountStatement(current),
+    ]);
+    const initialized = initialization.results.length > 0;
+    const account = accountFromRow(accountRows.results[0]);
     const sites = current.provider === 'site';
     return {
       actorId: await actorKey(current),

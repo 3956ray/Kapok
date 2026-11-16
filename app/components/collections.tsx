@@ -293,7 +293,7 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
             <Pencil size={18} aria-hidden="true" />
         </button>
         {hasSavedNote && !editing && !busy && pending === null ?
-            <Link className="button secondary collection-card-action" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}
+            <Link prefetch={false} className="button secondary collection-card-action" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}
                 aria-label="转为复盘" title="转为复盘"><ReflectionIcon size={18} aria-hidden="true" /></Link> :
             <button className="secondary collection-card-action" type="button" disabled aria-label="转为复盘" title="转为复盘">
                 <ReflectionIcon size={18} aria-hidden="true" />
@@ -310,7 +310,7 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
                 {actions}
             </header>
             {item.source ? <>
-                <h2><Link href={item.source.href}>{item.source.title}</Link></h2>
+                <h2><Link prefetch={false} href={item.source.href}>{item.source.title}</Link></h2>
                 {item.source.text && <p className="preserve">{item.source.text}</p>}
             </> : <h2>来源暂不可用</h2>}
         </>}

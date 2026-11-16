@@ -2,6 +2,8 @@ import handler from "vinext/server/fetch-handler";
 import { verifyAccessPrincipal } from "../lib/server/access-identity";
 import { authEntryPath, isFrameworkRequest, publicAuthEntry, publicReturnTo, rootCredentialRequest } from "../lib/server/auth-entry";
 import { runWithAccessIdentity } from "../lib/server/request-identity";
+import { programAssets } from "virtual:kapok-program-assets";
+import { programCacheControl } from "./program-cache";
 
 const cacheControl = "private, no-store";
 const denied = (request: Request) => new Response(request.method === "HEAD" ? null : "Forbidden", {
@@ -45,7 +47,7 @@ export default {
       ? await env.ASSETS.fetch(request)
       : await runWithAccessIdentity(principal, () => handler.fetch(request, env, ctx));
     const result = new Response(response.body, response);
-    result.headers.set("Cache-Control", cacheControl);
+    result.headers.set("Cache-Control", buildAsset && env.ASSETS ? programCacheControl(request, response, programAssets) : cacheControl);
     return result;
   },
 };

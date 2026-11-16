@@ -5,7 +5,7 @@ import type { Training, TrainingPublication, Video, Comment, Collection, Collect
 import { DomainError, assertGuard } from './domain.ts';
 import type { StoredResult } from './domain';
 import { isLearningSourceId, isLearningSourceKind, type Reflection } from '../contracts/reflections.ts';
-import { learningSourceGuard, parseLearningLink, privateOwnerFence, privateSourceWrite, publishedLearningLink, requirePrivateOwner } from './learning-sources.ts';
+import { learningSourceGuard, privateOwnerFence, privateSourceWrite, publishedLearningLink, requirePrivateOwner } from './learning-sources.ts';
 import { actorKey } from './identity.ts';
 import { reflectionShared } from './reflections.ts';
 import { createResumableUploads } from './resumable-upload.ts';
@@ -633,19 +633,32 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                 FROM collections WHERE owner_id=? AND ${access.predicate} ORDER BY created_at DESC,id DESC`,
             owner, ...access.values
         ).all<Omit<Collection, 'source'>>()).results;
-        const items = await Promise.all(rows.map(async r => ({
-            ...r, source: isLearningSourceKind(r.sourceKind) ? null : await resolveSource(p, r.sourceKind, r.sourceId, r.timestampSec),
-        })));
+        // Resolve only current, authorized source projections in the final read.
+        // The list never needs a video's sibling list or a reflection's editor DTO.
+        const member = `EXISTS(SELECT 1 FROM memberships vm JOIN users vu ON vu.id=vm.user_id
+            WHERE vm.user_id=viewer.id AND vm.status='active' AND vu.status='active' AND vm.team_id=v.team_id)`;
+        const videoGuard = `v.status='active' AND t.team_id=v.team_id AND t.status IN ('published','archived') AND ${member}`;
+        const timeHref = `CASE WHEN c.timestamp_sec IS NULL THEN '' ELSE '?t='||c.timestamp_sec END`;
+        const shared = reflectionShared.replace('ru.id=?', 'ru.id=viewer.id');
         const links = await q(`WITH viewer(id) AS (SELECT ? WHERE ${access.predicate})
-            SELECT c.id,c.version,${publishedLearningLink('c.source_kind', 'c.source_id', 'viewer.id')} AS link
+            SELECT c.id,c.version,CASE c.source_kind
+              WHEN 'video' THEN (SELECT json_object('title',v.title,'href','/videos/'||v.id||${timeHref})
+                FROM videos v JOIN trainings t ON t.id=v.training_id WHERE v.id=c.source_id AND ${videoGuard})
+              WHEN 'comment' THEN (SELECT json_object('title',v.title,'href','/videos/'||v.id||${timeHref}||'#comment-'||vc.id,'text',vc.text)
+                FROM video_comments vc JOIN videos v ON v.id=vc.video_id JOIN trainings t ON t.id=v.training_id
+                WHERE vc.id=c.source_id AND vc.status='active' AND ${videoGuard})
+              WHEN 'reflection' THEN (SELECT json_object('title',CASE WHEN r.title='' THEN '训练复盘' ELSE r.title END,'href','/reflections/'||r.id,'text',r.text)
+                FROM reflections r JOIN profiles rp ON rp.user_id=r.owner_id
+                WHERE r.id=c.source_id AND r.deleted_at IS NULL AND (r.owner_id=viewer.id OR (${shared})))
+              ELSE ${publishedLearningLink('c.source_kind', 'c.source_id', 'viewer.id')} END AS link
             FROM viewer LEFT JOIN collections c ON c.owner_id=viewer.id`,
             owner, ...access.values).all<{ id: string | null; version: number; link: string | null }>();
         if (!links.results.length) throw missing();
         const byId = new Map(links.results.map(row => [row.id, row]));
-        return items.flatMap(item => {
+        return rows.flatMap(item => {
             const row = byId.get(item.id);
             if (!row || row.version !== item.version) return [];
-            return [isLearningSourceKind(item.sourceKind) ? { ...item, source: parseLearningLink(row.link) } : item];
+            return [{ ...item, source: row.link ? JSON.parse(row.link) as Collection['source'] : null }];
         });
     }
     async function getLearningReflectionSeed(p: Principal | null, kind: unknown, id: unknown): Promise<CollectionReflectionSeed> {

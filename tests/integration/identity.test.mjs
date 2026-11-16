@@ -316,3 +316,34 @@ test('Access pre-membership HTTP surface only exposes own minimal state and reje
   assert.equal((await endpoint('me/export')).status, 403);
   await rejectsCode(f.service.updateProfile(principal, { discName: 'blocked', jerseyNumber: '09', expectedVersion: 1 }, 'paused-update'), 'FORBIDDEN');
 });
+
+test('account lookup uses one D1 read and bootstrap batches its snapshot without changing identity results', async t => {
+  const { f } = await seeded(t);
+  const expected = await f.service.me(owner);
+  const originals = new WeakMap();
+  let reads = 0, batches = 0;
+  function tracked(statement) {
+    const wrapped = new Proxy(statement, { get(target, key) {
+      if (key === 'bind') return (...args) => tracked(target.bind(...args));
+      if (key === 'first') return (...args) => { reads++; return target.first(...args); };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    originals.set(wrapped, statement);
+    return wrapped;
+  }
+  const db = {
+    prepare: sql => tracked(f.db.prepare(sql)),
+    batch: statements => { batches++; return f.db.batch(statements.map(s => originals.get(s) ?? s)); },
+  };
+  const service = createService({ db, clock: now, bootstrapSiteUserId: owner.subject });
+  assert.deepEqual(await service.me(owner), expected);
+  assert.equal(reads, 1);
+  reads = 0;
+  const bootstrap = await service.getBootstrap(owner);
+  assert.deepEqual(bootstrap.me, expected);
+  assert.equal(bootstrap.initialized, true);
+  assert.equal(reads, 0);
+  assert.equal(batches, 1);
+  assert.equal((await service.getBootstrap(alice)).me.user, null);
+});

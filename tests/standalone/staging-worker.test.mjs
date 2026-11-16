@@ -16,6 +16,8 @@ const chunkDir = path.join(assetsDir, "_next/static/chunks");
 const chunk = readdirSync(chunkDir).find(name => name.endsWith(".js"));
 assert.ok(chunk);
 const chunkRoute = "/_next/static/chunks/" + chunk;
+const { programAssets } = await import('../../dist/staging/server/program-assets.js');
+const importChunk = readdirSync(chunkDir).find(name => name.startsWith('initial-videos-import-'));
 const migrations = [
   "0000_identity.sql",
   "0001_training.sql",
@@ -61,6 +63,9 @@ test("the default build targets only synthetic D1, with Worker-first assets and 
   assert.deepEqual(externalWorkers, []);
   assert.equal(existsSync(main), true);
   assert.equal(existsSync(path.join(assetsDir, "_next/static")), true);
+  assert.ok(importChunk);
+  assert.equal(programAssets.has('/_next/static/chunks/' + importChunk), false);
+  for (const file of programAssets) assert.ok(existsSync(path.join(assetsDir, file)), 'allowlist references an emitted program');
   assert.deepEqual(readdirSync(migrationDir).filter(name => name.endsWith(".sql")).sort(), migrations);
   for (const file of readdirSync("dist/staging", { recursive: true })) {
     assert.doesNotMatch(file, /(^|\/)(?:\.dev\.vars(?:\..*)?|\.env(?:\..*)?|hosting\.json|.*(?:fixture|proxy).*\.(?:js|mjs))$/i);
@@ -235,7 +240,13 @@ test("signed request reaches real pages and assets and registers an ordinary mem
   assert.match(await asset.text(), /<svg/);
   const clientChunk = await request(chunkRoute);
   assert.equal(clientChunk.status, 200);
-  assert.equal(clientChunk.headers.get("cache-control"), "private, no-store");
+  assert.equal(clientChunk.headers.get("cache-control"), "private, max-age=31536000, immutable");
+  assert.equal((await request('/_next/static/chunks/' + importChunk)).headers.get('cache-control'), 'private, no-store');
+  const missingChunk = await request('/_next/static/chunks/missing-12345678.js');
+  assert.equal(missingChunk.status, 404);
+  assert.equal(missingChunk.headers.get('cache-control'), 'private, no-store');
+  assert.equal((await request(chunkRoute + '?_rsc=test')).headers.get('cache-control'), 'private, no-store');
+  assert.equal((await request(chunkRoute, { method: 'HEAD' })).headers.get('cache-control'), 'private, no-store');
 
   const session = await request("/api/v1/bootstrap");
   assert.equal(session.status, 200);
