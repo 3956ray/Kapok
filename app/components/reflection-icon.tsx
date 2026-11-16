@@ -1,2 +1,2 @@
-// Shared creation icon: a lined notebook, visually distinct from editing pencils.
-export { NotebookText as ReflectionIcon } from 'lucide-react';
+// Shared note icon for reflection creation; editing keeps its pencil.
+export { StickyNote as ReflectionIcon } from 'lucide-react';

@@ -1,4 +1,4 @@
-import { Shell, EnvironmentNote, getPageContext, AccessState, canReadPersonal, isMember } from '../components/shell';
+import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../components/shell';
 import Link from 'next/link';
 import { ReflectionIcon } from '../components/reflection-icon';
 import { LocalDrafts } from '../components/reflections';
@@ -12,9 +12,8 @@ export default async function Growth({ searchParams }: { searchParams?: Promise<
         return <Shell title="成长记录" surface="index">
             <AccessState context={context} returnTo="/growth" />
         </Shell>;
-    const write = <Link href="/reflections/new" className="growth-write" aria-label="写复盘" title="写复盘"><ReflectionIcon size={19} aria-hidden="true" /></Link>;
-    return <Shell title="成长记录" surface="index" eyebrow="只属于你的积累" description="回看自己的复盘、收藏和私人备注。" headingAside={write} canCompose={isMember(context.me)}>
-        <EnvironmentNote />
+    const write = <Link href="/reflections/new" className="button secondary growth-compose" aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /><span>写复盘</span></Link>;
+    return <Shell title="成长记录" surface="index" description="回看复盘、收藏和私人备注。" headingAside={write} canCompose={isMember(context.me)}>
         <LocalDrafts key={context.user.userId} actorId={context.user.userId} />
         <GrowthContent key={context.user.userId + initialFilter} actorId={context.user.userId} initialFilter={initialFilter} />
     </Shell>;

@@ -83,7 +83,7 @@ test('learning bookmark shows a saved note card and edit control; conversion rep
     await click('保存收藏');
     assert.equal(textarea(), null);
     assert.match(document.body.textContent, /原私人备注/);
-    assert.equal(document.querySelector('a[href="/reflections/new?collection=bookmark"]').textContent, '转为复盘');
+    assert.equal(document.querySelector('a[href="/reflections/new?collection=bookmark"]').getAttribute('aria-label'), '转为复盘');
     await click('编辑私人备注');
     await write('编辑后的私人备注');
     await click('保存备注');

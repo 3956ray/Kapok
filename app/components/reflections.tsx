@@ -444,15 +444,13 @@ export function ReflectionEditor({
                 </section>}
 
                 <div className="editor-save">
+                    <div className="editor-action-row">
                     <button ref={saveButton} disabled={saveDisabled} aria-haspopup={needsConfirmation ? 'dialog' : undefined}>{saveLabel}</button>
-                    <p role="status" className="muted">{busy ? '正在保存到账号…' : status}</p>
-                </div>
-
-                {error && <p role="alert" className="form-error">{error}</p>}
-
                 <button
                     type="button"
-                    className="secondary"
+                    className="secondary editor-discard"
+                    aria-label="放弃编辑"
+                    title="放弃此设备上尚未保存的编辑"
                     disabled={busy || draft.pending !== null}
                     onClick={() => {
                         if (window.confirm('放弃此设备上的未上云稿，并重新加载？')) {
@@ -460,7 +458,13 @@ export function ReflectionEditor({
                             window.location.reload();
                         }
                     }}
-                >放弃本机稿</button>
+                >放弃编辑</button>
+                    </div>
+                    <p role="status" className="muted">{busy ? '正在保存到账号…' : status}</p>
+                </div>
+
+                {error && <p role="alert" className="form-error">{error}</p>}
+
                 {draft.pending && <p className="muted">上次保存待确认时，先核对结果再放弃；也可前往成长查看已保存记录，本机恢复信息会保留。</p>}
                 <dialog ref={confirmation} className="sharing-dialog" aria-labelledby={confirmationId} aria-describedby={confirmationDescriptionId} onCancel={e => {
                     e.preventDefault();

@@ -3,7 +3,7 @@ import { ReflectionIcon } from './reflection-icon';
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
-import { Bookmark, LockKeyhole, Pencil } from 'lucide-react';
+import { Bookmark, LockKeyhole, Pencil, Trash2 } from 'lucide-react';
 import type { Collection, Video } from '../../lib/contracts/training';
 import { learningReflectionHref, type LearningSourceKind } from '../../lib/contracts/reflections';
 import { acknowledgeMutation, clearFormUI, navigationBuffer, useNavigationField } from '../../lib/client/navigation-state';
@@ -222,6 +222,7 @@ export function CollectionList({ actorId }: { actorId: string; initial?: Collect
 }
 export function CollectionCard({ actorId, item, compact = false }: { actorId: string; item: Collection; compact?: boolean }) {
     const session = useAccountSession();
+    const noteId = useId();
     const key = useRef(createRequestKey());
     const [editing, setEditing] = useNavigationField(actorId, `collection-edit:${item.id}`, false);
     const [buffer, setBuffer] = useNavigationField<string | null>(actorId, `collection-note:${item.id}`, null);
@@ -284,34 +285,54 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
     }
     const sourceLabel = { video: '视频收藏', comment: '讨论收藏', reflection: '队友复盘收藏',
         learning_post: '学习资料收藏', topic_collection: '专题合集收藏' }[item.sourceKind];
+    const hasSavedNote = Boolean(item.privateNote.trim());
+    const actions = <div className="collection-card-actions" role="group" aria-label="收藏操作">
+        <button ref={editButton} className="secondary collection-card-action" type="button" aria-label="编辑私人备注" title="编辑私人备注"
+            aria-expanded={editing} aria-controls={noteId} disabled={editing}
+            onClick={() => { focusEditor.current = true; setError(''); setEditing(true); }}>
+            <Pencil size={18} aria-hidden="true" />
+        </button>
+        {hasSavedNote && !editing && !busy && pending === null ?
+            <Link className="button secondary collection-card-action" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}
+                aria-label="转为复盘" title="转为复盘"><ReflectionIcon size={18} aria-hidden="true" /></Link> :
+            <button className="secondary collection-card-action" type="button" disabled aria-label="转为复盘" title="转为复盘">
+                <ReflectionIcon size={18} aria-hidden="true" />
+            </button>}
+        {!compact && <button className="secondary danger collection-card-action" type="button" aria-label="删除收藏" title="删除收藏"
+            disabled={busy || pending !== null} onClick={() => {
+                if (window.confirm('删除这条本人收藏和私人备注？来源内容不会删除。')) void submit({ action: 'delete', expectedVersion: item.version });
+            }}><Trash2 size={18} aria-hidden="true" /></button>}
+    </div>;
     return <article className={compact ? "collection-card" : "panel collection-card"}>
-        {!compact && <><p className="detail-meta"><time dateTime={item.createdAt}>{item.createdAt.slice(0, 10)}</time> · {sourceLabel}{item.timestampSec !== null ? ` · ${item.timestampSec}秒` : ''}</p>
-        {item.source ? <>
-            <h2>
-                <Link href={item.source.href}>{item.source.title}</Link>
-            </h2>{item.source.text && <p className="preserve">{item.source.text}</p>}</> : <h2>来源暂不可用</h2>}</>}
+        {!compact && <>
+            <header className="collection-card-header">
+                <p className="detail-meta"><time dateTime={item.createdAt}>{item.createdAt.slice(0, 10)}</time> · {sourceLabel}{item.timestampSec !== null ? ` · ${item.timestampSec}秒` : ''}</p>
+                {actions}
+            </header>
+            {item.source ? <>
+                <h2><Link href={item.source.href}>{item.source.title}</Link></h2>
+                {item.source.text && <p className="preserve">{item.source.text}</p>}
+            </> : <h2>来源暂不可用</h2>}
+        </>}
         <section className="private-note">
-            <div className="note-card-heading"><h3><LockKeyhole size={16} aria-hidden="true" />本人私人备注</h3>
-                {!editing && <button ref={editButton} type="button" className="secondary note-edit" aria-label="编辑私人备注" onClick={() => { focusEditor.current = true; setError(''); setEditing(true); }}><Pencil size={18} aria-hidden="true" /><span className="sr-only">编辑私人备注</span></button>}
+            <div className="note-card-heading">
+                <h3><LockKeyhole size={16} aria-hidden="true" />本人私人备注</h3>
+                {compact && actions}
             </div>
-            {editing ? <form data-own-buffer data-buffer-id={item.id} aria-busy={busy} onSubmit={e => { e.preventDefault(); focusEditor.current = true; void submit(pending ?? { privateNote: note, expectedVersion: item.version }); }}>
+            {editing ? <form id={noteId} data-own-buffer data-buffer-id={item.id} aria-busy={busy} onSubmit={e => { e.preventDefault(); focusEditor.current = true; void submit(pending ?? { privateNote: note, expectedVersion: item.version }); }}>
                 <label><span className="sr-only">本人私人备注</span><textarea ref={noteInput} name="note" maxLength={2000} rows={3} value={note} onChange={e => setBuffer(e.target.value)} disabled={busy || pending !== null} /></label>
                 <div className="actions">
                     <button disabled={busy}>{busy ? '正在保存…' : pending ? '确认保存备注结果' : '保存备注'}</button>
                     <button className="secondary" type="button" disabled={busy || pending !== null} onClick={() => { focusEditor.current = true; setBuffer(null); setEditing(false); setError(''); clearFormUI(actorId, item.id); }}>取消</button>
-                    <button className="secondary" type="button" disabled><ReflectionIcon size={16} aria-hidden="true" />转为复盘</button>
                 </div>
                 <p className="muted">{pending ? '上次保存尚待确认，输入仍保留。请先确认保存结果。' : '请先保存备注，再转为复盘；取消会放弃本次修改。'}</p>
             </form> : <>
-                <p className="preserve">{item.privateNote.trim() ? item.privateNote : '暂无私人备注'}</p>
-                {item.privateNote.trim() && <p className="muted" role="status">当前备注已保存在账号中。</p>}
-                {item.privateNote.trim() ? <Link className="button secondary" href={`/reflections/new?collection=${encodeURIComponent(item.id)}`}><ReflectionIcon size={16} aria-hidden="true" />转为复盘</Link> : <><button type="button" className="secondary" disabled><ReflectionIcon size={16} aria-hidden="true" />转为复盘</button><p className="muted">先添加并保存私人备注，才能转为复盘。</p></>}
+                <p id={noteId} className="preserve">{hasSavedNote ? item.privateNote : '暂无私人备注'}</p>
+                {hasSavedNote ? <p className="muted" role="status">当前备注已保存在账号中。</p> :
+                    <p className="muted">先添加并保存私人备注，才能转为复盘。</p>}
             </>}
             {error && <p role="alert" className="form-error">{error}</p>}
         </section>
-        {!compact && <button className="secondary" type="button" disabled={busy || pending !== null} onClick={() => {
-            if (window.confirm('删除这条本人收藏和私人备注？来源内容不会删除。')) void submit({ action: 'delete', expectedVersion: item.version });
-        }}>删除收藏</button>}
     </article>;
 }
 

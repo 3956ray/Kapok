@@ -54,7 +54,7 @@ function setup(path='/videos/v',role='member') {
 async function flush(){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,8));});}
 async function mount(node){document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root'));await act(async()=>root.render(React.createElement(node,{actorId:'A',videoId:'v'})));await flush();}
 async function unmount(){await act(async()=>root?.unmount());root=null;}
-const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.includes(text));
+const button=text=>[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label') === text || b.textContent.includes(text));
 async function click(text){const node=button(text);assert.ok(node,text);await act(async()=>node.click());await flush();}
 async function input(node,value){assert.ok(node);await act(async()=>{Object.getOwnPropertyDescriptor(node instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(node,value);node.dispatchEvent(new Event('input',{bubbles:true}));});await flush();}
 const writes=()=>calls.filter(c=>c.options.method==='POST'||c.options.method==='PATCH');
@@ -122,7 +122,7 @@ test('B reflection successful client navigation keeps original growth tab and li
   override=(path,options)=>path==='reflections/r'&&options.method==='PATCH'?response({...reflection,...JSON.parse(options.body),version:2}):null;
   await click('保存记录');assert.equal(navigation.at(-1),'/reflections/r?saved=1');
   const {controlledBackSource}=await import('../../lib/client/navigation-state.ts');dom.window.history.replaceState({},'','/reflections/r');assert.equal(controlledBackSource(),'/growth');
-  await unmount();dom.window.history.replaceState({},'','/growth');await mount(GrowthContent);assert.equal([...document.querySelectorAll('button')].find(node=>node.textContent==='收藏').getAttribute('aria-pressed'),'true');assert.equal(restored,275);
+  await unmount();dom.window.history.replaceState({},'','/growth');await mount(GrowthContent);assert.equal([...document.querySelectorAll('button')].find(node=>node.getAttribute('aria-label')==='收藏').getAttribute('aria-pressed'),'true');assert.equal(restored,275);
  }finally{window.scrollTo=originalScroll;await unmount();}
 });
 test('B admin form return keeps edited fields and unknown request key, rights loss clears them',async()=>{
@@ -444,7 +444,7 @@ test('B10 video dialog opens from heading, retains cancelled inputs, closes afte
   await mount(Surface);const dialog=document.querySelector('dialog');assert.equal(dialog.open,false);assert.equal(document.querySelector('[aria-label="添加视频"]').parentElement.querySelector('h2').textContent,'训练视频');
   await act(async()=>document.querySelector('[aria-label="添加视频"]').click());assert.equal(dialog.open,true);
   assert.equal(document.activeElement,document.querySelector('[name=url]'));
-  await input(document.querySelector('[name=url]'),'https://b23.tv/Example01');await input(document.querySelector('[name=title]'),'弹窗新增');
+  await input(document.querySelector('[name=url]'),'https://b23.tv/vP9CEuO');await input(document.querySelector('[name=title]'),'弹窗新增');
   await act(async()=>document.querySelector('[aria-label="关闭添加视频"]').click());assert.equal(dialog.open,false);assert.equal(writes().length,0);
   assert.equal(document.activeElement,document.querySelector('[aria-label="添加视频"]'));
   await act(async()=>document.querySelector('[aria-label="添加视频"]').click());assert.equal(document.querySelector('[name=title]').value,'弹窗新增');
@@ -635,7 +635,7 @@ test('Bilibili changed deep-link time cannot reopen a locked same snapshot befor
 test('saved note starts as a card, pencil opens editor and cancel restores persisted content',async()=>{
  setup('/growth');data.collections=[{id:'saved',sourceKind:'video',sourceId:'v',privateNote:'已保存的想法',timestampSec:null,version:1,createdAt:'2026-10-19',source:null}];
  try{await mount(CollectionList);assert.equal(document.querySelector('textarea'),null);assert.match(document.querySelector('.private-note').textContent,/已保存的想法/);
- assert.equal(document.querySelector('a[href="/reflections/new?collection=saved"]').textContent,'转为复盘');
+ assert.equal(document.querySelector('a[href="/reflections/new?collection=saved"]').getAttribute('aria-label'),'转为复盘');
  await click('编辑私人备注');assert.equal(document.activeElement,document.querySelector('textarea'));await input(document.querySelector('textarea'),'未保存修改');assert.ok(button('转为复盘').disabled);await click('取消');
  assert.equal(document.activeElement,document.querySelector('[aria-label="编辑私人备注"]'));
  assert.equal(document.querySelector('textarea'),null);assert.match(document.querySelector('.private-note').textContent,/已保存的想法/);await click('编辑私人备注');assert.equal(document.querySelector('textarea').value,'已保存的想法');assert.equal(writes().length,0);

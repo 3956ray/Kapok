@@ -283,9 +283,10 @@ test('growth filter uses real buttons and leaves other root empty states honest'
     const group = query('[role=group][aria-label="成长内容筛选"]');
     assert.deepEqual([...group.querySelectorAll('button')].map(b => b.getAttribute('aria-pressed')), ['true', 'false', 'false']);
     assert.match(rootNode.textContent, /还没有成长记录/);
-    await act(async () => group.querySelector('button:last-child').click());
+    await act(async () => group.querySelector('button[aria-label="收藏"]').click());
     assert.match(rootNode.textContent, /还没有收藏/);
-    assert.equal(group.querySelector('[aria-pressed=true]').textContent, '收藏');
+    assert.equal(group.querySelector('[aria-pressed=true]').getAttribute('aria-label'), '收藏');
+    assert.equal(group.querySelector('[aria-pressed=true] .growth-filter-count').textContent, '0');
     await render(h(MemberDirectory, { actorId }));
     assert.match(rootNode.textContent, /队伍暂时没有成员/);
     await render(h(Activity, { actorId }));
