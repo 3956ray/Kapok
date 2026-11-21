@@ -1,11 +1,10 @@
 'use client';
 import { ReflectionIcon } from './reflection-icon';
 import { Bookmark, Layers, LockKeyhole } from 'lucide-react';
-import { memo, useMemo } from 'react';
+import { memo, useDeferredValue, useMemo } from 'react';
 import Link from 'next/link';
 import type { ReflectionAuthor } from '../../lib/contracts/reflections';
 import type { Collection } from '../../lib/contracts/training';
-import { api } from '../../lib/client/api';
 import { AccountBoundary } from './secure-resource';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { CollectionCard } from './collections';
@@ -16,15 +15,9 @@ const GrowthCollectionCard = memo(CollectionCard);
 const GrowthRecordRow = memo(RecordRow);
 
 type GrowthRows = { reflections: ReflectionAuthor[]; collections: Collection[] };
+const growthLoad = { confirmedPath: 'growth' };
 export function GrowthContent({ actorId, initialFilter = 'all' }: { actorId: string; initialFilter?: 'all' | 'reflections' | 'collections' }) {
-    const load = useMemo(() => ({ read: async (signal: AbortSignal) => {
-        const [reflections, collections] = await Promise.all([
-            api<ReflectionAuthor[]>('reflections', undefined, actorId, signal),
-            api<Collection[]>('collections', undefined, actorId, signal),
-        ]);
-        return { reflections, collections };
-    } }), [actorId]);
-    return <AccountBoundary<GrowthRows> actorId={actorId} load={load}>{data => <Tabs key={initialFilter} actorId={actorId} data={data} initialFilter={initialFilter} />}</AccountBoundary>;
+    return <AccountBoundary<GrowthRows> actorId={actorId} load={growthLoad}>{data => <Tabs key={initialFilter} actorId={actorId} data={data} initialFilter={initialFilter} />}</AccountBoundary>;
 }
 function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthRows; initialFilter: 'all' | 'reflections' | 'collections' }) {
     const [tab, setTab] = useNavigationField<'all' | 'reflections' | 'collections'>(actorId, 'growth-tab:' + initialFilter, initialFilter);
@@ -32,8 +25,8 @@ function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthR
         ...data.reflections.map(item => ({ kind: 'reflection' as const, date: item.date, item })),
         ...data.collections.map(item => ({ kind: 'collection' as const, date: item.createdAt, item })),
     ].sort((a, b) => b.date.localeCompare(a.date)), [data]);
-    const visible = useMemo(() => rows.filter(row => tab === 'all' || (tab === 'reflections' ? row.kind === 'reflection' : row.kind === 'collection')), [rows, tab]);
-    const positions = useMemo(() => new Map(visible.map((row, index) => [row, index])), [visible]);
+    const listTab = useDeferredValue(tab);
+    const count = tab === 'all' ? rows.length : tab === 'collections' ? data.collections.length : data.reflections.length;
     const filters = [
         { value: 'all', label: '全部', Icon: Layers, count: rows.length },
         { value: 'collections', label: '收藏', Icon: Bookmark, count: data.collections.length },
@@ -46,10 +39,18 @@ function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthR
                     <Icon size={16} aria-hidden="true" /><span>{label}</span><span className="growth-filter-count" aria-hidden="true">{count}</span>
                 </button>)}
             </div>
-            <span className="growth-sort" hidden={!visible.length}>最近记录优先</span>
+            <span className="growth-sort" hidden={!count}>最近记录优先</span>
         </div>
-        <p className="sr-only" role="status">{filters.find(filter => filter.value === tab)?.label} · {visible.length ? `共 ${visible.length} 条记录` : '暂无记录'}</p>
-        <div className="growth-records">
+        <p className="sr-only" role="status">{filters.find(filter => filter.value === tab)?.label} · {count ? `共 ${count} 条记录` : '暂无记录'}</p>
+        <GrowthList actorId={actorId} rows={rows} tab={listTab} />
+    </div>;
+}
+
+type GrowthRow = { kind: 'reflection'; date: string; item: ReflectionAuthor } | { kind: 'collection'; date: string; item: Collection };
+const GrowthList = memo(function GrowthList({ actorId, rows, tab }: { actorId: string; rows: GrowthRow[]; tab: 'all' | 'reflections' | 'collections' }) {
+    const visible = useMemo(() => rows.filter(row => tab === 'all' || (tab === 'reflections' ? row.kind === 'reflection' : row.kind === 'collection')), [rows, tab]);
+    const positions = useMemo(() => new Map(visible.map((row, index) => [row, index])), [visible]);
+    return <div className="growth-records">
         {rows.map(row => {
             const index = positions.get(row) ?? -1;
             return <div key={`${row.kind}:${row.item.id}`} hidden={index < 0}>
@@ -66,6 +67,5 @@ function Tabs({ actorId, data, initialFilter }: { actorId: string; data: GrowthR
             <Link prefetch={false} className="button" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab !== 'collections' && <ReflectionIcon size={16} aria-hidden="true" />}{tab === 'collections' ? '去看训练' : '写复盘'}</Link>
             <p className="growth-privacy"><LockKeyhole size={14} aria-hidden="true" />私人备注仅自己可见，复盘由你决定是否分享。</p>
         </section>}
-        </div>
-    </div>;
-}
+        </div>;
+});

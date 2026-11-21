@@ -39,7 +39,7 @@ export function Shell({ title, children, nav = true, back, surface, eyebrow, des
   return <div className={`app-shell${nav ? ' with-nav' : ''}${video ? ' video-workspace' : ''}`} data-surface={surface}>
     {nav && <WorkspaceSidebar canCompose={canCompose} />}
     <header className="topbar">
-      <Link href="/" prefetch={false} className="wordmark" aria-label="Kapok 首页">
+      <Link href={canCompose ? "/home" : "/"} prefetch={false} className="wordmark" aria-label="Kapok 首页">
         <strong>Kapok<span className="brand-dot" aria-hidden="true">.</span></strong>
         {nav && <span className="workspace-crumb" aria-hidden="true"> / 队伍工作区</span>}
       </Link>

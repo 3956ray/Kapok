@@ -1,5 +1,5 @@
 'use client';
-import { isLearningSourceKind } from '../contracts/reflections';
+import { isLearningSourceKind } from '../contracts/reflections.ts';
 import { useState } from 'react';
 
 // Browser-only, ephemeral UI buffers. No server resource snapshots are stored here.

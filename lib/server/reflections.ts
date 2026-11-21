@@ -236,6 +236,14 @@ export function createReflectionService({
         }
         return { ...dto, link: r.source_kind ? parseLearningLink(current.link) : dto.link };
     }
+    async function homeReflectionSummaries(p: Principal | null) {
+        const c = await personal(p);
+        const access = privateOwnerFence(p, c);
+        return (await q(`SELECT r.id,r.date,r.scope,r.title,substr(trim(r.text),1,81) AS text
+            FROM reflections r WHERE r.owner_id=? AND r.deleted_at IS NULL AND r.scope='private'
+            AND ${access.predicate} ORDER BY r.date DESC,r.id DESC LIMIT 3`, c.user.id, ...access.values)
+            .all<Pick<ReflectionAuthor, 'id' | 'date' | 'scope' | 'title' | 'text'>>()).results;
+    }
     async function listMyReflections(p: Principal | null) {
         const c = await personal(p);
         const access = privateOwnerFence(p, c);
@@ -800,7 +808,7 @@ export function createReflectionService({
     return {
         getReflection,
         getOwnReflection,
-        listMyReflections,
+        listMyReflections, homeReflectionSummaries,
         saveReflection,
         shareReflection,
         publishReflection,

@@ -7,7 +7,7 @@ import type { BootstrapStatus } from '../../lib/contracts';
 import type { Training, Video } from '../../lib/contracts/training';
 import { api, ApiError } from '../../lib/client/api';
 import { clearNavigationRoute, clearTrainingVideoUI, navigationBuffer, transferNavigationSource } from '../../lib/client/navigation-state';
-import { AccountBoundary, useAccountSession } from './secure-resource';
+import { AccountBoundary, supportsPageReads, useAccountSession } from './secure-resource';
 import { VideoDiscussion, useVideoViewport } from './video-discussion';
 
 type WatchProps = {
@@ -52,8 +52,9 @@ function TrainingWatchResource(props: WatchProps) {
         }
     }, [actorId, legacyVideoId, memberView]);
 
+    const read = useMemo(() => ({ confirmedPath: 'watch/' + encodeURIComponent(trainingId ?? '') + (memberView ? '?view=member' : '') }), [trainingId, memberView]);
     return <div className="video-discussion-boundary training-watch" ref={boundary}>
-        <AccountBoundary actorId={actorId} load={load}>{data =>
+        <AccountBoundary<WatchData> actorId={actorId} load={trainingId && supportsPageReads() ? read : load}>{data =>
             <WatchContent key={data.training.id} {...props} {...data} />
         }</AccountBoundary>
     </div>;

@@ -6,7 +6,7 @@ import { BookOpen, ChevronRight, Megaphone, NotebookPen, Video } from 'lucide-re
 import type { ActivityItem, ActivityPage, Announcement, PublicMember, PublicProfile } from '../../lib/contracts/reflections';
 import { acknowledgeMutation, clearFormUI, navigationBuffer, currentRoute, useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
-import { SecureStatus, useSecureResource } from './secure-resource';
+import { SecureStatus, supportsPageReads, useSecureResource } from './secure-resource';
 import { ProfileSummary, RecordRow } from './presentation';
 export function MemberDirectory({
     actorId,
@@ -71,6 +71,8 @@ async function refreshLearningItems(items: ActivityItem[], actorId: string, sign
     });
 }
 
+const activityPage = { confirmedPath: 'activity-page' };
+const homeActivityPage = { confirmedPath: 'activity-page?home=1' };
 export function Activity({
     actorId,
     home = false
@@ -88,7 +90,10 @@ export function Activity({
         } while (!home && cursor && items.length < count);
         return { items: await refreshLearningItems(items, actorId, signal), nextCursor: cursor };
     }, [actorId, home]);
-    const secure = useSecureResource<ActivityPage>(actorId, loadInitial);
+    // Select once per mount. Loading more must not reset the current page.
+    const [initialCount] = useState(() => navigationBuffer(actorId, currentRoute(), 'activity-count').read<number>() ?? 20);
+    const activityLoader = supportsPageReads() && (home || initialCount <= 20) ? (home ? homeActivityPage : activityPage) : loadInitial;
+    const secure = useSecureResource<ActivityPage>(actorId, activityLoader);
     const [pages, setPages] = useState<{
         source: ActivityPage | null;
         items: ActivityPage['items'];

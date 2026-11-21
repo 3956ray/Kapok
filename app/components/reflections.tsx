@@ -15,7 +15,7 @@ import type { Draft } from '../../lib/client/reflection-draft';
 import { draftKey, draftPrefix } from '../../lib/client/session-guard';
 import { ReflectionBookmark } from './collections';
 import { DateGroup, RecordRow } from './presentation';
-import { SecureStatus, useSecureResource } from './secure-resource';
+import { SecureStatus, supportsPageReads, useSecureResource } from './secure-resource';
 import { ReflectionSharingControls } from './reflection-sharing-controls';
 const versions = (r: ReflectionAuthor) => ({
     expectedVersion: r.version,
@@ -48,7 +48,7 @@ function readLocalDraft(storageKey: string): Draft | null {
     }
     return local;
 }
-export const scopeLabel = (r: ReflectionAuthor) => r.scope === 'private' ? '仅自己' : r.published ? '全队可读 · 已发布到动态' : '全队可读 · 未发布';
+export const scopeLabel = (r: Pick<ReflectionAuthor, 'scope'> & Partial<Pick<ReflectionAuthor, 'published'>>) => r.scope === 'private' ? '仅自己' : r.published ? '全队可读 · 已发布到动态' : '全队可读 · 未发布';
 export function ReflectionEditor({
     actorId,
     id,
@@ -617,7 +617,8 @@ function AuthorActions({
 
     </section>;
 }
-function ownerReflectionLabel(reflection: ReflectionAuthor) {
+const homeReflections = { confirmedPath: 'home-reflections' };
+function ownerReflectionLabel(reflection: Pick<ReflectionAuthor, 'title' | 'text'>) {
     if (reflection.title.trim()) return reflection.title;
     const characters = Array.from(reflection.text.trim());
     return characters.slice(0, 80).join('') + (characters.length > 80 ? '…' : '');
@@ -629,7 +630,7 @@ export function MyReflections({
     actorId: string;
     home?: boolean;
 }) {
-    const secure = useSecureResource<ReflectionAuthor[]>(actorId, 'reflections');
+    const secure = useSecureResource<Pick<ReflectionAuthor, 'id' | 'date' | 'scope' | 'title' | 'text'>[]>(actorId, home && supportsPageReads() ? homeReflections : 'reflections');
     const rows = home ? secure.data?.filter(r => r.scope === 'private').slice(0, 3) : secure.data;
     return <section className="section">
 

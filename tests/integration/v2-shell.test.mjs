@@ -55,8 +55,10 @@ function setup(t, path, resources = {}) {
     globalThis.fetch = async url => {
         const key = String(url).replace('/api/v1/', '');
         calls.push(key);
-        const resource = data[key];
-        assert.ok(Object.hasOwn(data, key), 'unexpected request ' + key);
+        if (key === 'growth') return response({value:{reflections:data.reflections,collections:data.collections},after:data.bootstrap});
+        const fixture = key === 'trainings?view=featured' ? 'trainings' : key;
+        const resource = data[fixture];
+        assert.ok(Object.hasOwn(data, fixture), 'unexpected request ' + key);
         return typeof resource === 'function' ? resource() : response(resource);
     };
     const root = createRoot(rootNode);
@@ -75,9 +77,9 @@ test('V2 shell preserves five mobile destinations and selects a single desktop d
     await render(shell('home'));
     assert.equal(query('.topbar').textContent, 'Kapok. / 队伍工作区');
     assert.equal(query('.topbar-account').getAttribute('href'), '/me');
-    assert.deepEqual([...rootNode.querySelectorAll('.bottom-nav a')].map(a => a.getAttribute('href')), ['/', '/trainings', '/reflections/new', '/growth', '/me']);
-    assert.equal(current('.bottom-nav'), '/');
-    assert.equal(current('.workspace-sidebar'), '/');
+    assert.deepEqual([...rootNode.querySelectorAll('.bottom-nav a')].map(a => a.getAttribute('href')), ['/home', '/trainings', '/reflections/new', '/growth', '/me']);
+    assert.equal(current('.bottom-nav'), '/home');
+    assert.equal(current('.workspace-sidebar'), '/home');
     const toggle = query('.workspace-toggle');
     assert.equal(toggle.getAttribute('aria-expanded'), 'true');
     toggle.focus();
@@ -86,15 +88,15 @@ test('V2 shell preserves five mobile destinations and selects a single desktop d
     assert.equal(toggle.getAttribute('aria-label'), '展开侧栏');
     assert.equal(document.activeElement, toggle);
     assert.equal(query('.workspace-sidebar').dataset.collapsed, 'true');
-    assert.equal(query('.workspace-nav a[href="/"]').getAttribute('aria-label'), '首页');
+    assert.equal(query('.workspace-nav a[href="/home"]').getAttribute('aria-label'), '首页');
     for (const [path, mobile, desktop] of [
         ['/videos/v', '/trainings', '/trainings'],
         ['/reflections/r', '/growth', '/growth'],
         ['/reflections/new', '/reflections/new', '/growth'],
         ['/reflections/r/edit', '/growth', '/growth'],
         ['/reflections/r/sharing', '/growth', '/growth'],
-        ['/members/p', '/', '/'],
-        ['/announcements/a', '/', '/activity'],
+        ['/members/p', '/home', '/home'],
+        ['/announcements/a', '/home', '/activity'],
         ['/me/data', '/me', '/me'],
     ]) {
         window.history.pushState(null, '', path);
@@ -132,7 +134,7 @@ test('video uses the standard workspace header and navigation with a compact bac
     await render(h(Shell, { surface: 'video', title: '视频与讨论', back: '/trainings', canCompose: true }, '视频内容'));
     assert.equal(query('.app-shell').classList.contains('video-workspace'), true);
     assert.equal(query('.topbar h1').textContent, '视频与讨论');
-    assert.equal(query('.topbar .wordmark').getAttribute('href'), '/');
+    assert.equal(query('.topbar .wordmark').getAttribute('href'), '/home');
     assert.equal(query('.topbar .topbar-account').getAttribute('href'), '/me');
     assert.equal(query('.topbar .video-back').getAttribute('href'), '/trainings');
     assert.equal(query('.topbar .video-back').getAttribute('aria-label'), '返回 · 训练列表');
@@ -183,7 +185,7 @@ test('reflection workspace navigation retains a local draft and the timestamped 
     const stored = localStorage.getItem(draftStorage);
     assert.equal(JSON.parse(stored).text, '先观察接盘空间');
     window.confirm = () => false;
-    const discard = [...rootNode.querySelectorAll('button')].find(button => button.textContent === '放弃本机稿');
+    const discard = [...rootNode.querySelectorAll('button')].find(button => button.textContent === '放弃编辑');
     await act(async () => discard.click());
     assert.equal(localStorage.getItem(draftStorage), stored);
 
@@ -224,6 +226,8 @@ test('home waits for actor confirmation and features the newest published traini
     assert.equal(query('[data-kapok-sensitive]').hidden, true);
     assert.equal(query('[role=status]').getAttribute('aria-busy'), 'true');
     assert.deepEqual(calls, ['bootstrap']);
+    assert.ok(query('.writing-link'));
+    assert.equal(query('.training-feature'), null);
     data.bootstrap = { actorId, me: { ...me, membership: { ...me.membership, role: 'admin' } } };
     await act(async () => release(response(data.bootstrap)));
     await flush();
@@ -237,6 +241,23 @@ test('home waits for actor confirmation and features the newest published traini
     await act(async () => window.dispatchEvent(new CustomEvent('kapok-account-changed', { detail: actorId })));
     assert.equal(query('[data-kapok-sensitive]').hidden, true);
     assert.equal(query('.training-feature,.activity-card'), null);
+});
+
+test('home starts featured training while the Access account detail is still pending', async t => {
+    let finishAccount;
+    const pendingAccount = new Promise(resolve => { finishAccount = resolve; });
+    const { calls, render } = setup(t, '/home', {
+        bootstrap: { actorId, me: { ...me, team: null } },
+        me: () => pendingAccount,
+        trainings: [{ id: 't', title: '首屏训练', date: '2026-11-21', status: 'published' }],
+    });
+    await render(h(HomeScreen, { actorId }));
+    assert.ok(query('.home-quick-links a'));
+    assert.deepEqual(calls, ['bootstrap', 'me', 'trainings?view=featured']);
+    assert.equal(query('.training-feature'), null);
+    await act(async () => finishAccount(response(me)));
+    await flush();
+    assert.match(query('.training-feature').textContent, /首屏训练/);
 });
 
 for (const role of ['admin', 'member']) {
@@ -347,4 +368,18 @@ test('V07 sidebar refresh restores device preference, invalid or blocked storage
         assert.equal(query('.workspace-sidebar').dataset.collapsed, 'true');
         assert.ok(query('.workspace-nav a[href="/trainings"]'));
     } finally { Object.defineProperty(window, 'localStorage', descriptor); }
+});
+
+test('page-read growth rejects a late response after the account changes', async t => {
+    document.documentElement.dataset.kapokPageRead = '1';
+    t.after(() => { delete document.documentElement.dataset.kapokPageRead; });
+    let finish;
+    const waiting = new Promise(resolve => { finish = resolve; });
+    const { render, calls } = setup(t, '/growth', { 'page-read/growth': () => waiting });
+    await render(h(GrowthContent, { actorId }));
+    assert.deepEqual(calls, ['page-read/growth']);
+    await act(async () => window.dispatchEvent(new CustomEvent('kapok-account-changed', { detail: actorId })));
+    await act(async () => finish(response({ value: { collections: [], reflections: [] }, after: bootstrap })));
+    assert.equal(query('.growth-filters'), null);
+    assert.equal(query('[data-kapok-sensitive]').hidden, true);
 });

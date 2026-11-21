@@ -93,7 +93,7 @@ sitesTest('B route shells retain the main landmark and show workspace navigation
         assert.match(html, /<main id="main-content" tabindex="-1">/, route);
         assert.equal(html.includes('aria-label="主要导航"'), nav, route);
         assert.equal(html.includes('aria-label="工作区导航"'), nav, route);
-        if (route === 'growth') assert.match(html, /<a\b(?=[^>]*class="growth-write")(?=[^>]*aria-label="写复盘")(?=[^>]*href="\/reflections\/new")[^>]*>/);
+        if (route === 'growth') assert.match(html, /<a\b(?=[^>]*class="[^"]*growth-compose[^"]*")(?=[^>]*aria-label="写复盘")(?=[^>]*href="\/reflections\/new")[^>]*>/);
         for (const secret of ['private A name', 'private team', 'synthetic-invite-token']) assert.ok(!html.includes(secret), route + ': ' + secret);
     }
 });

@@ -11,7 +11,11 @@ import { reconcileRegistrationActor } from '../../lib/client/registration-draft'
 import type { SessionSignal } from '../../lib/client/session-guard';
 // Opt-in for reads whose server endpoints independently authorize the actor.
 // Account-dependent loaders retain their original sequential ordering.
-type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>) | { read: (signal: AbortSignal) => Promise<T> };
+type ConfirmedRead<T> = { value: T; after: BootstrapStatus };
+type Loader<T> = string | ((account: BootstrapStatus, signal: AbortSignal) => Promise<T>) | { read: (signal: AbortSignal) => Promise<T> } | { confirmedPath: string };
+export function supportsPageReads() {
+    return typeof document !== 'undefined' && document.documentElement.dataset.kapokPageRead === '1';
+}
 export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnprofiled = false, adjacentSurfaces?: readonly HTMLElement[]) {
     const [data, setData] = useState<T | null>(null);
     const [locked, setLocked] = useState(true);
@@ -117,11 +121,15 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
             setError('');
             try {
                 await withRequestDeadline(async signal => {
-                    const [before, parallelData] = await Promise.all([
-                        api<BootstrapStatus>('bootstrap', undefined, actorId, signal),
-                        typeof path === 'object' ? Promise.resolve().then(() => path.read(signal)) : undefined,
+                    const readable = typeof path === 'string' && /^(?:me|reflections(?:\/[\w-]+(?:\/edit)?)?|members(?:\/[\w-]+)?|announcements(?:\/[\w-]+)?|collections|learning\/(?:featured|mine))$/.test(path);
+                    const snapshotPath = supportsPageReads() && (typeof path === 'object' && 'confirmedPath' in path ? path.confirmedPath : readable ? path as string : null);
+                    const [initial, parallelData, confirmed] = await Promise.all([
+                        snapshotPath ? undefined : api<BootstrapStatus>('bootstrap', undefined, actorId, signal),
+                        typeof path === 'object' && 'read' in path ? Promise.resolve().then(() => path.read(signal)) : undefined,
+                        snapshotPath ? api<ConfirmedRead<T>>('page-read/' + snapshotPath, undefined, actorId, signal) : typeof path === 'object' && 'confirmedPath' in path ? api<ConfirmedRead<T>>(path.confirmedPath, undefined, actorId, signal) : undefined,
                     ]);
                     if (guard.current.token() !== token) return;
+                    const before = initial ?? confirmed!.after;
                     if ((before.actorId ?? before.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
                         return;
@@ -135,9 +143,9 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
                     }
                     // An account-only surface has no intervening business read to bracket.
                     const accountOnly = path === 'bootstrap';
-                    const latest = accountOnly ? before as T : typeof path === 'object' ? parallelData as T : typeof path === 'string' ? await api<T>(path, undefined, actorId, signal) : await path(before, signal);
+                    const latest = confirmed ? confirmed.value : accountOnly ? before as T : typeof path === 'object' ? parallelData as T : typeof path === 'string' ? await api<T>(path, undefined, actorId, signal) : await path(before, signal);
                     if (guard.current.token() !== token) return;
-                    const after = accountOnly ? before : await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
+                    const after = accountOnly ? before : confirmed?.after ?? await api<BootstrapStatus>('bootstrap', undefined, actorId, signal);
                     if (guard.current.token() !== token) return;
                     if ((after.actorId ?? after.siteUserId) !== actorId) {
                         processSignal({ actorId, kind: 'ended' });
@@ -292,14 +300,15 @@ export function useSecureResource<T>(actorId: string, path: Loader<T>, allowUnpr
         }
         throw new Error('页面仍在确认账号，请等待加载结束后再保存，输入仍保留。');
     }
+    const subscribe = useCallback((listener: (ended: boolean) => void) => {
+        listeners.current.add(listener);
+        return () => { listeners.current.delete(listener); };
+    }, []);
     return {
         data,
         authorizationStamp,
         setData,
-        subscribe: (listener: (ended: boolean) => void) => {
-            listeners.current.add(listener);
-            return () => { listeners.current.delete(listener); };
-        },
+        subscribe,
         locked,
         checking,
         verificationMessage,

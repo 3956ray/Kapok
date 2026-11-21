@@ -3,7 +3,7 @@ import { ReflectionIcon } from './reflection-icon';
 import { LearningBookmark } from './collections';
 
 import Link from 'next/link';
-import { useCallback, useId, useRef, useState } from 'react';
+import { useCallback, useMemo, useId, useRef, useState } from 'react';
 import { ArrowRight, Bookmark, ExternalLink, FileText, Film, Pencil, EyeOff, Undo2, Share2 } from 'lucide-react';
 import { api, ApiError } from '../../lib/client/api';
 import { useNavigationField } from '../../lib/client/navigation-state';
@@ -19,7 +19,7 @@ import { LearningDiscussion } from './learning-discussion';
 import { LearningText } from './learning-text';
 import type { YouTubeControls } from './youtube-player';
 import type { BootstrapStatus } from '../../lib/contracts';
-import { AccountBoundary } from './secure-resource';
+import { AccountBoundary, supportsPageReads } from './secure-resource';
 import { TopicBrowseRows, TopicMine, useAddPostToTopic } from './topic-collections';
 import { manageFeatured, newTopic, topicsTab } from './topic-paths';
 import { topicsEndpoint } from './topic-controls';
@@ -72,6 +72,7 @@ function BrowseRows({ posts, categories, actorId }: { posts: LearningPostOvervie
         </section>}
     </>;
 }
+const browseReads = { contents: { confirmedPath: 'learn-index' }, collections: { confirmedPath: 'learn-index?tab=collections' } };
 export function LearningBrowse({ actorId, tab = 'contents' }: { actorId: string; tab?: 'contents' | 'collections' }) {
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         const admin = account.me.membership?.role === 'admin';
@@ -82,7 +83,7 @@ export function LearningBrowse({ actorId, tab = 'contents' }: { actorId: string;
         ]);
         return { admin, posts, categories };
     }, [actorId, tab]);
-    return <AccountBoundary actorId={actorId} load={load}>{({ admin, collections, posts, categories }) => <>
+    return <AccountBoundary actorId={actorId} load={supportsPageReads() ? browseReads[tab] : load}>{({ admin, collections, posts, categories }) => <>
         <div className="learning-actions learning-top">
             <nav className="learning-tabs" aria-label="学习库视图">
                 <Link href="/learn?tab=contents" aria-current={tab === 'contents' ? 'page' : undefined}>内容</Link>
@@ -196,7 +197,7 @@ function ActivityControls({ post, initial, actorId, epoch, membershipEpoch, disa
 
 function Reading({ post, draft, actorId, epoch, admin, comments, userId, activity, membershipEpoch }: {
     post: LearningPost; draft: LearningDraft | null; actorId: string; epoch: string; admin: boolean;
-    comments: LearningComment[]; userId: string; activity: LearningActivityStatus | null; membershipEpoch: number;
+    comments: LearningComment[] | null; userId: string; activity: LearningActivityStatus | null; membershipEpoch: number;
 }) {
     const headingId = useId();
     const bookmarkId = useId();
@@ -248,7 +249,7 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
     const sourceUrl = post.video?.source === 'youtube' ? parseYouTubeSource(post.video.url)?.url
         : post.video && bilibiliPlayerUrl(post.video.url) ? post.video.url : undefined;
     return <LearningDiscussion actorId={actorId} epoch={epoch} userId={userId} admin={admin}
-        postId={post.id} initial={comments} video={post.video} player={player} playerSurface={playerSurface}>
+        post={post} initial={comments} video={post.video} player={player} playerSurface={playerSurface}>
         {post.video && <div className="training-watch-stage">
             <section className="video-stage" ref={playerSurface} tabIndex={-1} aria-label="视频播放器">
                 <LearningMedia key={post.video.url} video={post.video} title={post.title} player={player} watch />
@@ -310,6 +311,7 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
 export function LearningReading({ actorId, id }: { actorId: string; id: string }) {
     const boundary = useRef<HTMLDivElement>(null);
     useVideoViewport(boundary);
+    const read = useMemo(() => ({ confirmedPath: 'article/' + encodeURIComponent(id) }), [id]);
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         const path = endpoint + '/' + id;
         const post = await api<LearningPost>(path, undefined, actorId, signal);
@@ -323,7 +325,7 @@ export function LearningReading({ actorId, id }: { actorId: string; id: string }
             epoch: learningEpoch(account), membershipEpoch: account.me.membership!.epoch, admin: account.me.membership?.role === 'admin' };
     }, [actorId, id]);
     return <div className="video-discussion-boundary training-watch learning-watch" ref={boundary}>
-        <AccountBoundary key={id} actorId={actorId} load={load}>{data =>
+        <AccountBoundary key={id} actorId={actorId} load={supportsPageReads() ? read : load}>{data =>
             <Reading key={data.post.id + ':' + data.post.publishedVersion} {...data} actorId={actorId} />
         }</AccountBoundary>
     </div>;

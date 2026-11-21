@@ -142,8 +142,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         if (after.user.id !== c.user.id || after.membership.id !== c.membership.id || after.membership.teamId !== c.membership.teamId || after.membership.epoch !== c.membership.epoch) throw missing();
         return { trainings: trainings.results, videos: videos.results };
     }
-    async function listTrainings(p: Principal | null) {
+    async function listTrainings(p: Principal | null, featured = false) {
         const c = await activeMember(p);
+        if (featured) {
+            return (await q(
+                `${trainingSelect} WHERE team_id=? AND status='published' ORDER BY date DESC,id DESC LIMIT 1`, c.membership.teamId
+            ).all<Training>()).results;
+        }
         return (await q(
             `${trainingSelect} WHERE team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : "AND status IN ('published','archived')"} ORDER BY date DESC,id DESC`,
             c.membership.teamId

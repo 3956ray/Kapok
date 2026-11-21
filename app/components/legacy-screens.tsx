@@ -1,6 +1,6 @@
 'use client';
 import { ReflectionIcon } from './reflection-icon';
-import { Fragment, useCallback, useEffect } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { BookOpen, Bookmark, CalendarDays, ChevronRight, LockKeyhole, Megaphone, Pencil, Sprout, Trash2, UsersRound } from 'lucide-react';
 import type { BootstrapStatus, Me } from '../../lib/contracts';
@@ -8,7 +8,7 @@ import type { Training } from '../../lib/contracts/training';
 import { useNavigationField } from '../../lib/client/navigation-state';
 import { api, ApiError } from '../../lib/client/api';
 import { AccountProfileCard } from './account-profile-card';
-import { AccountBoundary } from './secure-resource';
+import { AccountBoundary, supportsPageReads } from './secure-resource';
 import { HomeFeaturedTopics } from './topic-featured';
 import { manageFeatured } from './topic-paths';
 import { TrainingWatch } from './training-watch';
@@ -64,15 +64,33 @@ function FeaturedTraining({ training }: { training: Training }) {
         </div>
     </Link>;
 }
+function NearViewport({ children }: { children: ReactNode }) {
+    const ref = useRef<HTMLDivElement>(null);
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+        if (!ref.current || typeof IntersectionObserver === 'undefined') { setReady(true); return; }
+        const observer = new IntersectionObserver(entries => {
+            if (entries.some(entry => entry.isIntersecting)) { setReady(true); observer.disconnect(); }
+        }, { rootMargin: '200px' });
+        observer.observe(ref.current);
+        return () => observer.disconnect();
+    }, []);
+    return <div ref={ref}>{ready ? children : null}</div>;
+}
+
+const homeRead = { confirmedPath: 'home' };
+const trainingsRead = { confirmedPath: 'training-index' };
 export function HomeScreen({ actorId }: { actorId: string }) {
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         requireMember(account.me);
-        const me = account.me.team ? account.me : await api<Me>('me', undefined, actorId, signal);
-        const trainings = await api<Training[]>('trainings', undefined, actorId, signal);
+        const [me, trainings] = await Promise.all([
+            account.me.team ? account.me : api<Me>('me', undefined, actorId, signal),
+            api<Training[]>('trainings?view=featured', undefined, actorId, signal),
+        ]);
         return { me, featured: trainings.find(training => training.status === 'published') };
     }, [actorId]);
-    return <AccountBoundary actorId={actorId} load={load}>{({ me, featured }) => <div className="home-layout">
-        <div>
+    return <div className="home-layout">
+        <div><AccountBoundary actorId={actorId} load={supportsPageReads() ? homeRead : load}>{({ me, featured }) => <>
             <section>
                 <div className="section-heading"><h2>最近训练</h2><Link href="/trainings">全部训练 <ChevronRight size={15} aria-hidden="true" /></Link></div>
                 {featured ? <FeaturedTraining training={featured} /> : <div className="panel">
@@ -81,9 +99,12 @@ export function HomeScreen({ actorId }: { actorId: string }) {
                     {me.membership?.role === 'admin' && <Link className="button secondary" href="/admin/trainings/new">创建训练</Link>}
                 </div>}
             </section>
-            <HomeFeaturedTopics actorId={actorId} />
-            <Activity actorId={actorId} home />
-        </div>
+            <NearViewport><HomeFeaturedTopics actorId={actorId} /></NearViewport>
+            <NearViewport><Activity actorId={actorId} home /></NearViewport>
+            {me.team && <p className="home-team-note">{me.team.name}{me.team.description && <span>{me.team.description}</span>}</p>}
+            <LocalDrafts actorId={actorId} />
+            <NearViewport><MyReflections actorId={actorId} home /></NearViewport>
+        </>}</AccountBoundary></div>
         <div className="home-rail">
             <section>
                 <div className="section-heading"><h2>留给自己</h2><LockKeyhole size={16} aria-hidden="true" /></div>
@@ -91,27 +112,24 @@ export function HomeScreen({ actorId }: { actorId: string }) {
                     <p className="workspace-overline">PRIVATE JOURNAL</p>
                     <h3>今天，有哪一刻想再想想？</h3>
                     <p>不必写成总结。先记下一个观察就好。</p>
-                    <Link href="/reflections/new" className="writing-link"><ReflectionIcon size={16} aria-hidden="true" />开始写复盘</Link>
+                    <Link prefetch={false} href="/reflections/new" className="writing-link"><ReflectionIcon size={16} aria-hidden="true" />开始写复盘</Link>
                 </div>
             </section>
             <section className="section home-quick-links">
                 <h2>快速访问</h2>
-                <Link className="row-link" href="/learn"><span className="quick-icon"><BookOpen size={18} aria-hidden="true" /></span><span>学习库<small>浏览队友分享的资料与合集</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
-                <Link className="row-link" href="/growth"><span className="quick-icon"><Bookmark size={18} aria-hidden="true" /></span><span>成长记录<small>复盘、收藏与私人备注</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
-                <Link className="row-link" href="/members"><span className="quick-icon"><UsersRound size={18} aria-hidden="true" /></span><span>队伍成员<small>认识一起训练的人</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
+                <Link prefetch={false} className="row-link" href="/learn"><span className="quick-icon"><BookOpen size={18} aria-hidden="true" /></span><span>学习库<small>浏览队友分享的资料与合集</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
+                <Link prefetch={false} className="row-link" href="/growth"><span className="quick-icon"><Bookmark size={18} aria-hidden="true" /></span><span>成长记录<small>复盘、收藏与私人备注</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
+                <Link prefetch={false} className="row-link" href="/members"><span className="quick-icon"><UsersRound size={18} aria-hidden="true" /></span><span>队伍成员<small>认识一起训练的人</small></span><ChevronRight size={16} aria-hidden="true" /></Link>
             </section>
-            {me.team && <p className="home-team-note">{me.team.name}{me.team.description && <span>{me.team.description}</span>}</p>}
-            <LocalDrafts actorId={actorId} />
-            <MyReflections actorId={actorId} home />
         </div>
-    </div>}</AccountBoundary>;
+    </div>;
 }
 export function TrainingsScreen({ actorId }: { actorId: string }) {
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         requireMember(account.me);
         return { me: account.me, items: await api<Training[]>('trainings', undefined, actorId, signal) };
     }, [actorId]);
-    return <AccountBoundary actorId={actorId} load={load}>{({ me, items }) => <>
+    return <AccountBoundary actorId={actorId} load={supportsPageReads() ? trainingsRead : load}>{({ me, items }) => <>
         {me.membership?.role === 'admin' && <div className="training-library-actions">
             <Link className="button secondary" href="/admin/trainings">管理训练 <ChevronRight size={16} aria-hidden="true" /></Link>
         </div>}

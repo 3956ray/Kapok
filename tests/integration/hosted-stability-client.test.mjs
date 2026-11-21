@@ -199,7 +199,7 @@ test('hosted actual Home/Video loader transport and body abort suppress late acc
             try {
                 await mount(h(screen, { actorId: 'A', videoId: 'v' }));
                 state = initialized;
-                const target = screen === HomeScreen ? 'trainings' : 'videos/v/comments';
+                const target = screen === HomeScreen ? 'trainings?view=featured' : 'videos/v/comments';
                 override = (path, options) => {
                     if (path !== target) return null;
                     oldSignal = options.signal;

@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { Clock, MessageCircle, Send } from 'lucide-react';
 import { api, ApiError } from '../../lib/client/api';
 import { confirmedRejection, learningMutation, learningRecovery, sendLearning, type LearningMutation } from '../../lib/client/learning-images';
-import type { LearningVideo } from '../../lib/contracts/learning';
+import type { LearningPost, LearningVideo } from '../../lib/contracts/learning';
 import {
     learningCommentReasonLimit, learningCommentTextLimit,
     type LearningComment, type LearningCommentAction, type LearningCommentEditInput,
@@ -20,15 +20,16 @@ const actionLabels = { root: '发送讨论', reply: '发送回复', edit: '保�
 const timeLabel = (seconds: number) => Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
 const unavailable = (error: unknown) => error instanceof ApiError && ['NOT_FOUND', 'FORBIDDEN'].includes(error.code);
 
-export function LearningDiscussion({ actorId, epoch, userId, admin, postId, initial, video, player, playerSurface, children }: Owner & {
-    children: ReactNode; postId: string; initial: LearningComment[]; video: LearningVideo | null;
+export function LearningDiscussion({ actorId, epoch, userId, admin, post, initial, video, player, playerSurface, children }: Owner & {
+    children: ReactNode; post: LearningPost; initial: LearningComment[] | null; video: LearningVideo | null;
     player: RefObject<YouTubeControls | null>; playerSurface: RefObject<HTMLDivElement | null>;
 }) {
+    const postId = post.id;
     const title = useId();
     const composer = useRef<HTMLFormElement>(null);
     const focusComposer = useRef(false);
     const [choice, setChoice] = useState<Choice>({ mode: 'root' });
-    const [readback, setReadback] = useState<{ from: LearningComment[]; comments: LearningComment[] } | null>(null);
+    const [readback, setReadback] = useState<{ from: LearningComment[] | null; comments: LearningComment[] } | null>(null);
     const [status, setStatus] = useState('');
     const [loadError, setLoadError] = useState('');
     const reset = useCallback(() => {
@@ -39,8 +40,23 @@ export function LearningDiscussion({ actorId, epoch, userId, admin, postId, init
         focusComposer.current = false;
     }, []);
     const { busy, run, session } = useLearningAction(reset);
-    const comments = readback?.from === initial ? readback.comments : initial;
+    const comments = readback?.from === initial ? readback.comments : initial ?? [];
     const path = 'learning/posts/' + postId + '/comments';
+    const [attempt, setAttempt] = useState(0);
+    const { subscribe, verify } = session;
+    useEffect(() => {
+        if (initial !== null) return;
+        const controller = new AbortController();
+        const unsubscribe = subscribe(() => controller.abort());
+        void api<{ value: LearningComment[] }>(`page-read/article-discussion/${post.id}?version=${post.publishedVersion}`, undefined, actorId, controller.signal).then(({ value: comments }) => {
+            if (!controller.signal.aborted) setReadback({ from: null, comments });
+        }).catch(error => {
+            if (controller.signal.aborted) return;
+            if (unavailable(error)) void verify();
+            else setLoadError('讨论暂时无法加载。');
+        });
+        return () => { controller.abort(); unsubscribe(); };
+    }, [initial, post, actorId, subscribe, verify, attempt]);
     const target = 'id' in choice ? comments.find(comment => comment.id === choice.id) : undefined;
     const roots = comments.filter(comment => !comment.rootId);
     const replies = new Map<string, LearningComment[]>();
@@ -140,7 +156,9 @@ export function LearningDiscussion({ actorId, epoch, userId, admin, postId, init
                     <header className="training-discussion-heading">
                         <h2 id={title}>{video ? '视频讨论' : '讨论'}</h2>
                     </header>
-                    {roots.length ? <div className="training-discussion-threads">
+                    {initial === null && !readback ? (loadError
+                        ? <button type="button" onClick={() => { setLoadError(''); setAttempt(n => n + 1); }}>重新加载讨论</button>
+                        : <p role="status">正在加载讨论…</p>) : roots.length ? <div className="training-discussion-threads">
                         {roots.map(root => <div className="discussion-card panel" key={root.id}>
                             {row(root, root)}
                             {replies.get(root.id)?.length ? <div className="discussion-replies">
@@ -157,7 +175,7 @@ export function LearningDiscussion({ actorId, epoch, userId, admin, postId, init
             <DiscussionComposer key={scope} form={composer} choice={choice} target={target}
                 targetAvailable={choice.mode !== 'reply' || (!!target && target.status === 'active' &&
                     (!target.rootId || comments.some(comment => comment.id === target.rootId && comment.status === 'active')))}
-                actorId={actorId} epoch={epoch} path={path} video={video} player={player} busy={busy}
+                actorId={actorId} epoch={epoch} path={path} video={video} player={player} busy={busy || (initial === null && !readback)}
                 cancel={() => select({ mode: 'root' })}
                 reload={() => void run(refresh, error => setLoadError(error instanceof Error ? error.message : '暂未能刷新讨论。'))}
                 submit={(request, rejected, saved, failed) => {

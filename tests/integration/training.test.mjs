@@ -1,7 +1,7 @@
 import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
@@ -20,9 +20,10 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for(const file of ['0000_identity.sql', '0011_profile_bio.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
+    const migrations = (await readdir(new URL('../../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
+    for (const file of migrations) {
         const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
-        for(const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean))
+        for(const sql of migration.split('--> statement-breakpoint').flatMap(chunk => chunk.includes('CREATE TRIGGER') ? [chunk] : chunk.split(';')).map(s => s.trim()).filter(Boolean))
             await db.prepare(sql).run();
     }
     const s = createService({ db, bucket, bootstrapSiteUserId: owner.subject });
@@ -40,14 +41,18 @@ test(
     async (t) => {
         const { s } = await fixture(t);
         await reject(s.listTrainings(outsider), 'FORBIDDEN');
+        await reject(s.listTrainings(outsider, true), 'FORBIDDEN');
         await reject(s.saveTraining(alice, null, training, 'x'), 'FORBIDDEN');
         const d = await s.saveTraining(owner, null, training, 'create');
         assert.deepEqual(await s.listTrainings(alice), []);
+        assert.deepEqual(await s.listTrainings(owner, true), []);
         await reject(s.getTraining(alice, d.id), 'NOT_FOUND');
         assert.equal((await s.saveTraining(owner, null, training, 'create')).id, d.id);
         await reject(s.saveTraining(owner, null, { ...training, title: '换输入' }, 'create'), 'IDEMPOTENCY_CONFLICT');
         const p = await s.saveTraining(owner, d.id, { ...training, status: 'published', expectedVersion: 1 }, 'pub');
         assert.equal((await s.listTrainings(alice))[0].id, p.id);
+        await s.saveTraining(owner, null, { ...training, date: '2026-10-01', status: 'published' }, 'older-published');
+        assert.deepEqual((await s.listTrainings(alice, true)).map(row => row.id), [p.id]);
         await reject(s.saveTraining(owner, d.id, { ...training, expectedVersion: 1 }, 'stale'), 'VERSION_CONFLICT');
         await reject(s.getTraining(alice, 'foreign'), 'NOT_FOUND');
     }
@@ -883,4 +888,43 @@ test('mobile Bilibili share creates canonical persisted video with guarded repla
  challenged=true;await assert.rejects(s.addVideo(owner,tr.id,input,'share'),e=>e.status===503&&e.retryable);challenged=false;
  assert.equal((await s.addVideo(owner,tr.id,input,'share')).id,result.id);
  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM videos WHERE training_id=?').bind(tr.id).first()).n,1);
+});
+
+test('growth response withholds both lists if membership changes before its final check', async () => {
+    let reads = 0;
+    const service = {
+        getBootstrap: async () => ({
+            me: { user: { id: 'u', status: 'active' }, membership: { epoch: ++reads } },
+        }),
+        listMyReflections: async () => [{ title: 'private fixture' }],
+        listCollections: async () => [],
+    };
+    const result = await dispatchApi(new Request('https://kapok.test/api/v1/growth'), ['growth'], alice, service);
+    assert.equal(result.status, 403);
+    assert.doesNotMatch(await result.text(), /private fixture/);
+});
+
+test('page-read uses the final membership to fence data and rejects non-page routes', async () => {
+    let epoch = 1;
+    const service = {
+        getBootstrap: async () => ({ actorId: 'u', me: { user: { id: 'u', status: 'active' }, membership: { epoch } } }),
+        getMemberProfile: async () => { epoch++; return { discName: 'withheld fixture' }; },
+    };
+    const read = path => dispatchApi(new Request('https://kapok.test/api/v1/' + path.join('/')), path, alice, service);
+    const denied = await read(['page-read', 'members', 'm']);
+    assert.equal(denied.status, 403);
+    assert.doesNotMatch(await denied.text(), /withheld fixture/);
+    assert.equal((await read(['page-read', 'me', 'export'])).status, 404);
+});
+
+test('deferred video comments are withheld when the training becomes unavailable during the read', async () => {
+    const service = {
+        getBootstrap: async () => ({ me: { user: { id: 'u', status: 'active' }, membership: { status: 'active', epoch: 1 } } }),
+        listComments: async () => [{ text: 'withheld comment' }],
+        getVideo: async () => ({ status: 'active', training: { status: 'draft' } }),
+    };
+    const path = ['page-read', 'video-discussion', 'v'];
+    const result = await dispatchApi(new Request('https://kapok.test/api/v1/' + path.join('/')), path, alice, service);
+    assert.equal(result.status, 404);
+    assert.doesNotMatch(await result.text(), /withheld comment/);
 });

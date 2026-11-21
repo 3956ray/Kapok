@@ -6,7 +6,7 @@ import type { BootstrapStatus } from '../../lib/contracts';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, Bookmark, Clock, ExternalLink, Film, Play, Send } from 'lucide-react';
-import { AccountBoundary, useAccountSession } from './secure-resource';
+import { AccountBoundary, supportsPageReads, useAccountSession } from './secure-resource';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
 import { bilibiliPlayerUrl } from '../../lib/client/bilibili';
 import { createVideoSeek } from '../../lib/client/video-seek';
@@ -14,9 +14,10 @@ import { acknowledgeMutation, navigationBuffer, currentRoute } from '../../lib/c
 import { parseYouTubeSource } from '../../lib/video-source';
 import { YouTubePlayer, type YouTubeControls } from './youtube-player';
 import { SaveCollection } from './collections';
+const emptyComments: Comment[] = [];
 const message = (e: unknown) => e instanceof Error ? e.message : '操作未完成，请保留输入重试。';
 const stamp = (n: number) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
-type Snapshot = { video: Video & { training: Training }; comments: Comment[]; userId: string; admin: boolean };
+type Snapshot = { video: Video & { training: Training }; comments: Comment[] | null; userId: string; admin: boolean };
 type Feedback = { kind: 'neutral' | 'success' | 'error'; text: string; source?: true };
 type ComposerMode = { kind: 'reply' | 'edit'; id: string } | null;
 type Draft = { text: string; seconds: string; timeDraft: string | null; editVersion?: number };
@@ -74,7 +75,7 @@ export function VideoDiscussion({ actorId, videoId, initialSeconds, environmentN
             throw new ApiError({ error: { code: 'FORBIDDEN', message: '当前账号没有队伍访问权限。', retryable: false }, requestId: '' });
         }
         try {
-            const comments = await api<Comment[]>(`videos/${videoId}/comments`, undefined, actorId, signal);
+            const comments = supportsPageReads() ? null : await api<Comment[]>(`videos/${videoId}/comments`, undefined, actorId, signal);
             // Re-read the source after comments to observe access changes during a read.
             const latest = await api<Snapshot['video']>(`videos/${videoId}`, undefined, actorId, signal);
             if (trainingId && (latest.trainingId !== trainingId || !['published', 'archived'].includes(latest.training.status))) {
@@ -97,8 +98,26 @@ export function VideoDiscussion({ actorId, videoId, initialSeconds, environmentN
         <AccountBoundary key={videoId} actorId={actorId} load={load} adjacentSurfaces={adjacentSurfaces}>{snapshot => <Discussion actorId={actorId} {...snapshot} initialSeconds={initialSeconds} environmentNote={environmentNote} slots={slots} onReady={onReady} />}</AccountBoundary>
     </div>;
 }
-function Discussion({ actorId, userId, admin, video, comments, initialSeconds, environmentNote, slots, onReady }: Snapshot & { actorId: string; initialSeconds?: number; environmentNote?: ReactNode; slots?: WatchSlots; onReady?: () => void }) {
+function Discussion({ actorId, userId, admin, video, comments: initialComments, initialSeconds, environmentNote, slots, onReady }: Snapshot & { actorId: string; initialSeconds?: number; environmentNote?: ReactNode; slots?: WatchSlots; onReady?: () => void }) {
     const session = useAccountSession();
+    const [readback, setReadback] = useState<{ source: Video; rows?: Comment[]; error?: string } | null>(null);
+    const [attempt, setAttempt] = useState(0);
+    const current = readback?.source === video ? readback : null;
+    const comments = initialComments ?? current?.rows ?? emptyComments;
+    const { subscribe, verify } = session;
+    useEffect(() => {
+        if (initialComments !== null) return;
+        const controller = new AbortController();
+        const unsubscribe = subscribe(() => controller.abort());
+        void api<{ value: Comment[] }>(`page-read/video-discussion/${video.id}`, undefined, actorId, controller.signal).then(({ value: rows }) => {
+            if (!controller.signal.aborted) setReadback({ source: video, rows });
+        }).catch(error => {
+            if (controller.signal.aborted) return;
+            if (error instanceof ApiError && ['FORBIDDEN', 'NOT_FOUND'].includes(error.code)) void verify();
+            else setReadback({ source: video, error: message(error) });
+        });
+        return () => { controller.abort(); unsubscribe(); };
+    }, [video, actorId, initialComments, attempt, subscribe, verify]);
     useEffect(() => { onReady?.(); }, [onReady]);
     const player = useRef<HTMLVideoElement>(null);
     const youtubePlayer = useRef<YouTubeControls>(null);
@@ -571,7 +590,9 @@ function Discussion({ actorId, userId, admin, video, comments, initialSeconds, e
             <h2 id="video-discussion-heading">视频讨论</h2>
             <p>{video.title}</p>
         </header> : <h2 id="video-discussion-heading">讨论</h2>}
-        {comments.length ? slots ? <div className="training-discussion-threads">{rootThreads}</div> : rootThreads
+        {initialComments === null && !current?.rows ? (current?.error
+            ? <p role="alert">{current.error} <button onClick={() => { setReadback(null); setAttempt(n => n + 1); }}>重新加载讨论</button></p>
+            : <p role="status">正在加载讨论…</p>) : comments.length ? slots ? <div className="training-discussion-threads">{rootThreads}</div> : rootThreads
             : <p className="panel">还没有讨论，留下训练中想记住的一刻。</p>}
         {!writable && <p className="notice">此训练当前只可回看，不接受新讨论。</p>}
     </section>;

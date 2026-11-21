@@ -13,19 +13,32 @@ function NavigationGlyph({ Icon, size }: { Icon: typeof House; size: number }) {
         : <Icon size={size} aria-hidden="true" />;
 }
 
-const home = { href: '/', text: '首页', Icon: House };
+const home = { href: '/home', text: '首页', Icon: House };
 const trainings = { href: '/trainings', text: '训练', Icon: CalendarDays };
 const growth = { href: '/growth', text: '成长', Icon: Sprout };
 const account = { href: '/me', text: '我的', Icon: UserRound };
 const mobileItems = [home, trainings, { href: '/reflections/new', text: '写复盘', Icon: ReflectionIcon }, growth, account];
 const desktopItems = [home, { href: '/activity', text: '队内动态', Icon: Clock }, trainings, { href: '/learn', text: '学习库', Icon: BookOpen }, growth];
 
+// Warm only the intended screen's program. Its protected reads still start on mount.
+const workspaceModules: Record<string, () => Promise<unknown>> = {
+    '/home': () => import('./legacy-screens'),
+    '/trainings': () => import('./legacy-screens'),
+    '/activity': () => import('./community'),
+    '/learn': () => import('./learning-posts'),
+    '/growth': () => import('./growth-content'),
+};
+
+function warmWorkspace(href: string) {
+    void workspaceModules[href]?.().catch(() => { /* Navigation can retry normally. */ });
+}
+
 function destination(path: string) {
     const root = '/' + (path.split('/')[1] ?? '');
-    if (root === '/home') return '/';
+    if (root === '/' || root === '/home') return '/home';
     if (root === '/videos') return '/trainings';
     if (root === '/reflections') return '/growth';
-    if (root === '/members') return '/';
+    if (root === '/members') return '/home';
     if (root === '/announcements') return '/activity';
     return root;
 }
@@ -33,7 +46,7 @@ function destination(path: string) {
 export function Navigation({ canCompose = false }: { canCompose?: boolean }) {
   const pathname = usePathname();
   const current = destination(pathname);
-  const owner = current === '/members' || current === '/activity' ? '/' : current;
+  const owner = current === '/members' || current === '/activity' ? '/home' : current;
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!ref.current) return;
@@ -49,7 +62,7 @@ export function Navigation({ canCompose = false }: { canCompose?: boolean }) {
   }, []);
   return <nav className="bottom-nav" aria-label="主要导航" ref={ref}>{mobileItems.filter(item => canCompose || item.href !== '/reflections/new').map(({ href, text, Icon }) => {
     const selected = pathname === '/reflections/new' && canCompose ? href === '/reflections/new' : href === owner;
-    return <Link href={href} prefetch={false} key={href} aria-current={selected ? 'page' : undefined} className={selected ? 'selected' : ''}><NavigationGlyph Icon={Icon} size={22} /><span>{text}</span></Link>;
+    return <Link href={href} prefetch={false} onPointerDown={() => warmWorkspace(href)} key={href} aria-current={selected ? 'page' : undefined} className={selected ? 'selected' : ''}><NavigationGlyph Icon={Icon} size={22} /><span>{text}</span></Link>;
   })}</nav>;
 }
 
@@ -81,7 +94,7 @@ export function WorkspaceSidebar({ canCompose }: { canCompose: boolean }) {
     return <aside className="workspace-sidebar" data-collapsed={compact}>
         <div className="workspace-sidebar-inner">
             <div className="workspace-brand">
-                <Link href="/" prefetch={false} aria-label="Kapok 首页" title="Kapok 首页"><b>K<span>.</span></b><strong>Kapok</strong></Link>
+                <Link href="/home" prefetch={false} aria-label="Kapok 首页" title="Kapok 首页"><b>K<span>.</span></b><strong>Kapok</strong></Link>
                 <button className="workspace-toggle" type="button" aria-label={toggleLabel} aria-expanded={!compact} title={toggleLabel} onClick={toggleSidebar}><PanelLeft size={18} aria-hidden="true" /></button>
             </div>
             <div className="workspace-team">
@@ -90,7 +103,7 @@ export function WorkspaceSidebar({ canCompose }: { canCompose: boolean }) {
             {canCompose && <Link className="workspace-compose" href="/reflections/new" aria-label="写复盘" title="写复盘"><ReflectionIcon size={17} aria-hidden="true" /><span>写复盘</span></Link>}
             <p className="workspace-nav-label">工作区</p>
             <nav className="workspace-nav" aria-label="工作区导航">{desktopItems.map(({ href, text, Icon }) =>
-                <Link key={href} href={href} prefetch={false} title={text} aria-label={text} aria-current={href === current ? 'page' : undefined}>
+                <Link key={href} href={href} prefetch={false} onMouseEnter={() => warmWorkspace(href)} onFocus={() => warmWorkspace(href)} title={text} aria-label={text} aria-current={href === current ? 'page' : undefined}>
                     <NavigationGlyph Icon={Icon} size={19} /><span>{text}</span>
                 </Link>
             )}</nav>

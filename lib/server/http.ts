@@ -11,7 +11,12 @@ export async function dispatchApi(request: Request, path: string[], principal: P
   try {
     if (!principal) throw new DomainError('UNAUTHENTICATED', '请先登录。', 401);
     actor = await actorKey(principal);
+    const pageRead = request.method === 'GET' && path[0] === 'page-read';
+    if (pageRead) path = path.slice(1);
     const route = path.join('/');
+    if (pageRead && !/^(?:(?:article|topic|watch|article-discussion|video-discussion)\/[\w-]+|home|home-reflections|activity-page|training-index|learn-index|growth|me|reflections(?:\/[\w-]+(?:\/edit)?)?|members(?:\/[\w-]+)?|announcements(?:\/[\w-]+)?|collections|learning\/(?:featured|mine))$/.test(route)) {
+      throw new DomainError('NOT_FOUND', '未找到此功能。', 404);
+    }
     const method = request.method;
     const putBytes = method === 'PUT' && /^(?:uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
     const maxBody = method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
@@ -43,8 +48,80 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       try { return JSON.parse(text); } catch { throw new DomainError('INVALID_INPUT', '提交内容无法读取。'); }
     };
     const emptyBody = async () => { const value=await body(); if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length) throw new DomainError('INVALID_INPUT','此操作不接受额外内容。'); };
+    const legacyGrowth = method === 'GET' && route === 'growth' && !pageRead;
+    const initial = pageRead || legacyGrowth ? await service.getBootstrap(principal) : null;
+    if (initial && initial.me.user?.status !== 'active') throw new DomainError('FORBIDDEN', '当前账号暂不可用。', 403);
     let data: unknown;
     if (method === 'GET' && route === 'bootstrap') data = await service.getBootstrap(principal);
+    else if (initial && route === 'home') {
+      const [me, trainings] = await Promise.all([service.getAccount(principal), service.listTrainings(principal, true)]);
+      data = { me, featured: trainings[0] };
+    } else if (initial && route === 'home-reflections') {
+      data = await service.homeReflectionSummaries(principal);
+    } else if (initial && route === 'training-index') {
+      data = { me: initial.me, items: await service.listTrainings(principal) };
+    } else if (initial && route === 'activity-page') {
+      const limit = new URL(request.url).searchParams.get('home') === '1' ? 3 : 20;
+      const page = await service.listActivity(principal, null, limit);
+      const ids = page.items.filter(item => item.kind === 'learning').map(item => item.id.slice('learning:'.length));
+      const latest = ids.length ? await service.listCurrentLearningActivity(principal, ids) : [];
+      const current = new Map(latest.map(item => [item.id, item]));
+      data = { ...page, items: page.items.map(item => item.kind === 'learning' ? current.get(item.id) : item).filter(Boolean) };
+    } else if (initial && route === 'learn-index') {
+      const admin = initial.me.membership?.role === 'admin';
+      if (new URL(request.url).searchParams.get('tab') === 'collections') {
+        data = { admin, collections: await service.listTopicCollections(principal) };
+      } else {
+        const [posts, categories] = await Promise.all([service.listLearningPosts(principal), service.listLearningCategories(principal)]);
+        data = { admin, posts, categories };
+      }
+    } else if (initial && path[0] === 'video-discussion') {
+      const rows = await service.listComments(principal, path[1]);
+      const video = await service.getVideo(principal, path[1]);
+      if (video.status !== 'active' || !['published', 'archived'].includes(video.training.status)) {
+        throw new DomainError('NOT_FOUND', '该视频当前不可用。', 404);
+      }
+      data = rows;
+    } else if (initial && path[0] === 'article-discussion') {
+      const rows = await service.listLearningComments(principal, path[1]);
+      const post = await service.getLearningPost(principal, path[1]);
+      if (String(post.publishedVersion) !== new URL(request.url).searchParams.get('version')) {
+        throw new DomainError('NOT_FOUND', '资料版本已变化。', 404);
+      }
+      data = rows;
+    } else if (initial && path[0] === 'article') {
+      const id = path[1];
+      const post = await service.getLearningPost(principal, id);
+      const [draft, activity] = post.isAuthor ? await Promise.all([
+        service.getLearningPost(principal, id, 'draft'), service.getLearningActivity(principal, id),
+      ]) : [null, null];
+      const current = post.isAuthor ? await service.getLearningPost(principal, id) : post;
+      const member = initial.me.membership!;
+      data = { post: current, draft: draft?.publishedVersion === current.publishedVersion ? draft : null,
+        comments: null, activity, userId: initial.me.user!.id, membershipEpoch: member.epoch,
+        admin: member.role === 'admin', epoch: JSON.stringify([initial.me.user!.id, member.teamId, member.epoch]) };
+    } else if (initial && path[0] === 'topic') {
+      try {
+        const collection = await service.getTopicCollection(principal, path[1]);
+        const draft = collection.isAuthor ? await service.getTopicCollection(principal, path[1], 'draft') : null;
+        const current = draft ? await service.getTopicCollection(principal, path[1]) : collection;
+        const member = initial.me.membership!;
+        data = { reading: { collection: current, draft: draft?.publishedVersion === current.publishedVersion ? draft : null,
+          admin: member.role === 'admin', epoch: JSON.stringify([initial.me.user!.id, member.teamId, member.epoch]) } };
+      } catch (error) {
+        if (!(error instanceof DomainError) || error.code !== 'NOT_FOUND') throw error;
+        data = { reading: null };
+      }
+    } else if (initial && path[0] === 'watch') {
+      const admin = initial.me.membership?.role === 'admin';
+      if (!admin && new URL(request.url).searchParams.get('view') === 'member') throw new DomainError('NOT_FOUND', '本次训练当前不可用。', 404);
+      const { videos, ...training } = await service.getTraining(principal, path[1], admin ? 'member' : undefined);
+      if (!['published','archived'].includes(training.status)) throw new DomainError('NOT_FOUND', '本次训练当前不可用。', 404);
+      data = { training, admin, videos: videos.filter(v => v.status === 'active' && v.trainingId === training.id) };
+    } else if (method === 'GET' && route === 'growth') {
+      const [reflections, collections] = await Promise.all([service.listMyReflections(principal), service.listCollections(principal)]);
+      data = { reflections, collections };
+    }
     else if (method === 'GET' && route === 'me/export') data = await service.exportOwnData(principal);
     else if (method === 'GET' && route === 'me/recycle') data = await service.listDeletedReflections(principal);
     else if (method === 'POST' && route === 'me/leave') data = await service.leaveTeam(principal, await body(), key);
@@ -132,7 +209,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       } else throw new DomainError('NOT_FOUND', '未找到此功能。', 404);
     }
     else if (method === 'GET' && route === 'trainings/import-inventory') data = await service.importInventory(principal);
-    else if (method === 'GET' && route === 'trainings') data = await service.listTrainings(principal);
+    else if (method === 'GET' && route === 'trainings') data = await service.listTrainings(principal, new URL(request.url).searchParams.get('view') === 'featured');
     else if (method === 'POST' && route === 'trainings') data = await service.saveTraining(principal, null, await body(), key);
     else if (method === 'POST' && route === 'trainings/publish') data = await service.publishTraining(principal, await body(), key, importPrecondition);
     else if (method === 'GET' && path[0] === 'trainings' && path.length === 2) data = await service.getTraining(principal, path[1], new URL(request.url).searchParams.get('view') === 'member' ? 'member' : undefined);
@@ -157,6 +234,14 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'POST' && path[0] === 'uploads' && path[2] === 'complete' && path.length === 3) { await emptyBody(); data = await service.completeUpload(principal, path[1], key); }
     else if (method === 'POST' && path[0] === 'uploads' && path[2] === 'cancel' && path.length === 3) { await emptyBody(); data = await service.cancelUpload(principal, path[1], key); }
     else throw new DomainError('NOT_FOUND', '此功能暂不可用。', 404);
+    if (initial) {
+      const after = await service.getBootstrap(principal);
+      if ((principal.provider === 'access' && route !== 'me' && after.me.membership?.status !== 'active') || initial.actorId !== after.actorId || initial.me.user?.id !== after.me.user?.id || after.me.user?.status !== 'active' ||
+          JSON.stringify(initial.me.membership) !== JSON.stringify(after.me.membership)) {
+        throw new DomainError('FORBIDDEN', '权限已变化，请重新确认。', 403);
+      }
+      data = { value: data, after };
+    }
     return Response.json({ data, requestId }, { headers: { ...privateHeaders, 'X-Kapok-Actor': actor } });
   } catch (error) {
     const known = error instanceof DomainError ? error : new DomainError('SERVICE_UNAVAILABLE', '暂时未能完成请求，请稍后重试。', 503, true);

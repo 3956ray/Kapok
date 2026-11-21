@@ -198,3 +198,32 @@ test('learning discussion isolates drafts by direct target, post and account and
     assert.doesNotMatch(surface().textContent, /独立根输入|讨论已发送/);
     assert.ok(!Array.from({ length: localStorage.length }, (_, i) => localStorage.key(i)).some(key => key.includes(actor)));
 });
+
+test('deferred article comments reload after the same published version is reverified', async t => {
+    const root = createRoot(document.querySelector('#root'));
+    window.HTMLDialogElement.prototype.close ??= function () { this.removeAttribute('open'); };
+    document.documentElement.dataset.kapokPageRead = '1';
+    const original = globalThis.fetch;
+    t.after(async () => {
+        await act(async () => root.unmount());
+        delete document.documentElement.dataset.kapokPageRead;
+        globalThis.fetch = original;
+    });
+    let reads = 0;
+    const after = { actorId: actor, me: { user: { id: 'reader', status: 'active' }, membership: member } };
+    const post = { id: 'p', kind: 'article', category: '战术', title: '合成资料', body: '正文', author, images: [], video: null, publishedVersion: 1, publishedAt: '2026-11-15T00:00:00Z' };
+    globalThis.fetch = async input => {
+        const path = input.replace('/api/v1/', '');
+        let value;
+        if (path === 'page-read/article/p') value = { post, comments: null, userId: 'reader', epoch: 'epoch', admin: false };
+        else if (path === 'page-read/article-discussion/p?version=1') value = [comment('r', author, '合成回读' + (++reads))];
+        else value = [];
+        return Response.json({ data: { value, after } }, { headers: { 'X-Kapok-Actor': actor } });
+    };
+    await act(async () => root.render(h(LearningReading, { actorId: actor, id: 'p' })));
+    await settle();
+    assert.match(surface().textContent, /合成回读1/);
+    await act(async () => { window.dispatchEvent(new Event('pagehide')); window.dispatchEvent(new Event('pageshow')); });
+    await settle();
+    assert.match(surface().textContent, /合成回读2/);
+});

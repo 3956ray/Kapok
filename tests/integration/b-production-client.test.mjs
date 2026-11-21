@@ -49,7 +49,7 @@ const response=value=>new Response(JSON.stringify({data:value}),{headers:{'X-Kap
 function setup(path='/videos/v',role='member') {
  clearNavigationActor('A'); clearNavigationActor('B'); dom.window.history.replaceState({},'',path); calls=[];override=null;
  data={bootstrap:{siteUserId:'A',me:{...me,membership:{...me.membership,role}}},me,'videos/v':video,'videos/v/comments':[comment],members:[{id:'other',discName:'阿禾',jerseyNumber:'09',role:'member'}],collections:[]};
- globalThis.fetch=async(url,options={})=>{const path=String(url).replace('/api/v1/','');calls.push({path,options});return await override?.(path,options) ?? response(data[path]??[]);};
+ globalThis.fetch=async(url,options={})=>{const path=String(url).replace('/api/v1/','');calls.push({path,options});return await override?.(path,options) ?? response(path==='growth'?{value:{reflections:data.reflections??[],collections:data.collections},after:data.bootstrap}:data[path]??[]);};
 }
 async function flush(){await act(async()=>{await new Promise(resolve=>setTimeout(resolve,8));});}
 async function mount(node){document.body.innerHTML='<div id="root"></div>';root=createRoot(document.getElementById('root'));await act(async()=>root.render(React.createElement(node,{actorId:'A',videoId:'v'})));await flush();}
@@ -201,8 +201,12 @@ test('B growth all filter merges authorized records by month and retains unavail
   await mount(GrowthContent);assert.equal(button('全部').getAttribute('aria-pressed'),'true');
   assert.match(document.body.textContent,/2026年10月.*十月复盘.*2026年09月.*来源暂不可用/s);
   await click('编辑私人备注');assert.equal(document.querySelector('textarea').value,'仍保留的私人备注');
-  await input(document.querySelector('textarea'),'切换前未保存');await click('复盘');assert.ok(document.querySelector('a[href="/reflections/r"]'));assert.ok(document.querySelector('textarea').closest('[hidden]'));
+  await input(document.querySelector('textarea'),'切换前未保存');
+  const beforeFilter = calls.length;
+  override = () => { throw new TypeError('offline'); };
+  await click('复盘');assert.ok(document.querySelector('a[href="/reflections/r"]'));assert.ok(document.querySelector('textarea').closest('[hidden]'));
   await click('收藏');assert.ok(document.querySelector('a[href="/reflections/r"]').closest('[hidden]'));assert.equal(document.querySelector('textarea').value,'切换前未保存');
+  assert.equal(calls.length,beforeFilter,'切换已加载的筛选不应发起请求');
   assert.equal(writes().length,0);
  }finally{await unmount();}
 });
@@ -227,7 +231,7 @@ test('B member empty and search-empty states are distinct without concealing a r
 test('B growth a failed collection read does not turn into an empty or partial success list',async()=>{
  setup('/growth');const {GrowthContent}=await import('../../app/components/growth-content.tsx');
  data.reflections=[{id:'r',title:'不可作为部分成功展示',text:'本人正文',date:'2026-10-17',scope:'private'}];
- override=path=>path==='collections'?new Response(JSON.stringify({error:{code:'UNAVAILABLE',message:'收藏暂时无法加载',retryable:true}}),{status:503,headers:{'X-Kapok-Actor':'A'}}):null;
+ override=path=>path==='growth'?new Response(JSON.stringify({error:{code:'UNAVAILABLE',message:'收藏暂时无法加载',retryable:true}}),{status:503,headers:{'X-Kapok-Actor':'A'}}):null;
  try{await mount(GrowthContent);assert.match(document.body.textContent,/收藏暂时无法加载/);assert.ok(!document.body.textContent.includes('还没有成长记录'));assert.equal(document.querySelector('a[href="/reflections/r"]'),null);}finally{await unmount();}
 });
 

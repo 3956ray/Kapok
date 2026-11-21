@@ -4,7 +4,7 @@ import { LearningBookmark } from './collections';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, BookOpen, FileText, Film, FolderPlus } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../lib/client/api';
 import { learningRecovery, type LearningMutation } from '../../lib/client/learning-images';
 import { useNavigationField } from '../../lib/client/navigation-state';
@@ -12,7 +12,7 @@ import type { BootstrapStatus } from '../../lib/contracts';
 import { topicDefaults, type TopicAddResult, type TopicChoice, type TopicCollection, type TopicDraft, type TopicReference, type TopicSource } from '../../lib/contracts/topic-collections';
 import { LearningConfirm, LearningImageView, learningEpoch } from './learning-controls';
 import { manageFeatured, newTopic, topicPath, topicsTab } from './topic-paths';
-import { AccountBoundary } from './secure-resource';
+import { AccountBoundary, supportsPageReads } from './secure-resource';
 import {
     moveTopicRow, sourcePath, TopicDialog, TopicOrder, TopicPicker, TopicSourceLabel, TopicWriteStatus,
     topicAddFeedback, topicKey, topicRef, topicsEndpoint, topicStatus, useTopicWrite,
@@ -255,6 +255,7 @@ function TopicReadingContent({ collection, draft, admin, actorId, epoch }: {
 }
 
 export function TopicReading({ actorId, id }: { actorId: string; id: string }) {
+    const read = useMemo(() => ({ confirmedPath: 'topic/' + encodeURIComponent(id) }), [id]);
     const load = useCallback(async (account: BootstrapStatus, signal: AbortSignal) => {
         const path = topicsEndpoint + '/' + id;
         try {
@@ -268,7 +269,7 @@ export function TopicReading({ actorId, id }: { actorId: string; id: string }) {
             throw error;
         }
     }, [actorId, id]);
-    return <AccountBoundary actorId={actorId} load={load}>{({ reading }) => reading
+    return <AccountBoundary actorId={actorId} load={supportsPageReads() ? read : load}>{({ reading }) => reading
         ? <TopicReadingContent key={`${id}:${reading.collection.publishedVersion}`} {...reading} actorId={actorId} />
         : <section className="panel"><h2>此合集暂不可读</h2><Link href={topicsTab}>返回合集列表</Link></section>}
     </AccountBoundary>;
