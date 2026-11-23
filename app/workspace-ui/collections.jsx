@@ -415,7 +415,7 @@ function ChapterLoader({ collection, item, video, base, ...controls }) {
     return <p className="page-width pending-reader" role="status">正在读取内容…</p>;
   if (result.error) return <ReaderProblem title="暂时打不开这一项" text={result.error} to={base} retry={reload} />;
   return <TrainingReader key={[result.data.id, result.data.selectedVideo?.id, params.get('t')].join(':')}
-    t={result.data} reload={reload} {...controls} />;
+    t={result.data} reload={reload} collectionItem={{...result.data, id:item.id, reference:item.reference}} {...controls} />;
 }
 
 function CollectionNavigator({ title, items, index, takePosition, onChoose, onContents }) {

@@ -11,6 +11,8 @@ import { Back, IconButton, PageHead } from './ui';
 import { prepareCollectionCover } from './profile-avatar.js';
 import { MediaCover } from './press';
 
+const videoEntry = id => typeof id === 'string' && /^video:[\w-]{1,128}$/.test(id);
+
 function readDraft(key) {
   try {
     return JSON.parse(sessionStorage.getItem(key));
@@ -44,7 +46,7 @@ export function CollectionEditor({ collection: entry }) {
       returned = sessionStorage.getItem(pickKey);
     } catch {}
     const requested = [incoming !== saved?.originItem && incoming, returned, params.get('added')].filter(
-      (id) => id && trainings.some((t) => t.id === id && !isDailyArticle(t)),
+      (id) => videoEntry(id) || (id && trainings.some((t) => t.id === id && !isDailyArticle(t))),
     );
     return {
       ...initial,
@@ -92,6 +94,30 @@ export function CollectionEditor({ collection: entry }) {
     } catch {}
   }, [form, key]);
   const available = new Map([...trainings, ...(collection?.items || [])].map(item => [item.id, item]));
+  // A directory can include one specific clip from a multi-video training.
+  // Restore those selections from the member API even after leaving the editor and returning to its draft.
+  const unresolved = form.itemIds.filter(id => videoEntry(id) && !available.has(id)).join(',');
+  const [resolved, setResolved] = useState(null);
+  const [clipAttempt, retryClips] = useState(0);
+  useEffect(() => {
+    if (!unresolved) return;
+    const controller = new AbortController();
+    Promise.all(unresolved.split(',').map(async id => {
+      const clipId = id.slice(6);
+      const clip = await ctx.read('videos/' + encodeURIComponent(clipId),controller.signal);
+      if (!clip.trainingId || clip.status !== 'active') throw new Error('所选视频已不可用。');
+      return { id, title:clip.title, kind:'video', reference:{kind:'video', id:clipId},
+        href:'/trainings/' + clip.trainingId + '?video=' + clipId,
+        platformCover:'/api/v1/video-covers/video/' + clipId };
+    })).then(rows => {
+      if (!controller.signal.aborted) setResolved({ctx,unresolved,rows});
+    }, err => {
+      if (!controller.signal.aborted) setResolved({ctx,unresolved,error:err.message || '所选视频暂时无法读取。'});
+    });
+    return () => controller.abort();
+  }, [ctx,unresolved,clipAttempt]);
+  const clips = resolved?.ctx === ctx && resolved.unresolved === unresolved ? resolved : null;
+  for (const item of clips?.rows || []) available.set(item.id,item);
   const selected = form.itemIds.map(id => available.get(id)).filter(Boolean);
   const choices = [...available.values()].filter(t => t.reference || (t.kind === 'training' ? ['published','archived'].includes(t.status) : !t.isDraft)).filter(
     (t) =>
@@ -143,7 +169,7 @@ export function CollectionEditor({ collection: entry }) {
   }
   async function save(e) {
     e.preventDefault();
-    if (request.current || coverRequest.current) return;
+    if (request.current || coverRequest.current || (unresolved && !clips?.rows)) return;
     if (!form.title.trim()) {
       setError('请填写合集名称。');
       return;
@@ -247,6 +273,10 @@ export function CollectionEditor({ collection: entry }) {
                 新增内容
               </NavLink>
             </div>
+            {unresolved && !clips?.rows && (clips?.error
+              ? <p role="alert">{clips.error} <button type="button" className="ink-link" onClick={() => retryClips(n => n + 1)}>重试</button>
+                  <button type="button" className="ink-link" onClick={() => patch({itemIds:form.itemIds.filter(id => !unresolved.split(',').includes(id))})}>移出未读取的视频</button></p>
+              : <p role="status">正在读取所选视频…</p>)}
             {emptyError && (
               <p id="pick-error" className="form-error" role="alert">
                 请至少选一项内容，再发布合集。
@@ -363,7 +393,7 @@ export function CollectionEditor({ collection: entry }) {
           >
             取消编辑
           </button>
-          <button className="btn primary" disabled={sending || preparing} type="submit">
+          <button className="btn primary" disabled={sending || preparing || Boolean(unresolved && !clips?.rows)} type="submit">
             <Check size={16} />
             {sending ? '正在发布…' : collection ? '保存合集修改' : '发布合集'}
           </button>

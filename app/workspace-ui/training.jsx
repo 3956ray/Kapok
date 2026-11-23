@@ -321,7 +321,7 @@ export function TrainingDetail({ t }) {
   const {params}=useNav();
   return <MaterialLoader item={t}>{(item,reload)=><TrainingReader key={[item.id,item.selectedVideo?.id,params.get('t')].join(':')} t={item} reload={reload}/>}</MaterialLoader>;
 }
-export function TrainingReader({ t,reload,backControl,collectionNav,videoPath }) {
+export function TrainingReader({ t,reload,backControl,collectionNav,videoPath,collectionItem }) {
   const { go,params } = useNav();
   const rawTime=params.get('t');
   const start=rawTime && /^\d+$/.test(rawTime) && Number(rawTime)<=359999 && (!t.duration || Number(rawTime)<=t.duration) ? Number(rawTime) : null;
@@ -466,7 +466,7 @@ export function TrainingReader({ t,reload,backControl,collectionNav,videoPath })
             icon={WriteNoteIcon}
             onClick={() => go('/notes/new?training=' + t.id)}
           />
-          <AddToCollection id={t.id} />
+          <AddToCollection id={collectionItem?.id || t.id} sharedItem={collectionItem} />
         </div>
       </div>
       {t.summary && <div className="detail-summary"><LearningText text={t.summary}/></div>}
