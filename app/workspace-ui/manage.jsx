@@ -137,13 +137,16 @@ function DeskIndex() {
   );
 }
 function TrainingDesk() {
-  const { trainings } = useData();
+  const { trainings, refreshShares, sharesError } = useData();
+  // A teammate may have published since the administrator opened the workspace.
+  useEffect(() => { void refreshShares().catch(() => {}); }, [refreshShares]);
   const [query, setQuery] = useState('');
   const items = trainings.filter(
     (t) => t.kind === 'training' && matchText(query, t.title, t.author, t.category),
   );
   return (
     <>
+      {sharesError && <p role="alert">{sharesError} <button onClick={()=>refreshShares().catch(()=>{})}>重新读取</button></p>}
       <div className="desk-tools">
         <label className="desk-search">
           <Search size={17} />
