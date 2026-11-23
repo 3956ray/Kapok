@@ -52,6 +52,9 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    define: {
+      'process.env.KAPOK_MAKERS_PREVIEW': JSON.stringify(process.env.KAPOK_MAKERS_PREVIEW ?? ''),
+    },
     server: {
       ...(managedLinux
         ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] }

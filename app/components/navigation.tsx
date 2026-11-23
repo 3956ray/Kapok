@@ -151,7 +151,7 @@ export function AccessLink({ href, returnTo, param, children, target }: { href: 
         const login = new URL(href, window.location.origin);
         if (param) login.searchParams.set(param, destination);
         else login.hash = new URL(destination, window.location.origin).hash;
-        if (anchor.current) anchor.current.href = login.pathname + login.search + login.hash;
+        if (anchor.current) anchor.current.href = login.href;
     }, [href, returnTo, param]);
     return <a ref={anchor} href={href} className="button" target={target}>{children}</a>;
 }

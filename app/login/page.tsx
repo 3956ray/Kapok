@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { authMode, chatGPTSignInPath } from '../chatgpt-auth';
+import { makersPreview, productionLoginPath } from '../../lib/server/makers-login';
 import { authContinuationPath } from '../../lib/server/auth-entry';
 import { safeReturnTo } from '../../lib/server/domain';
 import { EnvironmentNote, Shell } from '../components/shell';
@@ -8,6 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function Login({ searchParams }: { searchParams: Promise<{ returnTo?: string }> }) {
   const returnTo = safeReturnTo((await searchParams).returnTo);
+  if (makersPreview) redirect(productionLoginPath(returnTo));
   if (authMode() === 'access') redirect(authContinuationPath('login', returnTo));
   return <Shell title="欢迎回到木棉" nav={false} back="/">
     <EnvironmentNote />

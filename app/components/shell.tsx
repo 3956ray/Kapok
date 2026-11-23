@@ -4,6 +4,7 @@ import { UserRound } from 'lucide-react';
 import { authMode, getChatGPTUser, chatGPTSignInPath } from '../chatgpt-auth';
 import { getService } from '../../lib/server/runtime';
 import type { Me } from '../../lib/contracts';
+import { makersPreview, productionLoginPath } from '../../lib/server/makers-login';
 import { authEntryPath } from '../../lib/server/auth-entry';
 import { AuthDraftActor } from './auth-draft-actor';
 import { AccessLink, ControlledBack, Navigation, WorkspaceSidebar } from './navigation';
@@ -70,7 +71,8 @@ export function AccessState({ context, returnTo = '/' }: { context: Awaited<Retu
   if (!context.user) {
     const sites = authMode() === 'site';
     return <section className="panel access-panel"><h2>继续你的训练记录</h2><p>登录后即可继续。</p>
-      <AccessLink href={sites ? chatGPTSignInPath(returnTo) : authEntryPath('login', returnTo)} returnTo={returnTo} param={sites ? 'return_to' : 'returnTo'} target="_top">{sites ? '使用 ChatGPT 登录' : '使用邮箱登录'}</AccessLink>
+      {makersPreview ? <AccessLink href={productionLoginPath(returnTo)} returnTo={returnTo} param="returnTo" target="_top">前往正式站邮箱登录</AccessLink> :
+      <AccessLink href={sites ? chatGPTSignInPath(returnTo) : authEntryPath('login', returnTo)} returnTo={returnTo} param={sites ? 'return_to' : 'returnTo'} target="_top">{sites ? '使用 ChatGPT 登录' : '使用邮箱登录'}</AccessLink>}
     </section>;
   }
   if (context.me?.membership?.status === 'active' && returnTo.startsWith('/admin/') && context.me.membership.role !== 'admin') return <section className="notice error" role="alert">{draftActor}<h2>此页面仅管理员可访问</h2><Link href="/me" className="button secondary">返回我的</Link></section>;

@@ -5,7 +5,10 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-execFileSync(process.execPath, ['scripts/run-framework.mjs', 'build'], { stdio: 'inherit' });
+execFileSync(process.execPath, ['scripts/run-framework.mjs', 'build'], {
+  stdio: 'inherit',
+  env: { ...process.env, KAPOK_MAKERS_PREVIEW: '1' },
+});
 
 const root = process.cwd();
 const standalone = path.join(root, 'dist/standalone');
