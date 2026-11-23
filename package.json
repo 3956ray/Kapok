@@ -8,7 +8,7 @@
   "scripts": {
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "node scripts/run-framework.mjs dev",
-    "build": "node scripts/run-framework.mjs build",
+    "build": "node scripts/build-makers-preview.mjs",
     "build:staging": "node --import ./scripts/sites-env.mjs ./scripts/build-staging.mjs",
     "dry-run:staging": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js deploy --config dist/staging/server/wrangler.json --dry-run --outdir .wrangler/staging-dry-run",
     "test:staging": "node --import ./scripts/sites-env.mjs --test tests/standalone/staging-worker.test.mjs",
