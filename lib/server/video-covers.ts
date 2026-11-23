@@ -11,7 +11,8 @@ function sourceKey(source: string) {
 }
 
 async function bytesAt(url: string, limit: number, signal: AbortSignal) {
-    const response = await fetch(url, { redirect: 'error', signal });
+    // Workers implements manual/follow. A manual redirect is rejected by the status check below.
+    const response = await fetch(url, { redirect: 'manual', signal });
     if (!response.ok || !response.body || Number(response.headers.get('content-length')) > limit) {
         await response.body?.cancel();
         throw new Error('Cover unavailable');

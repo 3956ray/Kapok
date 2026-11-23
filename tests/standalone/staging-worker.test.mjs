@@ -304,6 +304,40 @@ test("signed request reaches real pages and assets and registers an ordinary mem
   }
 });
 
+test("real workerd retrieves the same video's official thumbnail after a redirected rendition and caches it", async t => {
+  const primary = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg";
+  const backup = "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg";
+  const jpeg = Uint8Array.of(255, 216, 255, 224, 0, 0, 255, 217);
+  const imageRequests = [];
+  const app = start(t, { outboundService(request) {
+    if (request.url === principal.issuer + "/cdn-cgi/access/certs") return Response.json({ keys: [jwk] });
+    imageRequests.push(request.url);
+    if (request.url === primary) return Response.redirect("https://example.test/unrelated");
+    return request.url === backup ? new Response(jpeg) : new Response(null, { status: 404 });
+  } });
+  await migratedDb(app);
+  const headers = { "Cf-Access-Jwt-Assertion": await assertion() };
+  const actor = await actorKey(principal);
+  async function post(path, body) {
+    const response = await app.dispatchFetch(origin + "/api/v1/" + path, {
+      method: "POST", headers: { ...headers, Origin: origin, "X-Kapok-Actor": actor, "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    return (await response.json()).data;
+  }
+  await post("join", { discName: "Synthetic", jerseyNumber: "07", intent: "register", confirmed: true });
+  const draft = await post("learning/posts", { title: "Example", kind: "video", category: "基本功",
+    video: { source: "youtube", url: "https://youtu.be/dQw4w9WgXcQ?t=5m" } });
+  for (let i = 0; i < 2; i++) {
+    const cover = await app.dispatchFetch(origin + "/api/v1/video-covers/draft/" + draft.id, { headers, redirect: "manual" });
+    assert.equal(cover.status, 200);
+    assert.equal(cover.headers.get("content-type"), "image/jpeg");
+    assert.deepEqual(new Uint8Array(await cover.arrayBuffer()), jpeg);
+  }
+  assert.deepEqual(imageRequests, [primary, backup]);
+});
+
 test("real bundle enrolls signed Access identities concurrently and resolves old links safely", async t => {
   const owner = { ...principal, subject: "synthetic-initial-admin", verifiedEmail: "synthetic-owner@example.test" };
   const app = start(t, { bindings: { ...bindings, ACCESS_INITIAL_ADMIN_EMAIL: owner.verifiedEmail } });

@@ -32,7 +32,7 @@ test('YouTube covers share cached artwork across different playback timestamps',
 test('Bilibili retrieves the upload cover from the video page when metadata is unavailable', async t => {
   const bucket=memoryBucket();
   t.mock.method(globalThis,'fetch', async (url, opts) => {
-    assert.equal(opts.redirect,'error');
+    assert.equal(opts.redirect,'manual');
     if (url.includes('api.bilibili.com')) return new Response('',{status:412});
     if (url.includes('www.bilibili.com')) return new Response('<meta content="//i0.hdslb.com/bfs/archive/test.jpg@1200w_630h" property="og:image">');
     assert.equal(url,'https://i0.hdslb.com/bfs/archive/test.jpg@960w.webp');
@@ -58,7 +58,7 @@ test('YouTube retries another official host for the same video despite a cached 
   await bucket.put(key, new Uint8Array(), {});
   const urls = [];
   t.mock.method(globalThis,'fetch', async (url, options) => {
-    assert.equal(options.redirect,'error');
+    assert.equal(options.redirect,'manual');
     urls.push(url);
     if (urls.length === 1) return new Response('temporarily unavailable', { status:503 });
     return new Response(jpeg);
