@@ -19,6 +19,7 @@ import {
   X,
   Play,
 } from 'lucide-react';
+import { MediaCover } from './press';
 import { NavLink, useNav, useTitle } from './router';
 import { canEditMaterial, clock, day, eventTime, kindName, uid, useData } from './store';
 import { LearningText } from '../components/learning-text';
@@ -583,7 +584,7 @@ function MaterialEditor({ t }) {
   const initial=t;
   const admin = ctx.account.membership.role==='admin';
   const initialKind=params.get('kind');
-  const [kind,setKind]=useState(t?.kind ?? (['article','video'].includes(initialKind)?initialKind:admin?'training':'article'));
+  const [kind,setKind]=useState(t?.kind ?? (['article','video'].includes(initialKind)?initialKind:'training'));
   const label = kindName[kind];
   const formTitle = (edit ? '编辑' : '新建') + label;
   useTitle(formTitle);
@@ -612,6 +613,8 @@ function MaterialEditor({ t }) {
   const [keepFilm, setKeepFilm] = useState(
     Boolean(initial?.duration && !initial.source && !initial.videoAsset),
   );
+  const photoList = useRef(photos);
+  useLayoutEffect(() => { photoList.current = photos; }, [photos]);
   const clipPreview = useRef(null);
   const [clipInfo, setClipInfo] = useState(null);
   const [pointDrafts, setPointDrafts] = useState(() => {
@@ -661,6 +664,44 @@ function MaterialEditor({ t }) {
     setPhotos((list) => [...list, ...additions]);
     setIssue(null);
   }
+  function chooseCover(file, field) {
+    if (!file) return;
+    const issue = fileIssue(file, 'photo');
+    const existing = photoList.current.filter(photo => !photo.selectedCover);
+    if (issue || existing.length >= 6) {
+      setIssue({ field, message: issue || '照片已满，请先移除一张再选封面。' });
+      return;
+    }
+    const cover = { key: uid(), file, url: preview(file), alt: '', selectedCover: true };
+    for (const photo of photoList.current) if (photo.selectedCover) release(photo.url);
+    setPhotos([cover, ...existing]);
+    setIssue(null);
+    return true;
+  }
+  async function captureCover() {
+    const video = clipPreview.current;
+    if (!video || video.readyState < 2) {
+      setIssue({field:'clip', message:'请先播放或拖到要选取的画面。'});
+      return;
+    }
+    const source = video.currentSrc;
+    try {
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+      canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+      canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+      if (!mounted.current || clipPreview.current !== video || video.currentSrc !== source || request.current) return;
+      if (!blob) throw new Error();
+      const file = new File([blob], '训练封面.jpg', {type: 'image/jpeg'});
+      if (!chooseCover(file, 'clip')) return;
+      setMore(true);
+      notify('已将当前画面设为首张照片和封面');
+    } catch {
+      setIssue({field:'clip', message:'这个视频画面暂时无法提取，可以上传一张照片作封面。'});
+    }
+  }
   function chooseClip(file) {
     if (!file) return;
     const invalid = fileIssue(file, 'video');
@@ -683,10 +724,12 @@ function MaterialEditor({ t }) {
   const usingLink = hasLink && (videoMode === 'link' || !hasFile);
   const usingFile = hasFile && (videoMode === 'file' || !hasLink);
   const otherSource = (usingLink && videoMode === 'file') || (usingFile && videoMode === 'link');
+  let coverSource;
   let pointKey = usingFile ? clip.url : keepFilm ? 'builtin' : '';
   if (usingLink) {
     try {
-      pointKey = parseVideo(link)?.url || '';
+      coverSource = parseVideo(link);
+      pointKey = coverSource?.url || '';
     } catch {
       pointKey = '';
     }
@@ -726,7 +769,7 @@ function MaterialEditor({ t }) {
       const signature=JSON.stringify([input,picked.map(p=>p.key),usingFile && clip.url]);
       if (attempted.current?.signature!==signature) attempted.current={signature,key:uid()};
       const attempt=attempted.current;
-      if (kind==='training' && usingFile && clip.file?.type==='video/mp4') {
+      if (admin && kind==='training' && usingFile && clip.file?.type==='video/mp4') {
         attempt.uploadId ??= await attachClip(ctx,clip.file,controller.signal,attempt.key,setProgress);
         input.uploadId=attempt.uploadId;
       }
@@ -765,7 +808,7 @@ function MaterialEditor({ t }) {
               <div className="kind-line">
                 <span aria-hidden="true">内容形式</span>
                 <div className="kind-options">
-                  {kindChoices.filter(choice=>admin || choice.id!=='training').map(({ id, icon: Icon }) => (
+                  {kindChoices.map(({ id, icon: Icon }) => (
                     <label key={id}>
                       <input
                         type="radio"
@@ -883,6 +926,7 @@ function MaterialEditor({ t }) {
                       />
                       <div>
                         <strong>{clip.name}</strong>
+                        <button className="btn" type="button" onClick={captureCover}><FileImage size={15}/>用当前画面作封面</button>
                         <IconButton
                           label="移除视频文件"
                           icon={X}
@@ -915,6 +959,24 @@ function MaterialEditor({ t }) {
                       MP4 ≤ 100 MiB · WebM ≤ 64 MiB
                     </p>
                   </div>
+                </div>
+              )}
+              {videoMode === 'link' && coverSource && (
+                <div className="link-cover-choice">
+                  <MediaCover item={{ source: coverSource, photos, platformCover: coverSource.url === initial?.source?.url ? initial.platformCover : undefined }} alt="发布封面预览" />
+                  <span>
+                    <strong>视频封面</strong>
+                    <small>{photos[0] ? '使用首张照片' : coverSource.platform === 'YouTube' ? '优先使用 YouTube 封面' : '发布后自动读取 B 站封面'}</small>
+                  </span>
+                  <label className="media-chooser">
+                    <ImagePlus size={15} />{photos[0] ? '更换封面' : '上传封面'}
+                    <input type="file" aria-label="选择封面图片" accept={fileTypes.photo.list}
+                      onChange={event => {
+                        chooseCover(event.target.files?.[0], 'link');
+                        event.target.value = '';
+                      }}
+                    />
+                  </label>
                 </div>
               )}
               {kind==='training' && t?.selectedVideo && <p className="field-hint">填写新链接或选择新文件会追加一个视频，原有视频及讨论会保留。</p>}

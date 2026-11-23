@@ -64,7 +64,7 @@ export function createWorkspaceAssets({ db,bucket,clock,activeMember,operation,m
     const q=(sql:string,...values:unknown[])=>db.prepare(sql).bind(...values);
     const noStore=()=>{if(!bucket) throw new DomainError('STORAGE_UNAVAILABLE','私有文件存储暂不可用。',503); return bucket;};
     function parent(c:LearningContext,kind:string,id:string) {
-        return kind==='training' ? { sql:"EXISTS(SELECT 1 FROM trainings WHERE id=? AND team_id=? AND status!='deleted') AND ?='admin'", values:[id,c.membership.teamId,c.membership.role] } :
+        return kind==='training' ? { sql:"EXISTS(SELECT 1 FROM trainings WHERE id=? AND team_id=? AND status!='deleted' AND (?='admin' OR (publisher_id=? AND status!='hidden')))", values:[id,c.membership.teamId,c.membership.role,c.user.id] } :
             {sql:"EXISTS(SELECT 1 FROM learning_posts WHERE id=? AND team_id=? AND owner_id=? AND status!='hidden')", values:[id,c.membership.teamId,c.user.id]};
     }
     async function reserveMaterialAsset(p:Principal|null,input:unknown,key:string) {
@@ -157,12 +157,12 @@ export function createWorkspaceAssets({ db,bucket,clock,activeMember,operation,m
         const contains=(json:string)=>`EXISTS(SELECT 1 FROM json_each(${json},'$.photos') WHERE json_extract(value,'$.id')=a.id)`;
         const visible=q(`SELECT a.* FROM material_assets a WHERE a.id=? AND a.team_id=? AND a.ready=1 AND ${member.sql} AND (
            (a.parent_kind='training' AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=a.parent_id AND t.team_id=a.team_id
-               AND (t.status IN ('published','archived') OR (?='admin' AND t.status!='deleted')) AND ${contains('t.workspace_details')}))
+               AND (t.status IN ('published','archived') OR (?='admin' AND t.status!='deleted') OR (t.status='draft' AND t.publisher_id=?)) AND ${contains('t.workspace_details')}))
            OR (a.parent_kind='post' AND EXISTS(SELECT 1 FROM learning_posts lp LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id
                WHERE lp.id=a.parent_id AND lp.team_id=a.team_id AND (
                   (lp.owner_id=? AND (${contains('lp.workspace_details')} OR lp.video_url='/api/v1/material-assets/'||a.id))
                   OR (${learningPostVisible} AND (${contains('lpub.workspace_details')} OR lpub.video_url='/api/v1/material-assets/'||a.id))))))`,
-            id,c.membership.teamId,...member.values,c.membership.role,c.user.id);
+            id,c.membership.teamId,...member.values,c.membership.role,c.user.id,c.user.id);
         const a=await visible.first<Asset>();
         if (!a) throw missing();
         const headers=new Headers({'Cache-Control':'private, no-store, max-age=0',Vary:'Cookie, oai-authenticated-user-id, Cf-Access-Jwt-Assertion',

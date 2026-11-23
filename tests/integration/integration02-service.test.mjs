@@ -80,9 +80,9 @@ test('atomic draft creation keeps the optional video private until the draft is 
         method: 'POST', body: JSON.stringify(input),
         headers: {
             Origin: 'https://kapok.test', 'Content-Type': 'application/json',
-            'X-Kapok-Actor': await actorKey(member), 'Idempotency-Key': 'blocked',
+            'X-Kapok-Actor': await actorKey(principal('not-joined')), 'Idempotency-Key': 'blocked',
         },
-    }), ['trainings', 'publish'], member, s);
+    }), ['trainings', 'publish'], principal('not-joined'), s);
     assert.equal(deniedWrite.status, 403);
     assert.equal((await deniedWrite.json()).error.code, 'FORBIDDEN');
     assert.deepEqual(await rows('trainings'), []);

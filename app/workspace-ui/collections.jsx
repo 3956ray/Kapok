@@ -51,9 +51,17 @@ export function FeedStatus() {
 
 export function Collections() {
   useTitle('训练合集');
-  const { collections, remoteCollections, trainings, categoryNames } = useData();
+  const { collections, remoteCollections, trainings, categoryNames, ctx } = useData();
   const [filter, setFilter] = usePreference('collection-category', '全部');
   const [query, setQuery] = usePreference('collection-search', '');
+  const [featured,setFeatured] = useState([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    ctx.read('learning/featured', controller.signal).then(data => {
+      if (!controller.signal.aborted) setFeatured(data.collections.map(c=>c.id));
+    }).catch(()=>{ if (!controller.signal.aborted) setFeatured([]); });
+    return () => controller.abort();
+  },[ctx]);
   const entries = catalogEntries(collections, remoteCollections, trainings);
   const categories = [...new Set(['全部', ...categoryNames, ...entries.map(c => c.category).filter(Boolean)])];
   const activeFilter = categories.includes(filter) ? filter : '全部';
@@ -77,6 +85,12 @@ export function Collections() {
         }
       />
       <LibraryNav active="collections" />
+      {featured.some(key => entries.some(e=>e.key===key && e.count)) && <section className="desk-picks" aria-label="队内精选合集">
+        <h2>队内精选</h2>{featured.map(key => {
+          const entry=entries.find(e=>e.key===key && e.count);
+          return entry && <NavLink key={key} to={entry.href}>{entry.title}<ArrowUpRight size={16}/></NavLink>;
+        })}
+      </section>}
       <div className="catalog-controls">
         <span>{entries.length} 份合集</span>
         <label className="folio-search">

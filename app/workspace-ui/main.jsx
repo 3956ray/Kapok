@@ -9,9 +9,12 @@ import { Activity, Members, Account } from './team';
 import { Collections, CollectionView, SharedCollection } from './collections';
 import { CollectionEditor } from './collection-editor';
 import { Published } from './published';
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { AnnouncementReader, LegacyVideo } from './legacy-readers';
 import { loadNote } from './growth.js';
+const desk = () => import('./manage');
+const Management = lazy(() => desk().then(m => ({default:m.Management})));
+const PersonalTools = lazy(() => desk().then(m => ({default:m.PersonalTools})));
 function ReadError({ retry }) {
   return (
     <div className="page-width">
@@ -24,18 +27,22 @@ function ReadError({ retry }) {
 }
 
 function Route() {
-  const { pathname, path } = useNav(),
+  const { pathname, path, params } = useNav(),
     { allNotes, trainings, collections, catalogReady, sharesError, refreshShares } = useData();
   if (pathname === '/trainings' || pathname === '/') return <Library />;
   if (pathname === '/growth') return <Growth />;
   if (pathname === '/activity') return <Activity />;
   if (pathname === '/members') return <Members />;
   if (pathname === '/account') return <Account />;
+  if (pathname === '/account/manage' || pathname.startsWith('/account/manage/'))
+    return <Management key={pathname} section={pathname.slice('/account/manage/'.length)}/>;
+  if (pathname === '/account/recycle' || pathname === '/account/data')
+    return <PersonalTools key={pathname} recycle={pathname.endsWith('/recycle')}/>;
   if (pathname === '/account/published') return <Published />;
   if (pathname === '/collections') return <Collections />;
   const [group, id, mode, ...extras] = pathname.split('/').slice(1);
   if (id && !mode && group === 'videos') return <LegacyVideo key={id} id={id}/>;
-  if (id && !mode && group === 'announcements') return <AnnouncementReader key={id} id={id}/>;
+  if (id && !mode && (group === 'announcements' || group === 'notices')) return <AnnouncementReader key={id} id={id}/>;
   if ((group === 'collections' || group === 'shared') && id) {
     const chapter = mode === 'items' && extras.length === 1 && extras[0];
     if (mode && !chapter && !(group === 'collections' && mode === 'edit' && !extras.length))
@@ -63,7 +70,7 @@ function Route() {
         </p>
       );
     if (!item && sharesError) return <ReadError retry={refreshShares} />;
-    if (item && mode && !canEditMaterial(item))
+    if (item && mode && !(canEditMaterial(item) || (params.get('manage')==='1' && item.canManageArchive)))
       return <Missing label="可编辑的内容" />;
     return item ? (
       mode ? (
@@ -100,6 +107,6 @@ function RemoteNote({id,edit}) {
 export default function Workspace(props) {
   return <div data-bloom-workspace>
     <link rel="stylesheet" href="/workspace-assets/workspace.css"/>
-    <DataProvider {...props}><RouterProvider initialPath={props.initialPath}><Shell><Route/></Shell></RouterProvider></DataProvider>
+    <DataProvider {...props}><RouterProvider initialPath={props.initialPath}><Shell><Suspense fallback={<p className="page-width" role="status">正在打开页面…</p>}><Route/></Suspense></Shell></RouterProvider></DataProvider>
   </div>;
 }

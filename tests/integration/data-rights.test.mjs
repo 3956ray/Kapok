@@ -364,3 +364,13 @@ test('one export snapshot includes both own learning and topic revisions, owned 
     await denied(s.getLearningImage(admin, own.id, image.id), 'NOT_FOUND');
     await denied(s.getTopicCollection(admin, topic.id), 'NOT_FOUND');
 });
+
+test('an administrator from a different login issuer cannot be the only successor',async t=>{
+    const {s,db,change,ids} = await fixture(t);
+    await change(member,{role:'admin',status:'active'},'promote-before-move');
+    await db.prepare("UPDATE auth_identities SET issuer='retired-issuer' WHERE user_id=?").bind(ids[member.subject]).run();
+    const list = await s.listManagedMembers(admin);
+    assert.equal(list.find(m=>m.userId===ids[member.subject]).canSignIn,false);
+    assert.equal(list.find(m=>m.userId===ids[admin.subject]).canSignIn,true);
+    await assert.rejects(change(admin,{role:'member',status:'active'},'invalid-successor'));
+});

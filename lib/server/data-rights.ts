@@ -137,6 +137,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             owned(`SELECT d.id,d.training_id AS trainingId,d.root_id AS rootId,d.reply_to_id AS replyToId,
                 CASE WHEN d.status='active' THEN d.body END AS text,d.status,d.created_at AS createdAt
                 FROM training_discussions d JOIN owner o ON o.id=d.author_id ORDER BY d.created_at,d.id`),
+            owned(`SELECT t.id,t.title,t.date,t.description,t.status FROM trainings t JOIN owner o ON o.id=t.publisher_id ORDER BY t.date DESC,t.id`),
         ]);
         const profile = result[0].results[0] as PersonalExport['profile'] | undefined;
         if (!profile) throw new DomainError('FORBIDDEN', '账号状态已变化，请重新确认。', 403);
@@ -152,6 +153,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
         await requirePrivateOwner(db, access);
         return {
             format: 'kapok-personal-v1',
+            trainings:result[11].results as PersonalExport['trainings'],
             materialAssets:result[9].results as PersonalExport['materialAssets'],
             trainingDiscussions:result[10].results as PersonalExport['trainingDiscussions'],
             generatedAt: clock().toISOString(),
@@ -167,8 +169,9 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 .map(event => ({ ...event, active: !!event.active })),
         };
     }
-    const selectMember = `SELECT m.id,m.team_id AS teamId,m.role,m.status,m.epoch,m.version,
-        m.user_id AS userId,p.disc_name AS discName,p.jersey_number AS jerseyNumber
+    const loginIdentity = 'EXISTS(SELECT 1 FROM auth_identities login WHERE login.user_id=m.user_id AND login.provider=? AND login.issuer=?)';
+    const selectMember = (login = false) => `SELECT m.id,m.team_id AS teamId,m.role,m.status,m.epoch,m.version,
+        m.user_id AS userId,p.disc_name AS discName,p.jersey_number AS jerseyNumber${login ? ', '+loginIdentity+' AS canSignIn' : ''}
         FROM memberships m JOIN users u ON u.id=m.user_id JOIN profiles p ON p.user_id=m.user_id`;
     async function confirmMemberManager(p: Principal | null, c: Context, expectedVersion = c.membership.version, admin = true) {
         const latest = await activeMember(p, admin);
@@ -179,18 +182,18 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
     }
     async function listManagedMembers(p: Principal | null): Promise<ManagedMember[]> {
         const c = await activeMember(p, true);
-        const members = (await q(`${selectMember} WHERE m.team_id=? AND u.status='active'
+        const members = (await q(`${selectMember(true)} WHERE m.team_id=? AND u.status='active'
             AND EXISTS(SELECT 1 FROM memberships am JOIN users au ON au.id=am.user_id
                 JOIN auth_identities a ON a.user_id=au.id WHERE am.id=? AND am.user_id=?
                 AND am.team_id=m.team_id AND am.role='admin' AND am.status='active' AND am.epoch=? AND am.version=?
                 AND au.status='active' AND a.provider=? AND a.issuer=? AND a.subject=?)
-            ORDER BY p.disc_name,m.id`, c.membership.teamId, c.membership.id, c.user.id,
+            ORDER BY p.disc_name,m.id`, p!.provider,p!.issuer,c.membership.teamId, c.membership.id, c.user.id,
             c.membership.epoch, c.membership.version, ...identityTuple(p!)).all<ManagedMember>()).results;
         await confirmMemberManager(p, c);
-        return members;
+        return members.map(m=>({...m,canSignIn:!!m.canSignIn}));
     }
     async function managedMember(id: string, teamId: string) {
-        const row = await q(`${selectMember} WHERE m.user_id=? AND m.team_id=? AND u.status='active'`, id, teamId).first<ManagedMember>();
+        const row = await q(`${selectMember()} WHERE m.user_id=? AND m.team_id=? AND u.status='active'`, id, teamId).first<ManagedMember>();
         if (!row) throw missing();
         return row;
     }
@@ -224,7 +227,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 [target, c.membership.teamId, e.version + 1, epoch, role, status]),
                 // This post-mutation guard executes inside the same serialized D1 batch, including self-leave.
                 assertGuard(db, op.opId, 'last-admin', `EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id
-                    WHERE m.team_id=? AND m.role='admin' AND m.status='active' AND u.status='active')`, [c.membership.teamId]),
+                    WHERE m.team_id=? AND m.role='admin' AND m.status='active' AND u.status='active' AND ${loginIdentity})`, [c.membership.teamId,p.provider,p.issuer]),
                 q('INSERT INTO moderation_audit(id,actor_id,target_id,action,reason,created_at) VALUES(?,?,?,?,?,?)',
                     op.opId, c.user.id, old.id, selfLeave ? 'member-leave' : 'member-update',
                     JSON.stringify({

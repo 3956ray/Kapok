@@ -898,3 +898,20 @@ test('workspace resumes earlier local drafts under the same actor and retains th
         ['sourceKind=learning_post&sourceId=post','learning/posts/post/reflection-seed'],
     ]) assert.equal(reflectionSeedPath(new URLSearchParams(query)),endpoint);
 });
+
+test('an announcement revision remains private until republished and detects conflicting edits', async t => {
+    const {s} = await fixture(t);
+    const draft = await s.saveAnnouncement(admin,null,{title:'A',text:'',status:'editorDraft'},'notice-start');
+    const live = await s.saveAnnouncement(admin,draft.id,{title:'A',text:'First',status:'published',expectedVersion:draft.version},'notice-live');
+    const revision = {title:'B',text:'Second',status:'revision',expectedVersion:live.version};
+    await s.saveAnnouncement(admin,live.id,revision,'notice-edit');
+    assert.equal((await s.getAnnouncement(member,live.id)).text,'First');
+    assert.equal((await s.getAnnouncement(member,live.id)).revisionText,undefined);
+    await assert.rejects(s.listAnnouncements(member,true));
+    const edit = (await s.listAnnouncements(admin,true)).find(row=>row.id===live.id);
+    assert.equal(edit.revisionText,'Second');
+    await assert.rejects(s.saveAnnouncement(admin,live.id,revision,'notice-stale'));
+    await s.saveAnnouncement(admin,live.id,{title:'B',text:'Second',status:'published',expectedVersion:edit.version},'notice-next');
+    assert.equal((await s.getAnnouncement(member,live.id)).text,'Second');
+    assert.equal((await s.listAnnouncements(admin,true)).find(row=>row.id===live.id).revisionText,null);
+});

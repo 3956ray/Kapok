@@ -151,6 +151,19 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         if (after.user.id !== c.user.id || after.membership.id !== c.membership.id || after.membership.teamId !== c.membership.teamId || after.membership.epoch !== c.membership.epoch) throw missing();
         return { trainings: trainings.results, videos: videos.results };
     }
+    // An authored draft can be reopened while it is being assembled with media.
+    const memberTraining = "(status IN ('published','archived') OR (status='draft' AND publisher_id=?))";
+    const editableByAuthor = "publisher_id=? AND status IN ('draft','published','archived')";
+    async function requireTrainingAuthor(c: Context, id: string) {
+        if (c.membership.role === 'admin') return;
+        const row = await q('SELECT 1 FROM trainings WHERE id=? AND team_id=? AND publisher_id=?', id, c.membership.teamId, c.user.id).first();
+        if (!row) throw new DomainError('FORBIDDEN', '只能修改自己的训练。', 403);
+    }
+    function authorGuards(op: Op, c: Context, id: string) {
+        return c.membership.role === 'admin' ? [] : [
+            assertGuard(db, op.opId, 'training-author', 'EXISTS(SELECT 1 FROM trainings WHERE id=? AND team_id=? AND '+editableByAuthor+')', [id, c.membership.teamId, c.user.id])
+        ];
+    }
     async function listTrainings(p: Principal | null, featured = false) {
         const c = await activeMember(p);
         if (featured) {
@@ -159,17 +172,17 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             ).all<Training>()).results;
         }
         return (await q(
-            `${trainingIndex} WHERE team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : "AND status IN ('published','archived')"} ORDER BY date DESC,id DESC`,
-            c.membership.teamId
+            `${trainingIndex} WHERE team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : `AND ${memberTraining}`} ORDER BY date DESC,id DESC`,
+            c.membership.teamId, ...(c.membership.role === 'admin' ? [] : [c.user.id])
         ).all<Training>()).results;
     }
     async function getTraining(p: Principal | null, id: string, view?: 'member') {
         const c = await activeMember(p, view === 'member');
         const adminView = c.membership.role === 'admin' && view !== 'member';
+        const visible = adminView ? "status!='deleted'" : view === 'member' ? "status IN ('published','archived')" : memberTraining;
         const trainingQuery = q(
-            `${trainingSelect} WHERE id=? AND team_id=? ${adminView ? "AND status!='deleted'" : "AND status IN ('published','archived')"}`,
-            id,
-            c.membership.teamId
+            `${trainingSelect} WHERE id=? AND team_id=? AND ${visible}`,
+            id, c.membership.teamId, ...(!adminView && view !== 'member' ? [c.user.id] : [])
         );
         const videoStatus = adminView ? "v.status IN ('active','hidden')" : "v.status='active'";
         const videoQuery = q(`${videoSelect} WHERE v.training_id=? AND v.team_id=? AND ${videoStatus} ORDER BY v.position,v.id`, id, c.membership.teamId);
@@ -186,13 +199,17 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         return { ...t, videos: (await videoQuery.all<Video>()).results };
     }
     async function saveTraining(p: Principal | null, id: string | null, input: unknown, key: string) {
-        const c = await activeMember(p, true);
+        const c = await activeMember(p);
+        if (id) await requireTrainingAuthor(c, id);
+        const admin = c.membership.role === 'admin';
         const r = object(input, ['title', 'date', 'description', 'status', 'expectedVersion', 'workspaceDetails','appendVideo']);
         const fields = trainingFields(r);
         const { title, date, description } = fields;
         const status = text(r.status, 12);
         if(!['draft', 'published', 'archived', 'hidden', 'deleted'].includes(status))
             throw new DomainError('INVALID_INPUT', '请检查日期与训练状态。');
+        if (!admin && (status === 'hidden' || (!id && !['draft','published'].includes(status))))
+            throw new DomainError('FORBIDDEN', '当前操作需要管理员权限。', 403);
         const expected = id ? version(r.expectedVersion) : null;
         let added: {id:string;source:Video['source'];url:string|null;uploadId:string|null;title:string;position:number}|null=null;
         if (r.appendVideo!==undefined) {
@@ -214,6 +231,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                 op,
                 c,
                 id ? [
+                    ...authorGuards(op,c,id),
                     ...materialPhotoGuard(db,op.opId,'training',id,c.membership.teamId,fields.workspaceDetails),
                     assertGuard(
                         db,
@@ -243,12 +261,13 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     insertTraining(c, target, fields, status)
                 ],
                 { id: target },
-                true
+                admin
             );
             target = committed.result.id!;
         }
-        const current = await activeMember(p, true);
-        const saved = await q(`${trainingSelect} WHERE id=? AND team_id=?`, target, current.membership.teamId).first<Training>();
+        const current = await activeMember(p);
+        const saved = await q(`${trainingSelect} WHERE id=? AND team_id=? AND (?='admin' OR (publisher_id=? AND status!='hidden' AND (status!='deleted' OR ?='deleted')))`,
+            target, current.membership.teamId, current.membership.role, current.user.id, status).first<Training>();
         if (!saved) throw missing();
         return saved;
     }
@@ -293,7 +312,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         };
         const replay = await classify();
         if (replay) return replay;
-        try { return await commit(op, c, body, result, true); }
+        try { return await commit(op, c, body, result, c.membership.role === 'admin'); }
         catch (error) {
             // Unknown transport/commit outcomes are never classified as no-commit.
             if (error instanceof DomainError && error.code === 'VERSION_CONFLICT') {
@@ -304,7 +323,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         }
     }
     async function publishTraining(p: Principal | null, input: unknown, key: string, precondition?: unknown): Promise<TrainingPublication> {
-        const c = await activeMember(p, true);
+        const c = await activeMember(p, precondition !== undefined);
         const approved = await importBinding(p, c, precondition, null);
         const raw = object(input, ['title', 'date', 'description', 'status', 'video', 'workspaceDetails']);
         const fields = trainingFields(raw);
@@ -344,13 +363,14 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             }
             receipt = (await commitImport(op, c, approved, statements, { id, videoId }, importUrl)).result;
         }
-        const current = await activeMember(p, true);
+        const current = await activeMember(p, precondition !== undefined);
         if(current.user.id !== c.user.id || current.membership.teamId !== c.membership.teamId)
             throw new DomainError('FORBIDDEN', '当前账号没有此操作权限。', 403);
-        const savedTraining = await q(`${trainingSelect} WHERE id=? AND team_id=? AND status!='deleted'`, receipt.id, current.membership.teamId).first<Training>();
+        const savedTraining = await q(`${trainingSelect} WHERE id=? AND team_id=? AND status!='deleted' AND (?='admin' OR (publisher_id=? AND status!='hidden'))`, receipt.id, current.membership.teamId, current.membership.role, current.user.id).first<Training>();
         if(!savedTraining) throw missing();
         const savedVideo = receipt.videoId
-            ? await q(`${videoSelect} WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.status!='deleted'`, receipt.videoId, savedTraining.id, current.membership.teamId).first<Video>()
+            ? await q(`${videoSelect} WHERE v.id=? AND v.training_id=? AND v.team_id=? AND v.status!='deleted' AND (?='admin' OR v.status='active')`,
+                receipt.videoId, savedTraining.id, current.membership.teamId, current.membership.role).first<Video>()
             : null;
         if(receipt.videoId && !savedVideo) throw missing();
         return { training: savedTraining, video: savedVideo };
@@ -359,7 +379,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const c = await activeMember(p);
         const row = await q(`SELECT v.url FROM videos v JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
             WHERE v.id=? AND v.team_id=? AND v.status='active' AND t.status!='deleted'
-            AND (?='admin' OR t.status IN ('published','archived'))`,id,c.membership.teamId,c.membership.role).first<{url:string|null}>();
+            AND (?='admin' OR t.status IN ('published','archived') OR (t.publisher_id=? AND t.status='draft'))`,id,c.membership.teamId,c.membership.role,c.user.id).first<{url:string|null}>();
         if (!row) throw missing();
         return row.url;
     }
@@ -372,7 +392,8 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         return { ...v, training };
     }
     async function addVideo(p: Principal | null, trainingId: string, input: unknown, key: string, precondition?: unknown) {
-        const c = await activeMember(p, true);
+        const c = await activeMember(p, precondition !== undefined);
+        await requireTrainingAuthor(c,trainingId);
         const approved = await importBinding(p, c, precondition, trainingId);
         const r = object(input, ['title', 'source', 'url', 'uploadId', 'position']);
         const t = await getTraining(p, trainingId);
@@ -394,7 +415,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const op = await operation(c.user.id, 'video-add', trainingId, key, { title, source, url, uploadId, position: r.position });
         let id = op.replay?.result.id ?? crypto.randomUUID();
         if(!op.replay) {
-            const body = [...importMappingGuard(op, c, approved, t.date, url), trainingGuard(op, trainingId, c.membership.teamId)];
+            const body = [...authorGuards(op,c,trainingId), ...importMappingGuard(op, c, approved, t.date, url), trainingGuard(op, trainingId, c.membership.teamId)];
             if(uploadId)
                 body.push(assertGuard(
                     db,

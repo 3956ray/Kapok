@@ -11,6 +11,14 @@ export function fieldPhoto(training) {
 export function teamPhoto(training) {
   return training.id === 'weak-side' ? media('reset.webp') : fieldPhoto(training);
 }
+export function MediaCover({item, fallback, ...props}) {
+  const local = fallback || fieldPhoto();
+  const youtube = item?.source?.platform === 'YouTube' && /^https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})$/.exec(item.source.url)?.[1];
+  const src = item?.photos?.[0]?.url || item?.platformCover || (youtube && 'https://i.ytimg.com/vi/'+youtube+'/hqdefault.jpg') || local;
+  return <img {...props} src={src} referrerPolicy="no-referrer" onError={e=>{
+    if (e.currentTarget.getAttribute('src') !== local) e.currentTarget.src=local;
+  }}/>;
+}
 export function DateMark({ value }) {
   const [year, month, date] = localDay(value).split('-');
   return (

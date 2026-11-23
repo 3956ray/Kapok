@@ -148,6 +148,13 @@
       "when": 1795660000000,
       "tag": "0022_workspace_profile_position",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1795660000001,
+      "tag": "0023_announcement_revisions",
+      "breakpoints": true
     }
   ]
 }

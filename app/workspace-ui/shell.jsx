@@ -26,6 +26,11 @@ const dests = [
   { to: '/activity', name: '队内动态', icon: Activity },
   { to: '/members', name: '队伍成员', icon: Users },
 ];
+const teamChannels = [
+  { name: '小红书', icon: 'xiaohongshu', width: 32, href: 'https://xhslink.cn/o/AYxeURNRZD1' },
+  { name: '微信公众号', icon: 'wechat', width: 22, href: 'https://mp.weixin.qq.com/s/DGLCJAcWE-qvA6B19WNRnw' },
+  { name: '哔哩哔哩', icon: 'bilibili', width: 22, href: 'https://space.bilibili.com/3546573850019973' },
+];
 function NavBody({ narrow = false, mobile = false, onClose }) {
   const { pathname } = useNav(),
     { db } = useData();
@@ -102,6 +107,15 @@ function NavBody({ narrow = false, mobile = false, onClose }) {
           <span className="club-line" />
           <span>Kapok Bloom</span>
         </div>
+        <nav className="club-channels" aria-label="队伍社交平台">
+          {teamChannels.map(({ name, icon, width, href }) => (
+            <Tip key={icon} label={name + '（新窗口打开）'} side={narrow ? 'right' : 'top'}>
+              <a href={href} target="_blank" rel="noopener noreferrer" aria-label={name + '（新窗口打开）'}>
+                <img src={'/workspace-assets/media/' + icon + '.svg'} width={width} height={width} alt="" />
+              </a>
+            </Tip>
+          ))}
+        </nav>
         <NavLink
           to="/account"
           onClick={onClose}

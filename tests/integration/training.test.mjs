@@ -42,7 +42,7 @@ test(
         const { s } = await fixture(t);
         await reject(s.listTrainings(outsider), 'FORBIDDEN');
         await reject(s.listTrainings(outsider, true), 'FORBIDDEN');
-        await reject(s.saveTraining(alice, null, training, 'x'), 'FORBIDDEN');
+        await reject(s.saveTraining(outsider, null, training, 'x'), 'FORBIDDEN');
         const d = await s.saveTraining(owner, null, training, 'create');
         assert.deepEqual(await s.listTrainings(alice), []);
         assert.deepEqual(await s.listTrainings(owner, true), []);
@@ -57,6 +57,35 @@ test(
         await reject(s.getTraining(alice, 'foreign'), 'NOT_FOUND');
     }
 );
+
+test('training authors retain their records and attachment rights after a real admin handoff', async t => {
+    const { s } = await fixture(t);
+    const original = await s.me(owner);
+    const successor = await s.me(alice);
+    const first = (await s.publishTraining(owner, { ...training, status:'published' }, 'before-handoff')).training;
+    const ownDraft = (await s.publishTraining(alice, training, 'member-draft')).training;
+    assert.equal(ownDraft.publisherId, successor.user.id);
+    assert.equal((await s.getTraining(alice, ownDraft.id)).status, 'draft');
+    assert.ok((await s.listTrainings(alice)).some(row => row.id === ownDraft.id));
+    const asset = id => ({kind:'training',parentId:id,mime:'image/png',bytes:24,digest:'0'.repeat(64)});
+    assert.ok((await s.reserveMaterialAsset(alice,asset(ownDraft.id),'own-photo')).id);
+    await reject(s.reserveMaterialAsset(alice,asset(first.id),'other-photo'),'NOT_FOUND');
+    const edit = (actor, row, title) => s.saveTraining(actor, row.id, { ...training, title, status:'published', expectedVersion:row.version }, crypto.randomUUID());
+    await reject(edit(alice,first,'尚未接任'), 'FORBIDDEN');
+    await s.updateMembership(owner,successor.user.id,{role:'admin',status:'active',expectedVersion:successor.membership.version,expectedEpoch:successor.membership.epoch},'promote');
+    await s.updateMembership(alice,original.user.id,{role:'member',status:'active',expectedVersion:original.membership.version,expectedEpoch:original.membership.epoch},'handoff');
+    const maintained = await edit(alice, first, '接任者修订');
+    assert.equal(maintained.publisherId,original.user.id);
+    assert.equal(maintained.publisherName,original.profile.discName);
+    const edited = await edit(owner, maintained, '原作者修订');
+    assert.equal(edited.publisherId,original.user.id);
+    await reject(edit(owner, ownDraft, '他人私稿'), 'FORBIDDEN');
+    await reject(s.getTraining(owner,ownDraft.id), 'NOT_FOUND');
+    const active = (await s.me(owner)).membership;
+    await s.updateMembership(alice,original.user.id,{role:'member',status:'paused',expectedVersion:active.version,expectedEpoch:active.epoch},'pause');
+    await reject(edit(owner,edited,'暂停后修订'), 'FORBIDDEN');
+    await reject(s.publishTraining(owner,training,'暂停后新建'), 'FORBIDDEN');
+});
 
 test(
     'Bilibili normalized multi videos ordered; archive stays readable but blocks writes',

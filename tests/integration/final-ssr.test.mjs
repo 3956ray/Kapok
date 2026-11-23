@@ -82,7 +82,7 @@ sitesTest('B route shells retain the main landmark and show workspace navigation
         ['', true], ['trainings', true], ['trainings/[id]', true], ['videos/[id]', true], ['growth', true],
         ['reflections/new', true], ['reflections/[id]', true], ['reflections/[id]/edit', true], ['reflections/[id]/sharing', true],
         ['me', true], ['me/edit', true], ['me/data', true], ['me/recycle', true], ['members', true], ['members/[id]', true],
-        ['activity', true], ['announcements/[id]', true], ['admin/announcements', false], ['admin/members', false],
+        ['activity', true], ['announcements/[id]', true], ['admin/announcements', true], ['admin/members', true],
         ['login', false],
     ];
     assert.equal(routes.length, 20);
@@ -91,14 +91,13 @@ sitesTest('B route shells retain the main landmark and show workspace navigation
         const stream = await renderToReadableStream(await Page(params)); await stream.allReady;
         const html = await new Response(stream).text();
         assert.match(html, /<main\b[^>]*id="main-content"[^>]*tabindex="-1"[^>]*>/, route);
-        const legacyNavigation = ['me/data','me/recycle'].includes(route);
-        if (nav && !legacyNavigation) {
+        if (nav) {
             assert.match(html,/data-bloom-workspace/,route);
             assert.match(html,/data-kapok-sensitive[^>]*hidden/,route);
             assert.doesNotMatch(html,/class="mobile-drawer"|class="frame"|class="bottom-nav"/,route);
         } else {
-            assert.equal(html.includes('aria-label="主要导航"'),legacyNavigation,route);
-            assert.equal(html.includes('aria-label="工作区导航"'),legacyNavigation,route);
+            assert.equal(html.includes('aria-label="主要导航"'),false,route);
+            assert.equal(html.includes('aria-label="工作区导航"'),false,route);
         }
         for (const secret of ['private A name', 'private team', 'synthetic-invite-token']) assert.ok(!html.includes(secret), route + ': ' + secret);
     }
@@ -167,9 +166,9 @@ test('V2 account and detail shells opt in to compose only for active members', a
                 for (const [i, Page] of pages.entries()) {
                     const stream = await renderToReadableStream(await Page({ params: Promise.resolve({ id: 'resource' }) }));
                     const html = await new Response(stream).text();
-                    const workspaceEntry = status === 'active' && [0,3,4,5].includes(i);
+                    const workspaceEntry = status === 'active' && [0,1,2,3,4,5].includes(i);
                     assert.equal(html.includes('data-bloom-workspace'),workspaceEntry,routes[i]);
-                    assert.equal(html.includes('class="workspace-compose"'),status === 'active' && [1,2].includes(i),routes[i]);
+                    assert.equal(html.includes('class="workspace-compose"'),false,routes[i]);
                     if (workspaceEntry) assert.match(html,/data-kapok-sensitive[^>]*hidden/,routes[i]);
                     if (status === 'active' && i > 5) {
                         assert.match(html, /此页面仅管理员可访问/);

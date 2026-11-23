@@ -2,16 +2,6 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [],
-    "ignoreValues": [
-      {
-        "rule": "side-tab",
-        "value": "*",
-        "files": [
-          "public/workspace-assets/workspace.css"
-        ],
-        "createdAt": "2026-11-23T18:17:32.710Z",
-        "reason": "Kapok 接入复核：指定前端 kapok-showcase/src/collection.css 第 178、255、697、738 行为精选合集与详情封面的书脊装饰，同步桌面及手机样式。"
-      }
-    ]
+    "ignoreValues": []
   }
 }

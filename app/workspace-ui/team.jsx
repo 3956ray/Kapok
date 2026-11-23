@@ -1,6 +1,6 @@
-import Link from 'next/link';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  ShieldCheck, RotateCcw, LockKeyhole,
   ChevronLeft, ChevronRight, RefreshCw,
   BookOpen,
   Layers,
@@ -405,6 +405,7 @@ export function Account() {
             <Pencil size={15} />
             编辑个人资料
           </button>
+          {ctx.account.membership.role === 'admin' && <NavLink className="desk-gateway" to="/account/manage"><ShieldCheck size={21}/><span><strong>队伍管理</strong><small>训练、公告、成员与精选合集</small></span><ArrowUpRight size={18}/></NavLink>}
           <div className="profile-rows">
             <NavLink to="/account/published">
               <Layers size={18} />
@@ -433,15 +434,8 @@ export function Account() {
               <span>队伍成员</span>
               <ArrowUpRight size={18} />
             </NavLink>
-            {ctx.account.membership.role === 'admin' && <details>
-              <summary>队伍管理</summary>
-              <Link href="/admin/trainings" prefetch={false}>训练管理 <ArrowUpRight size={18}/></Link>
-              <a href="/admin/announcements">公告管理 <ArrowUpRight size={18}/></a>
-              <a href="/admin/members">成员角色与状态 <ArrowUpRight size={18}/></a>
-              <a href="/learn/featured/manage">精选合集管理 <ArrowUpRight size={18}/></a>
-            </details>}
-            <a href="/me/recycle">复盘回收站 <ArrowUpRight size={18}/></a>
-            <a href="/me/data">个人数据 <ArrowUpRight size={18}/></a>
+            <NavLink to="/account/recycle"><RotateCcw size={18}/><span>复盘回收站<small>恢复最近删除的个人复盘</small></span><ArrowUpRight size={18}/></NavLink>
+            <NavLink to="/account/data"><LockKeyhole size={18}/><span>个人数据<small>导出本人的记录与资料</small></span><ArrowUpRight size={18}/></NavLink>
             <a href={ctx.logoutHref} target="_top" aria-busy={logout.busy} onClick={logout.logout}><LogOut size={17} />退出当前登录</a>
           </div>
         </div>

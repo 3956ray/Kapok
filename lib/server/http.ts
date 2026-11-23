@@ -181,7 +181,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'GET' && route === 'activity/learning') {
       data = await service.listCurrentLearningActivity(principal, (new URL(request.url).searchParams.get('ids') ?? '').split(','));
     }
-    else if (method === 'GET' && route === 'announcements') data = await service.listAnnouncements(principal);
+    else if (method === 'GET' && route === 'announcements') data = await service.listAnnouncements(principal, new URL(request.url).searchParams.get('view') === 'editor');
     else if (method === 'POST' && route === 'announcements') data = await service.saveAnnouncement(principal, null, await body(), key);
     else if (method === 'GET' && path[0] === 'announcements' && path.length === 2) data = await service.getAnnouncement(principal, path[1]);
     else if (method === 'PATCH' && path[0] === 'announcements' && path.length === 2) data = await service.saveAnnouncement(principal, path[1], await body(), key);

@@ -677,8 +677,17 @@ export function createReflectionService({
         };
     }
     const announcementSelect = 'SELECT id,title,text,status,version,published_at AS publishedAt,updated_at AS updatedAt FROM announcements';
-    async function listAnnouncements(p: Principal | null) {
+    async function listAnnouncements(p: Principal | null, editor = false) {
         const c = await activeMember(p, true);
+        if (editor) {
+            const fence = accessMembershipFence(p, c);
+            return (await q(`SELECT id,title,text,status,version,published_at AS publishedAt,updated_at AS updatedAt,
+                CASE WHEN status='published' AND revision_version=version THEN revision_title END AS revisionTitle,
+                CASE WHEN status='published' AND revision_version=version THEN revision_text END AS revisionText
+                FROM announcements WHERE team_id=? AND status!='deleted' AND ${fence.predicate}
+                AND EXISTS(SELECT 1 FROM memberships WHERE id=? AND role='admin' AND status='active' AND epoch=?)
+                ORDER BY updated_at DESC,id DESC`, c.membership.teamId,...fence.values,c.membership.id,c.membership.epoch).all<Announcement>()).results;
+        }
         return (await q(`${announcementSelect} WHERE team_id=? AND status!='deleted' ORDER BY updated_at DESC,id DESC`, c.membership.teamId).all<Announcement>()).results;
     }
     async function getAnnouncement(p: Principal | null, id: string) {
@@ -695,9 +704,12 @@ export function createReflectionService({
         const c = await activeMember(p, true);
         const raw = object(input, ['title', 'text', 'status', 'expectedVersion']);
         const title = text(raw.title, 80);
-        const body = text(raw.text, 5000);
-        if (!['draft', 'published', 'deleted'].includes(String(raw.status))) throw new DomainError('INVALID_INPUT', '请选择公告状态。');
-        const status = String(raw.status);
+        const revision = raw.status === 'revision';
+        const editorDraft = raw.status === 'editorDraft';
+        const optionalBody = revision || editorDraft || raw.status === 'deleted';
+        const body = text(raw.text, 5000, optionalBody) || (revision ? '' : ' ');
+        if (!['draft', 'published', 'deleted', 'editorDraft', 'revision'].includes(String(raw.status)) || (revision && !id)) throw new DomainError('INVALID_INPUT', '请选择公告状态。');
+        const status = editorDraft ? 'draft' : String(raw.status);
         const version = id ? positive(raw.expectedVersion) : null;
         const op = await operation(
             c.user.id,
@@ -716,6 +728,15 @@ export function createReflectionService({
             id: target,
             deleted: true
         } : getAnnouncement(p, target);
+        if (revision && id) {
+            await commit(op, [
+                memberGuard(op, c, true),
+                q(`UPDATE announcements SET revision_title=?,revision_text=?,revision_version=version+1,version=version+1,last_op_id=?
+                    WHERE id=? AND team_id=? AND status='published' AND version=?`,title,body,op.opId,id,c.membership.teamId,version),
+                assertGuard(db, op.opId, 'announcement-revision', 'EXISTS(SELECT 1 FROM announcements WHERE id=? AND last_op_id=? AND revision_version=version)',[id,op.opId])
+            ],id);
+            return getAnnouncement(p,id);
+        }
         const old = id ? await getAnnouncement(p, id) : null;
         const publishedAt = status === 'published' ? old?.publishedAt ?? now() : null;
         const committed = await commit(

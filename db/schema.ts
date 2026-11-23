@@ -140,6 +140,9 @@ export const announcements = sqliteTable('announcements', {
     publishedAt: text('published_at'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
+    revisionTitle: text('revision_title'),
+    revisionText: text('revision_text'),
+    revisionVersion: integer('revision_version'),
     lastOpId: text('last_op_id')
 }, t => [
     check('announcement_title', sql`length(${t.title}) BETWEEN 1 AND 80`),

@@ -92,7 +92,7 @@ test('published training with optional video is immediately readable and attribu
     assert.deepEqual(await counts(), [2, 1, 1, 2]);
 });
 
-test('invalid link, forged publisher, member, changed actor and cross-origin publish write nothing', async t => {
+test('invalid link, forged publisher, nonmember, changed actor and cross-origin publish write nothing', async t => {
     const { s, counts } = await fixture(t);
     const post = (principal, body, headers = {}) => api(s, principal, 'trainings/publish', { method: 'POST', body, headers });
     for (const bad of [
@@ -104,7 +104,7 @@ test('invalid link, forged publisher, member, changed actor and cross-origin pub
         assert.equal(result.status, 400);
         assert.equal(result.body.error.code, 'INVALID_INPUT');
     }
-    assert.equal((await post(member, training)).status, 403);
+    assert.equal((await post(accessPrincipal('not-joined'), training)).status, 403);
     assert.equal((await post(admin, training, { Origin: 'https://evil.test' })).status, 403);
     assert.equal((await post(admin, training, { 'X-Kapok-Actor': await actorKey(member) })).body.error.code, 'ACCOUNT_CHANGED');
     assert.deepEqual(await counts(), [0, 0, 0, 0]);
@@ -122,7 +122,7 @@ test('a failed video event rolls back the preceding writes and the same key can 
     assert.deepEqual(await counts(), [1, 1, 1, 1]);
 });
 
-test('publish reconciles lost D1 receipt and concurrent retries, with normalized input and current admin access', async t => {
+test('publish reconciles lost D1 receipt and concurrent retries, with normalized input and current membership access', async t => {
     const { s, db, make, owner, counts } = await fixture(t);
     let lost = false;
     const interrupted = make(interceptBatch(db, async statements => {
@@ -143,6 +143,8 @@ test('publish reconciles lost D1 receipt and concurrent retries, with normalized
     assert.deepEqual(await counts(), [2, 2, 2, 2]);
     await denied(s.publishTraining(admin, training, 'lost'), 'IDEMPOTENCY_CONFLICT');
     await db.prepare("UPDATE memberships SET role='member' WHERE id=?").bind(owner.membership.id).run();
+    assert.deepEqual(await s.publishTraining(admin, input, 'lost'), first);
+    await db.prepare("UPDATE memberships SET status='paused' WHERE id=?").bind(owner.membership.id).run();
     await denied(s.publishTraining(admin, input, 'lost'), 'FORBIDDEN');
 });
 

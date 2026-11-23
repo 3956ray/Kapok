@@ -11,7 +11,8 @@ function training(row, account) {
   return { ...row, kind: 'training', format: '场上练习', sourceKind: 'training', sourceId: row.id,
     platformCover: row.coverVideoId ? '/api/v1/video-covers/video/'+encode(row.coverVideoId) : '',
     category: extra.category || '训练', summary: row.description, body: extra.body || '',
-    extra, canEdit: account.membership.role === 'admin', published: row.status === 'published',
+    extra, canEdit: row.publisherId === account.user.id && (row.status !== 'hidden' || account.membership.role === 'admin'),
+    canManageArchive: account.membership.role === 'admin' && row.status !== 'deleted', published: row.status === 'published',
     ownerId: row.publisherId === account.user.id ? 'me' : row.publisherId, author: row.publisherName || account.team?.name || '队内训练', photos:workspacePhotos(extra), steps: [] };
 }
 function post(row, account, draft = false) {
@@ -132,7 +133,7 @@ export async function saveMaterial(ctx,item,input,signal,attempt) {
     }
     if (media) chapters[media] = timepoints;
     await ctx.write('trainings/'+encode(id),'PATCH',{
-      ...fields,status:item?.status ?? 'published',expectedVersion:version,...(appendVideo && {appendVideo}),
+      ...fields,status:item && item.status!=='draft' ? item.status : 'published',expectedVersion:version,...(appendVideo && {appendVideo}),
       workspaceDetails:{...item?.extra,category,body,chapters,photos:attachments},
     },key+'-edit');
     return id;

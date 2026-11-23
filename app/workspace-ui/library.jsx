@@ -102,8 +102,8 @@ function TrainingCard({ t, mode, neighbor }) {
 }
 export function Library() {
   useTitle('训练室');
-  const { ctx, trainings, categoryNames } = useData();
-  const createLabel = ctx.account.membership.role==='admin'?'新建训练':'发布资料';
+  const { trainings, categoryNames } = useData();
+  const createLabel = '新建训练';
   const featured = trainings.find((t) => t.kind === 'training' && t.published);
   const [filter, setFilter] = usePreference('training-filter', '全部'),
     [mode, setMode] = usePreference('training-view', 'grid');
