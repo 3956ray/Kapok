@@ -84,7 +84,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       if (initial.me.membership?.status !== 'active') throw new DomainError('FORBIDDEN', '当前账号没有队伍访问权限。', 403);
       const [account, trainings, posts, categories, drafts, reflections, collections, topics, members] = await Promise.all([
         service.getAccount(principal), service.listTrainings(principal), service.listLearningPosts(principal),
-        service.listLearningCategories(principal), service.listMyLearningPosts(principal), service.listMyReflections(principal),
+        service.listLearningCategories(principal), service.listMyLearningPosts(principal, 'unpublished-drafts'), service.listMyReflections(principal),
         service.listCollections(principal), service.workspaceTopics(principal), service.listMembers(principal),
       ]);
       data = { account, trainings, posts, categories, drafts, reflections, collections, topics, members };

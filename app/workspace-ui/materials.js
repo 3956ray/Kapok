@@ -31,7 +31,7 @@ export function presentMaterials(account, items, posts, categories, drafts) {
   const rows = posts.map(row => post(row,account));
   const publishedIds = new Set(rows.map(row => row.id));
   const trainings = [...items.map(row => training(row,account)), ...rows,
-    ...drafts.filter(row => !publishedIds.has(row.id)).map(row => post(row,account,true))];
+    ...drafts.filter(row => row.status === 'draft' && !publishedIds.has(row.id)).map(row => post(row,account,true))];
   trainings.sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   return { trainings, categoryNames: [...new Set([...categories, ...trainings.map(t=>t.category)])] };
 }
@@ -40,7 +40,11 @@ export async function loadMaterial(ctx,item,signal,edit = false) {
     const row = await ctx.read('trainings/'+encode(item.id),signal);
     return { ...training(row,ctx.account), videos:row.videos.filter(v=>v.status === 'active') };
   }
-  if (edit || item.isDraft) return post(await ctx.read('learning/posts/'+encode(item.id)+'?view=draft',signal),ctx.account,true);
+  if (edit || item.isDraft) {
+    const row = await ctx.read('learning/posts/'+encode(item.id)+'?view=draft',signal);
+    if (!['draft','published'].includes(row.status)) throw Error('这条内容已移除。');
+    return post(row,ctx.account,true);
+  }
   const { value } = await ctx.read('page-read/article/'+encode(item.id),signal);
   return {...post(value.post,ctx.account),activity:value.activity};
 }
@@ -58,6 +62,7 @@ export async function deleteMaterial(ctx,item) {
   } else {
     const path = 'learning/posts/'+encode(item.id);
     const draft = await ctx.read(path+'?view=draft');
+    if (draft.publishedVersion !== item.publishedVersion || (item.isDraft && draft.version !== item.version)) throw Error('内容已变化，请刷新后再删除。');
     await ctx.write(path+'/withdraw','POST',{expectedVersion:draft.version,expectedMembershipEpoch:draft.membershipEpoch});
   }
 }

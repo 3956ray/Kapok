@@ -89,6 +89,7 @@ test('learning endpoints separate author draft and public snapshot, use versions
     assert.match(created.headers.get('Cache-Control'), /private, no-store/);
     const { data: post } = await created.json();
     assert.equal(post.status, 'draft');
+    assert.deepEqual((await s.listMyLearningPosts(author, 'unpublished-drafts')).map(row => row.id), [post.id]);
     assert.equal(post.collectionTargetId, 'future-topic');
     for (const who of [admin, reader]) {
         await denied(draft(s, post.id, who), 'NOT_FOUND');
@@ -116,6 +117,7 @@ test('learning endpoints separate author draft and public snapshot, use versions
     await denied(s.publishLearningPost(author, post.id, publicationVersion(published), 'old-version'), 'VERSION_CONFLICT');
     const withdrawn = await s.withdrawLearningPost(author, post.id, publicationVersion(saved), 'withdraw');
     assert.equal(withdrawn.status, 'withdrawn');
+    assert.deepEqual(await s.listMyLearningPosts(author, 'unpublished-drafts'), []);
     await denied(s.getLearningPost(reader, post.id), 'NOT_FOUND');
     await denied(s.publishLearningPost(author, post.id, publicationVersion(post), 'publish'), 'VERSION_CONFLICT');
     const again = await s.publishLearningPost(author, post.id, publicationVersion(withdrawn), 'republish');

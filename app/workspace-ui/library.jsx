@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import {
   ArrowDownWideNarrow,
   ArrowRight,
@@ -27,8 +28,8 @@ export function DeleteMaterial({ item, disabled, returnFocusId }) {
     });
   }
   return (
-    <DeleteAction iconOnly label={(item.kind==='training'?'删除':'撤回')+kindName[item.kind]} title={item.title} disabled={disabled}
-      description="将从队内可读内容中移除。"
+    <DeleteAction iconOnly label={'删除'+kindName[item.kind]} title={item.title} disabled={disabled}
+      description="将从队内列表和我的发布移除，原阅读链接将失效。"
       onDelete={remove} to={returnFocusId ? undefined : '/trainings'} />
   );
 }
@@ -108,7 +109,7 @@ function TrainingCard({ t, mode, neighbor }) {
 export function Library() {
   useTitle('训练室');
   const { trainings, categoryNames } = useData();
-  const createLabel = '新建训练';
+  const createLabel = '新建';
   const featured = trainings.find((t) => t.kind === 'training' && t.published);
   const [storedFilter, setFilter] = usePreference('training-filter', '全部'),
     [mode, setMode] = usePreference('training-view', 'grid');
@@ -157,7 +158,7 @@ export function Library() {
             </div>
             <div>
               <h2>{featured.title}</h2>
-              <p>{featured.summary}</p>
+              <p><TextLinks text={featured.summary}/></p>
             </div>
             <NavLink
               className="screen-link"

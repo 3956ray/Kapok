@@ -161,7 +161,7 @@ function TrainingDesk() {
         <Link className="desk-action" prefetch={false} href="/admin/trainings?settings=1">训练档案设置</Link>
         <NavLink className="btn primary" to="/trainings/new">
           <Plus size={16} />
-          新建训练
+          新建
         </NavLink>
       </div>
       {items.map((t) => (
@@ -185,7 +185,7 @@ function TrainingDesk() {
           </NavLink>
         </article>
       ))}
-      {!items.length && <Empty icon={Search} title="没有匹配的训练" text="可以更换关键词或新建训练。" />}
+      {!items.length && <Empty icon={Search} title="没有匹配的训练" text="可以更换关键词，或点击「新建」。" />}
     </>
   );
 }
@@ -196,7 +196,9 @@ function Notices({rows,reload}) {
   const notices = rows.map(row=>({...row,title:row.revisionTitle ?? row.title,body:row.revisionText ?? row.text.trim(),
     live:row.status === 'published' ? {title:row.title,body:row.text} : null}));
   function save(status) {
-    const title = draft.title.trim(), text = draft.body.trim();
+    const record = status === 'deleted' ? notices.find(n => n.id === draft.id) : draft;
+    if (!record) return;
+    const title = record.title.trim(), text = record.body.trim();
     if (!title || (status === 'published' && !text)) return;
     return action.run(async()=>{
       const endpoint = draft.id ? 'announcements/'+encodeURIComponent(draft.id) : 'announcements';

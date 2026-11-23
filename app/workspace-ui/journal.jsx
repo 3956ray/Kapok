@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   ArrowRight,
@@ -26,7 +27,7 @@ function PrivateRemark({ text }) {
   const firstLine = text.trim().split(/\r?\n/, 1)[0];
   const letters = Array.from(firstLine);
   const canExpand = letters.length > 48 || firstLine !== text.trim();
-  if (!canExpand) return <p>{text}</p>;
+  if (!canExpand) return <p><TextLinks text={text}/></p>;
   return (
     <div className="private-remark">
       <button
@@ -38,7 +39,7 @@ function PrivateRemark({ text }) {
         {expanded ? '收起备注' : '展开备注'}
         <ChevronDown size={13} />
       </button>
-      <p id={id}>{expanded ? text : letters.slice(0, 48).join('') + '…'}</p>
+      <p id={id}>{expanded ? <TextLinks text={text}/> : letters.slice(0, 48).join('') + '…'}</p>
     </div>
   );
 }
@@ -138,7 +139,7 @@ export function Growth() {
                 <span data-photo-key={'lead-note:' + latest.id}>{latest.title || '训练复盘'}</span>
               </NavLink>
             </h2>
-            <p>{latest.body}</p>
+            <p><TextLinks text={latest.body}/></p>
             <NavLink className="ink-link" to={'/notes/' + latest.id} photoKey={'lead-note:' + latest.id}>
               阅读全文
               <ArrowRight size={18} />
@@ -169,7 +170,7 @@ export function Growth() {
                   const drafts = { ...old.drafts };
                   delete drafts[key];
                   return { ...old, drafts };
-                })} />
+                }, true)} />
             </div>
           ))}
         </section>
@@ -640,7 +641,7 @@ export function NoteDetail({ n }) {
         </h1>
         <div className="note-prose">
           {n.body.split(/\n\s*\n/).map((para, i) => (
-            <p key={i}>{para}</p>
+            <p key={i}><TextLinks text={para}/></p>
           ))}
         </div>
       </article>

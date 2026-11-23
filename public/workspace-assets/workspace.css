@@ -2868,6 +2868,11 @@ kbd {
   font-size: clamp(32px, 3.8vw, 58px);
   margin: 6px 0 17px;
 }
+.body-link {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  overflow-wrap: anywhere;
+}
 .note-prose {
   max-width: 36em;
   font: 400 18px/2 var(--sans);

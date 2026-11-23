@@ -43,7 +43,7 @@ export function TrainingManagement({ actorId, mode, id }: ManagementProps) {
             if (data.mode === 'detail') return <ManagedTraining actorId={actorId} training={data.training} uploads={data.uploads} />;
             return <>
                 <p className="workspace-overline">TRAINING DETAILS</p>
-                <h1>{data.mode === 'new' ? '新建训练' : '编辑训练'}</h1>
+                <h1>{data.mode === 'new' ? '新建' : '编辑训练'}</h1>
                 <p className="training-subheading">{data.mode === 'new' ? '填写训练信息，可先保存草稿或直接发布。' : '更新队员看到的训练信息。'}</p>
                 <TrainingForm actorId={actorId} training={data.mode === 'edit' ? data.training : undefined} />
             </>;
@@ -57,9 +57,9 @@ function TrainingManagementList({ items }: { items: Training[] }) {
             <div>
                 <span className="status-label">管理员</span>
                 <h1>训练管理</h1>
-                <p className="training-subheading">新建训练，或管理已发布的训练和视频。</p>
+                <p className="training-subheading">点击「新建」添加训练，也可以管理已发布的训练和视频。</p>
             </div>
-            <Link className="button" href={basePath + '/new'}><Plus size={17} aria-hidden="true" />新建训练</Link>
+            <Link className="button" href={basePath + '/new'}><Plus size={17} aria-hidden="true" />新建</Link>
         </div>
         <section className="section" aria-labelledby="all-trainings">
             <h2 id="all-trainings">全部训练</h2>

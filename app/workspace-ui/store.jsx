@@ -78,6 +78,23 @@ function Verified({actorId,logoutHref,initial,session,logout,children}) {
   const [drafts,setDrafts] = useState(()=>{try{return JSON.parse(localStorage.getItem(storage)) || {};}catch{return {};}});
   const [storageError,setStorageError] = useState(false);
   const currentDrafts = useRef(drafts);
+  const pendingDraftKeys = useRef(new Set());
+  useEffect(() => {
+    function sync(event) {
+      if (event.storageArea !== localStorage || (event.key !== null && event.key !== storage)) return;
+      try {
+        const merged = JSON.parse(localStorage.getItem(storage)) || {};
+        for (const key of pendingDraftKeys.current) {
+          if (Object.hasOwn(currentDrafts.current,key)) merged[key] = currentDrafts.current[key];
+          else delete merged[key];
+        }
+        currentDrafts.current=merged;
+        setDrafts(merged);
+      } catch { setStorageError(true); }
+    }
+    window.addEventListener('storage',sync);
+    return () => window.removeEventListener('storage',sync);
+  },[storage]);
   const [toast,setToast] = useState(null);
   const [sharesError,setError] = useState('');
   const [extra,setExtra] = useState({category:[],note:[]});
@@ -126,14 +143,33 @@ function Verified({actorId,logoutHref,initial,session,logout,children}) {
     }}),[actorId,data.account,refresh,logoutHref,subscribe]);
   const notify = useCallback(text=>{clearTimeout(timer.current);setToast({key:uid(),text});timer.current=setTimeout(()=>setToast(null),3000);},[]);
   const db = {...data,drafts,imported:[],overrides:{},comments:data.allComments ?? []};
-  const setDb = update => {
-    if(lifecycle.current.signal.aborted) return;
-    const next=update({...db,drafts:currentDrafts.current}).drafts;
+  const setDb = (update, requireStored = false) => {
+    if(lifecycle.current.signal.aborted) throw Error('请重新确认账号。');
+    const before=currentDrafts.current;
+    const next=update({...db,drafts:before}).drafts;
     if (!next) return;
-    currentDrafts.current=next;
-    setDrafts(next);
-    try {localStorage.setItem(storage,JSON.stringify(next));setStorageError(false);}
-    catch {setStorageError(true);}
+    const changed=new Set(pendingDraftKeys.current);
+    for (const key of new Set([...Object.keys(before),...Object.keys(next)])) {
+      if (before[key]!==next[key]) changed.add(key);
+    }
+    let result=next;
+    try {
+      const stored=JSON.parse(localStorage.getItem(storage)) || {};
+      for (const key of changed) {
+        if (Object.hasOwn(next,key)) stored[key]=next[key];
+        else delete stored[key];
+      }
+      localStorage.setItem(storage,JSON.stringify(stored));
+      result=stored;
+      pendingDraftKeys.current.clear();
+      setStorageError(false);
+    } catch {
+      setStorageError(true);
+      if (requireStored) throw Error('未能从本机移除草稿，请检查浏览器存储后重试。');
+      pendingDraftKeys.current=changed;
+    }
+    currentDrafts.current=result;
+    setDrafts(result);
   };
   const busy = useRef(new Set());
   async function toggle(key, action, message) {

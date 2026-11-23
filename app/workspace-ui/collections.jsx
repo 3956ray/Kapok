@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -134,7 +135,7 @@ export function Collections() {
                     {c.title}
                   </NavLink>
                 </h2>
-                {c.summary && <p>{c.summary}</p>}
+                {c.summary && <p><TextLinks text={c.summary}/></p>}
                 <div className="shelf-signature">
                   <span>{c.author} 编选</span>
                   <NavLink to={c.href + '?view=contents'} aria-label={'翻开目录：' + c.title}>
@@ -321,7 +322,7 @@ export function CollectionView({ collection, sharedId, itemId }) {
           <h1>{title}</h1>
           {summary && (
             <p id="jacket-summary" className={full ? '' : 'jacket-excerpt'}>
-              {summary}
+              <TextLinks text={summary}/>
             </p>
           )}
           {(summary?.length > 90 || summary?.split('\n').length > 3) && (
@@ -446,7 +447,7 @@ function Chapter({ item, items, index, title, base, sharedId, onContents }) {
             <time dateTime={item.date}>{shortDate(item.date)}</time>
           </div>
         </header>
-        {item.summary && <p className="chapter-intro">{item.summary}</p>}
+        {item.summary && <p className="chapter-intro"><TextLinks text={item.summary}/></p>}
         {item.source ? (
           <div className="chapter-media" ref={stage}>
             {started ? (
@@ -483,7 +484,7 @@ function Chapter({ item, items, index, title, base, sharedId, onContents }) {
           >
           </video>
         ) : null}
-        {item.body && <div className="chapter-text">{item.body}</div>}
+        {item.body && <div className="chapter-text"><TextLinks text={item.body}/></div>}
         {item.photos?.map((p, i) => (
           <figure key={p.url + i}>
             <img src={p.url} alt={p.alt || item.title + '配图 ' + (i + 1)} />

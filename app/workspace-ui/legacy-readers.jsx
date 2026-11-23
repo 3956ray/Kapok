@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import { useEffect, useRef, useState } from 'react';
 import { DateMark } from './press';
 import { useNav, useTitle } from './router';
@@ -72,7 +73,7 @@ export function AnnouncementReader({ id }) {
       </div>
       <h1>{article.title}</h1>
       <div id="body" ref={body} tabIndex={-1} className="note-prose">
-        <p>{article.text}</p>
+        <p><TextLinks text={article.text}/></p>
       </div>
     </article>
   </div>;

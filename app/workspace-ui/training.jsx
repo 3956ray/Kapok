@@ -587,7 +587,7 @@ function MaterialEditor({ t }) {
   const initialKind=params.get('kind');
   const [kind,setKind]=useState(t?.kind ?? (['article','video'].includes(initialKind)?initialKind:'training'));
   const label = kindName[kind];
-  const formTitle = (edit ? '编辑' : '新建') + label;
+  const formTitle = edit ? '编辑' + label : kind === 'training' ? '新建' : '新建' + label;
   useTitle(formTitle);
   const returnParam = params.get('returnTo') ?? '';
   const returnTo = /^\/collections\/(?:new|[a-zA-Z0-9_-]+\/edit)$/.test(returnParam)

@@ -165,7 +165,7 @@ function Command({ open, setOpen }) {
     { title: '写复盘', to: '/notes/new', tag: '操作', icon: WriteNoteIcon },
     { title: '训练合集', to: '/collections', tag: '页面', icon: Layers },
     { title: '新建合集', to: '/collections/new', tag: '操作', icon: Layers },
-    { title: '新建训练', to: '/trainings/new', tag: '操作', icon: Clapperboard },
+    { title: '新建', to: '/trainings/new', tag: '操作', icon: Clapperboard },
     { title: '我的发布', to: '/account/published', tag: '页面', icon: Layers },
   ];
   const normalized = query.trim().toLowerCase();

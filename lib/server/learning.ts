@@ -208,10 +208,11 @@ export function createLearningService(deps: LearningDependencies & {
             ORDER BY lpub.published_at DESC,lp.id`, c.membership.teamId, ...member.values).all<PublicRow>();
         return results.map(row => publicOverview(row, c));
     }
-    async function listMyLearningPosts(p: Principal | null): Promise<LearningDraftOverview[]> {
+    async function listMyLearningPosts(p: Principal | null, view?: 'unpublished-drafts'): Promise<LearningDraftOverview[]> {
         const c = await bindLearningMember(activeMember, p);
         const member = learningMemberFence(c);
         const { results } = await q(`${draftSelect(false)} WHERE lp.team_id=? AND lp.owner_id=? AND ${member.sql}
+            ${view === 'unpublished-drafts' ? "AND lp.status='draft'" : ''}
             ORDER BY lp.updated_at DESC,lp.id`, c.membership.teamId, c.user.id, ...member.values).all<DraftRow>();
         return results.map(row => draftOverview(row, c));
     }

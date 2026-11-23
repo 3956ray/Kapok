@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import { useEffect, useRef, useState } from 'react';
 import { Clock3, CornerDownRight, Play, Send, X } from 'lucide-react';
 import { useNav } from './router';
@@ -219,7 +220,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
           </div>
           {(target || c.text) && <p>
             {target && <span className="reply-target">回复 {target} · </span>}
-            {c.text}
+            {c.text && <TextLinks text={c.text}/>}
           </p>}
           <div className="comment-actions">
             <button

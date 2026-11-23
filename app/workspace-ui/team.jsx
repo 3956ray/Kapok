@@ -1,3 +1,4 @@
+import { TextLinks } from '../components/learning-text';
 import { createRequestKey } from '../../lib/client/api';
 import { ProfileForm } from './profile-form';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -144,7 +145,7 @@ export function Activity() {
                   {lead.title}
                 </NavLink>
               </h2>
-              <p>{lead.summary}</p>
+              <p><TextLinks text={lead.summary}/></p>
             </div>
           </article>
           <section className="press-column" aria-labelledby="voices-title">
@@ -341,7 +342,7 @@ export function Members() {
               <p>
                 {person.role} · {person.position}
               </p>
-              <p>{person.bio || '尚未填写简介。'}</p>
+              <p><TextLinks text={person.bio || '尚未填写简介。'}/></p>
               <MemberReflections key={person.id} id={person.id === 'me' ? ctx.account.user.id : person.id} close={() => setSelectedId(null)} />
             </div>
           </div>
@@ -407,7 +408,7 @@ export function Account() {
             <h2>{p.name}</h2>
             <span>{p.number ? '#' + p.number : '未设置背号'}</span>
           </div>
-          <p className="identity-bio">{p.bio || '尚未填写简介。'}</p>
+          <p className="identity-bio"><TextLinks text={p.bio || '尚未填写简介。'}/></p>
           <button
             type="button"
             className="btn"
