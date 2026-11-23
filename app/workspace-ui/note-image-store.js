@@ -265,8 +265,7 @@ export async function discardLocalDraftFiles(ctx, draft) {
 export async function clearUnsavedNoteImages(actorId, storage, signal) {
   signal.throwIfAborted();
   const drafts = Object.values(readWorkspaceDrafts(storage, draftKey(actorId, 'bloom-notes')));
-  const candidates = new Set(drafts.flatMap(draftFiles));
-  if (!candidates.size) return;
+  const retained = new Set();
   const uncertain = [];
   for (const draft of drafts) {
     const op = draft.operation;
@@ -277,17 +276,24 @@ export async function clearUnsavedNoteImages(actorId, storage, signal) {
   }
   const saved = accountLayouts(storage, actorId);
   for (const entry of [...saved, ...uncertain]) {
-    for (const p of entry.photos) candidates.delete(p.localId);
+    for (const p of entry.photos) if (p.localId) retained.add(p.localId);
   }
   // These limited records survive ordinary text-draft removal and remain available to an authorized export.
   for (const entry of uncertain) {
     storage.setItem(layoutPrefix(actorId) + 'unconfirmed:' + entry.operation, JSON.stringify(entry));
   }
-  if (candidates.size) {
-    await imageStore(actorId, 'readwrite', store => {
-      for (const id of candidates) store.delete(id);
-    }, signal);
-  }
+  if (typeof indexedDB === 'undefined') return;
+  // A selection can finish writing just before its editor unmounts, without ever appearing in a draft.
+  // Sweep this account's actual files and keep every known saved or not-yet-confirmed private layout.
+  await imageStore(actorId, 'readwrite', store => {
+    const scan = store.openKeyCursor();
+    scan.onsuccess = () => {
+      const cursor = scan.result;
+      if (!cursor) return;
+      if (!retained.has(cursor.primaryKey)) store.delete(cursor.primaryKey);
+      cursor.continue();
+    };
+  }, signal);
 }
 
 export async function pruneNoteImages(actorId) {

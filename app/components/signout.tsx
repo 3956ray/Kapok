@@ -34,6 +34,7 @@ export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) 
             window.addEventListener('kapok-account-changed', cancelForAccountChange);
             window.addEventListener('pagehide', cancel);
             let channel: BroadcastChannel | undefined;
+            let picturesCleaned = false;
             try {
                 // Even failed logout verification must synchronously conceal every mounted protected surface.
                 let initiallyConcealed = true;
@@ -53,8 +54,13 @@ export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) 
                 }
                 const account = await api<BootstrapStatus>('bootstrap', undefined, actorId, controller.signal);
                 if ((account.actorId ?? account.siteUserId) !== actorId) throw new Error(accountChangedMessage);
-                const { clearUnsavedNoteImages } = await import('../workspace-ui/note-image-store.js');
-                await clearUnsavedNoteImages(actorId, localStorage, controller.signal);
+                try {
+                    const { clearUnsavedNoteImages } = await import('../workspace-ui/note-image-store.js');
+                    await clearUnsavedNoteImages(actorId, localStorage, controller.signal);
+                    picturesCleaned = true;
+                } catch {
+                    // A verified sign-out still ends every protected consumer if device storage is unavailable.
+                }
             } catch (e) {
                 // Ordinary expiry already conceals via its recoverable signal; do not turn it into cleanup.
                 if (!controller.signal.aborted) setError(e instanceof Error ? e.message : '尚未确认当前账号，请重新加载后再退出。');
@@ -77,7 +83,7 @@ export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) 
             const cleaned = cleanupActorDrafts(actorId, () => localStorage);
             const prefillCleaned = clearRegistrationPrefill();
             const registrationCleaned = registrationDraft(actorId).clear();
-            if (!concealed || !delivered || !cleaned || !registrationCleaned || !prefillCleaned) {
+            if (!picturesCleaned || !concealed || !delivered || !cleaned || !registrationCleaned || !prefillCleaned) {
                 setError('页面已锁定，但未能完成本机内容或会话清理。未确认退出成功，请处理设备存储后重新加载。');
                 return;
             }
