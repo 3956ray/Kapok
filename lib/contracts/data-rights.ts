@@ -20,6 +20,9 @@ export type PersonalExport = {
     generatedAt: string;
     profile: { discName: string; jerseyNumber: string; bio?: string; avatar?: string };
     reflections: {
+        photos?: (import('./reflections').ReflectionPhotoRef & {url?:string})[];
+        version?:number; sharingVersion?:number; generation?:number;
+        hasLocalPhotos?: boolean;
         category: string | null;
         id: string;
         title: string;

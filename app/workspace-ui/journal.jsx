@@ -1,3 +1,6 @@
+import { IllustratedNote, NotePictureEditor } from './note-pictures';
+import { notePhotos } from './note-layout.js';
+import { persistPrivateLayout, readPrivateLayout, savedParts, uploadNoteImages } from './note-image-store.js';
 import { TextLinks } from '../components/learning-text';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
@@ -107,7 +110,7 @@ export function Growth() {
   });
   const latest = rows.find((r) => r.n)?.n;
   const linked = latest && trainings.find((t) => t.id === latest.training);
-  const drafts = Object.entries(db.drafts).filter(([, v]) => v.title?.trim() || v.body?.trim());
+  const drafts = Object.entries(db.drafts).filter(([, v]) => v.title?.trim() || v.body?.trim() || notePhotos(v).length);
   const scopeText = (n) => (n.scope === 'team' ? '队内可读' : '仅自己可见');
   return (
     <div className="page-width journal-page">
@@ -139,7 +142,7 @@ export function Growth() {
                 <span data-photo-key={'lead-note:' + latest.id}>{latest.title || '训练复盘'}</span>
               </NavLink>
             </h2>
-            <p><TextLinks text={latest.body}/></p>
+            <p><TextLinks text={latest.body || latest.photos?.[0]?.caption || (latest.hasLocalPhotos || latest.photos?.length ? '图文复盘' : '')}/></p>
             <NavLink className="ink-link" to={'/notes/' + latest.id} photoKey={'lead-note:' + latest.id}>
               阅读全文
               <ArrowRight size={18} />
@@ -425,12 +428,18 @@ function Writer({ n, seed, sourceUnavailable = false }) {
   const topic = originalSource?.kind === 'topic_collection' ? originalSource.id : null;
   const topicValue = topic ? 'topic:' + topic : '';
   const training = topicValue || n?.training || seed?.trainingId || originalSource?.id || params.get('training') || '';
-  const initial = { title: n?.title || '', body: n?.body || seed?.text || '', scope: 'private', publish: false, category: n?.category || '', training, base: n };
+  const missingPictures = n?.hasLocalPhotos && !savedDraft?.operation && !readPrivateLayout(ctx.actorId, n);
+  const initial = { title: n?.title || '', body: n?.body || seed?.text || '',
+    ...((n?.hasLocalPhotos || n?.photos?.length > 0) && { parts: savedParts(ctx.actorId, n) }),
+    scope: params.get('share') === 'team' ? 'team' : 'private', publish: false, category: n?.category || '', training, base: n };
   const draft = { ...initial, ...savedDraft };
   if (sourceUnavailable && !draft.associationChanged) draft.training = '';
   const [attempt, setAttempt] = useState(false);
   const [saving, setSaving] = useState(false),
     [error, setError] = useState('');
+  const [preparing, setPreparing] = useState(false);
+  const [progress, setProgress] = useState('');
+  const hasContent = Boolean(draft.body.trim() || notePhotos(draft).length);
   const active = useRef(false);
   function patch(changes) {
     setDb(d => ({
@@ -440,7 +449,7 @@ function Writer({ n, seed, sourceUnavailable = false }) {
   async function save(e) {
     e.preventDefault();
     setAttempt(true);
-    if (active.current || !draft.body.trim() || !draft.title.trim() || !draft.category) return;
+    if (active.current || preparing || missingPictures || !hasContent || !draft.title.trim() || !draft.category) return;
     active.current = true;
     setSaving(true);
     setError('');
@@ -451,9 +460,18 @@ function Writer({ n, seed, sourceUnavailable = false }) {
         trainingId: original.trainingId, videoId: original.videoId, sourceRef: original.sourceRef ?? null,
       } : linked && linked.kind !== 'training' ? { sourceRef: { kind: 'learning_post', id: linked.id } }
         : { trainingId: draft.training || null, videoId: null, sourceRef: null };
-      const operation = draft.operation || prepareSave(draft, draft.base, association, day());
+      let operation = draft.operation || prepareSave(draft, draft.base, association, day());
       patch({ operation });
-      await saveNote(ctx, operation);
+      if (operation.scope === 'team' && operation.layout?.some(photo => photo.localId) && !operation.uploaded) {
+        try { await uploadNoteImages(ctx, operation.layout, setProgress); }
+        catch (err) { err.beforeSave = true; throw err; }
+        operation = { ...operation, uploaded: true };
+        patch({ operation });
+      }
+      setProgress('');
+      const saved = await saveNote(ctx, operation);
+      ctx.signal.throwIfAborted();
+      persistPrivateLayout(ctx.actorId, saved, operation);
       await refreshShares();
       let message = '复盘已保存';
       try {
@@ -466,6 +484,7 @@ function Writer({ n, seed, sourceUnavailable = false }) {
       notify(message);
       if (location.hash.slice(1) === path) back('/growth');
     } catch (e) {
+      if (ctx.signal.aborted) return;
       setError(e.message || '保存失败，草稿已保留。');
       if (e.beforeSave)
         patch({ operation: null });
@@ -474,7 +493,12 @@ function Writer({ n, seed, sourceUnavailable = false }) {
       setSaving(false);
     }
   }
-  const locked = saving || Boolean(draft.operation);
+  if (missingPictures) return <div className="page-width writer-page">
+    <Back fallback={'/notes/' + encodeURIComponent(n.id)} />
+    <PageHead title="编辑复盘" />
+    <p>这篇复盘有保存在另一台设备或浏览器里的配图。请回到保存配图的浏览器编辑或分享。</p>
+  </div>;
+  const locked = saving || preparing || Boolean(draft.operation);
   return (
     <div className="page-width form-page writer-page">
       <Back fallback="/growth" />
@@ -489,22 +513,10 @@ function Writer({ n, seed, sourceUnavailable = false }) {
               readOnly={locked}
               value={draft.title}
               onChange={(e) => patch({ title: e.target.value })}
-              placeholder="给这篇手记一个标题"
+              placeholder="写个标题吧"
             />
           </label>
-          <label>
-            复盘内容
-            <textarea
-              required
-              className="writing-area"
-              rows={5}
-              maxLength={5000}
-              readOnly={locked}
-              value={draft.body}
-              onChange={(e) => patch({ body: e.target.value })}
-              placeholder="发生了什么？你当时怎么判断？下次想怎样做？"
-            />
-          </label>
+          <NotePictureEditor draft={draft} patch={patch} saving={locked} preparing={preparing} onPreparing={setPreparing} />
         </div>
         <aside className="writing-side">
           <div className="editor-date">
@@ -557,16 +569,19 @@ function Writer({ n, seed, sourceUnavailable = false }) {
                 onChange={e => patch({publish:e.target.checked})} /> 同时发布到队内动态
             </label>}
           </div>
-          {attempt && (!draft.body.trim() || !draft.title.trim()) && (
+          {attempt && (!hasContent || !draft.title.trim()) && (
             <p role="alert" className="form-error">
               请填写标题和复盘内容。
             </p>
           )}
+          {notePhotos(draft).some(p => p.localId) && <p className="field-hint">{draft.scope === 'team'
+            ? '保存时会先上传本机配图，再开放队内阅读。'
+            : '新加入的配图仅保存在当前浏览器，其他设备暂时看不到。'}</p>}
           <div className="form-end">
             <span>{storageError ? '本机暂存失败，请保留本页并保存复盘。' : db.drafts[key] ? '草稿已暂存于本机' : '草稿将自动暂存'}</span>
-            <button className="btn primary" type="submit" disabled={saving}>
+            <button className="btn primary" type="submit" disabled={saving || preparing}>
               <Check size={16} />
-              {saving ? '正在保存…' : draft.operation ? '确认保存结果' : '保存复盘'}
+              {saving ? progress || '正在保存…' : draft.operation ? '确认保存结果' : '保存复盘'}
             </button>
           </div>
           {sourceUnavailable && <p role="status">原来源已不可用，你仍可保存本机草稿。</p>}
@@ -587,9 +602,15 @@ export function NoteSharing({note}) {
   return <div className="page-width writer-page note-sharing-page">
     <Back fallback={'/notes/' + encodeURIComponent(note.id)} />
     <PageHead title="分享与发布" />
-    <ReflectionSharingControls actorId={ctx.actorId} reflection={confirmed} authorize={ctx.authorize}
+    {confirmed.hasLocalPhotos ? <section className="sharing-card">
+      <h2>分享图文复盘</h2>
+      {readPrivateLayout(ctx.actorId, confirmed) ? <>
+        <p>保存后，本机配图将随正文一起开放给队友阅读。</p>
+        <NavLink className="btn primary" to={'/notes/' + encodeURIComponent(note.id) + '/edit?share=team'}>上传配图并设置分享</NavLink>
+      </> : <p>配图保存在另一台设备或浏览器。请从保存配图的浏览器分享。</p>}
+    </section> : <ReflectionSharingControls actorId={ctx.actorId} reflection={confirmed} authorize={ctx.authorize}
       isCurrent={ctx.isCurrent} subscribe={ctx.subscribe} refresh={ctx.refresh}
-      onVerified={next=>{setConfirmed(next);void ctx.refresh().catch(()=>{});}} />
+      onVerified={next=>{setConfirmed(next);void ctx.refresh().catch(()=>{});}} />}
   </div>;
 }
 
@@ -642,11 +663,10 @@ export function NoteDetail({ n }) {
         <h1>
           <span data-photo-destination={'note:' + n.id}>{title}</span>
         </h1>
-        <div className="note-prose">
-          {n.body.split(/\n\s*\n/).map((para, i) => (
-            <p key={i}><TextLinks text={para}/></p>
-          ))}
-        </div>
+        <IllustratedNote key={n.id} note={{ parts: savedParts(ctx.actorId, n) }} />
+        {n.hasLocalPhotos && <p className="field-hint">{readPrivateLayout(ctx.actorId, n)
+          ? '私人配图保存在当前浏览器。'
+          : '私人配图保存在原来的设备或浏览器，可在那里查看。'}</p>}
       </article>
       {href && (
         <NavLink className="reader-related" to={href}>

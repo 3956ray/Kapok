@@ -18,7 +18,7 @@ const content = {
     videoId: null
 };
 const denied = (promise, code = 'NOT_FOUND') => assert.rejects(promise, e => e.code === code);
-async function fixture(t, beforeReflections = null, legacy = false) {
+async function fixture(t, beforeReflections = null, legacy = false, beforePhotoMigration = false) {
     const mf = new Miniflare({
         modules: true,
         script: 'export default {fetch(){return new Response("test")}}',
@@ -31,6 +31,7 @@ async function fixture(t, beforeReflections = null, legacy = false) {
     const files = (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql')).sort();
     for (const file of files) {
         if (legacy && file === '0005_two_scope_reflections.sql') continue;
+        if (beforePhotoMigration && file === '0026_reflection_photos.sql') continue;
         if (file === '0003_reflections.sql' && beforeReflections) await beforeReflections(db);
         const sql = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
         // Trigger bodies contain semicolons; migration breakpoints delimit whole statements.
@@ -914,4 +915,142 @@ test('an announcement revision remains private until republished and detects con
     await s.saveAnnouncement(admin,live.id,{title:'B',text:'Second',status:'published',expectedVersion:edit.version},'notice-next');
     assert.equal((await s.getAnnouncement(member,live.id)).text,'Second');
     assert.equal((await s.listAnnouncements(admin,true)).find(row=>row.id===live.id).revisionText,null);
+});
+
+test('inline reflection images stay local until upload, attach atomically and follow the current reading grant', async t => {
+    const {s,db,ids,bucket} = await fixture(t);
+    const data = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWNY6W680t2YAUIBACG6BI0c0mdzAAAAAElFTkSuQmCC','base64');
+    const alternate = Buffer.from('UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/u7T3/wF090Yt/+hJ/8En/wSfuAAAA==','base64');
+    const origin = 'https://kapok.test';
+    async function req(p,method,path,body,type='application/json') {
+        return dispatchApi(new Request(origin+path,{method,headers:{Origin:origin,'X-Kapok-Actor':await actorKey(p),
+            'Content-Type':type,'Idempotency-Key':'stable-image'},body}),path.slice('/api/v1/'.length).split('?')[0].split('/'),p,s);
+    }
+    const upload = (id,bytes=data,mime='image/png',actor=author) => req(actor,'PUT','/api/v1/workspace/note-images/'+id+'/content',bytes,mime);
+    const get = (p,url) => req(p,'GET',url);
+    const first = crypto.randomUUID(), second = crypto.randomUUID(), staged = crypto.randomUUID();
+    const note = await s.saveReflection(author,null,{...content,text:'',hasLocalPhotos:true},'image-only-draft');
+    assert.equal(note.hasLocalPhotos,true);
+    assert.equal(note.text,'');
+    await denied(team(s,note),'INVALID_INPUT');
+    const withText = await s.saveReflection(author,note.id,{...content,...state(note)},'retain-pending');
+    assert.equal(withText.hasLocalPhotos,true);
+    await denied(team(s,withText,'no-partial-share'),'INVALID_INPUT');
+    assert.equal((await upload(first,Buffer.from('bogus'))).status,415);
+    assert.equal((await upload(first,Buffer.alloc(8*1024*1024+1))).status,413);
+    assert.equal((await upload(first)).status,200);
+    assert.equal((await upload(first)).status,200);
+    assert.equal((await upload(first,alternate,'image/webp')).status,409);
+    assert.equal((await upload(second,alternate,'image/webp')).status,200);
+    const thumbUrl='/api/v1/workspace/note-images/'+second+'/thumbnail';
+    assert.equal((await req(author,'PUT',thumbUrl,data,'image/png')).status,200);
+    assert.equal((await req(author,'PUT',thumbUrl,data,'image/png')).status,200);
+    const photos = [{id:second,at:0,caption:'动作二'},{id:first,at:0,caption:'动作一'}];
+    const savePayload={...content,text:'',photos,...state(withText)};
+    const saved=await s.saveReflection(author,note.id,savePayload,'attach-both');
+    assert.deepEqual((await s.saveReflection(author,note.id,savePayload,'attach-both')).photos,saved.photos);
+    assert.deepEqual(saved.photos.map(({id,at,caption})=>({id,at,caption})),photos);
+    assert.equal(saved.hasLocalPhotos,undefined);
+    assert.equal((await get(member,saved.photos[0].url)).status,404);
+    let image=await get(author,saved.photos[0].url);
+    assert.equal(image.status,200);
+    assert.equal(image.headers.get('content-type'),'image/webp');
+    assert.match(image.headers.get('cache-control'),/no-store/);
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()),alternate);
+    const other = await s.saveReflection(member,null,content,'own-text');
+    await assert.rejects(s.saveReflection(member,other.id,{...content,...state(other),photos},'steal'));
+    assert.equal((await s.getOwnReflection(member,other.id)).version,other.version);
+    await denied(s.saveReflection(author,note.id,{...savePayload,...state(saved),photos:[...photos,photos[0]]},'dupe'),'INVALID_INPUT');
+    await denied(s.saveReflection(author,note.id,{...savePayload,...state(saved),photos:[{...photos[0],at:1}]},'beyond'),'INVALID_INPUT');
+    const shared = await team(s,saved,'share-both');
+    assert.equal((await get(member,saved.photos[0].url)).status,404);
+    const published=await s.publishReflection(author,note.id,{...state(shared),published:true},'publish-both');
+    const detail = await s.getReflection(member,note.id);
+    assert.equal(detail.photos[0].url,published.photos[0].url);
+    assert.equal((await get(member,detail.photos[0].url)).status,200);
+    const activity=(await s.workspaceDispatch(member,null)).items.find(item=>item.source===note.id);
+    assert.equal(activity.photoCount,2);
+    assert.deepEqual(activity.firstPhoto,{url:detail.photos[0].url+'?size=thumb',caption:'动作二'});
+    const thumbnail=await get(member,activity.firstPhoto.url);
+    assert.equal(thumbnail.headers.get('content-type'),'image/png');
+    assert.deepEqual(Buffer.from(await thumbnail.arrayBuffer()),data);
+    const own=(await s.exportOwnData(author)).reflections.find(row=>row.id===note.id);
+    assert.deepEqual(own.photos,detail.photos);
+    assert.equal(own.version,published.version);
+    assert.equal((await s.exportOwnData(member)).reflections.some(row=>row.id===note.id),false);
+    await db.prepare("UPDATE memberships SET status='paused' WHERE user_id=?").bind(ids.member).run();
+    assert.equal((await get(member,detail.photos[0].url)).status,403);
+    await db.prepare("UPDATE memberships SET status='active' WHERE user_id=?").bind(ids.member).run();
+    await db.prepare("UPDATE users SET status='deleted' WHERE id=?").bind(ids.author).run();
+    assert.equal((await get(member,detail.photos[0].url)).status,404);
+    await db.prepare("UPDATE users SET status='active' WHERE id=?").bind(ids.author).run();
+    const current=await s.getOwnReflection(author,note.id);
+    const updated=await s.saveReflection(author,note.id,{...content,...state(current)},'old-client');
+    assert.equal(updated.photos.length,2);
+    assert.equal((await get(member,detail.photos[0].url)).status,404);
+    const tomb=await s.deleteReflection(author,note.id,state(updated),'delete');
+    assert.equal(tomb.deleted,true);
+    assert.equal((await get(author,updated.photos[0].url)).status,404);
+    const recycle=(await s.listDeletedReflections(author)).find(row=>row.id===note.id);
+    assert.equal(recycle.photos.length,2);
+    const restored=await s.restoreReflection(author,note.id,state(recycle),'restore');
+    assert.equal(restored.scope,'private');
+    assert.equal((await get(member,restored.photos[0].url)).status,404);
+    assert.equal((await get(author,restored.photos[0].url)).status,200);
+    assert.equal((await upload(staged)).status,200);
+    const count = async () => (await bucket.list({prefix:'reflection-images/'})).objects.length;
+    assert.equal(await count(),4);
+    await req(member,'DELETE','/api/v1/workspace/note-images/'+staged);
+    assert.equal(await count(),4);
+    await req(author,'DELETE','/api/v1/workspace/note-images/'+first);
+    assert.equal(await count(),4);
+    await req(author,'DELETE','/api/v1/workspace/note-images/'+staged);
+    await req(author,'DELETE','/api/v1/workspace/note-images/'+staged);
+    assert.equal(await count(),3);
+});
+
+test('0026 preserves populated private and shared notes, grants and versions with empty photo defaults', async t => {
+    const {s,db}=await fixture(t,null,false,true);
+    const privateNote=await s.saveReflection(author,null,content,'legacy-private');
+    const draft=await s.saveReflection(author,null,{...content,text:'旧的公开复盘'},'legacy-shared');
+    const shared=await team(s,draft);
+    const published=await s.publishReflection(author,draft.id,{...state(shared),published:true},'to-feed');
+    const before=await s.getReflection(member,draft.id);
+    const sql=await readFile(new URL('../../drizzle/0026_reflection_photos.sql',import.meta.url),'utf8');
+    await db.batch(sql.split('--> statement-breakpoint').map(statement=>db.prepare(statement.trim())));
+    assert.deepEqual(await s.getReflection(member,draft.id),before);
+    assert.deepEqual(await s.getOwnReflection(author,privateNote.id),privateNote);
+    assert.deepEqual(await s.getOwnReflection(author,draft.id),published);
+    assert.deepEqual((await db.prepare("SELECT DISTINCT photos,local_photos_pending FROM reflections").all()).results,[{photos:'[]',local_photos_pending:0}]);
+    assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
+    assert.equal((await s.workspaceDispatch(member,null)).items.find(row=>row.source===draft.id).photoCount,0);
+});
+
+test('lost image upload acknowledgment recovers without duplicate R2 bytes; a revoke during R2 read wins', async t=>{
+    const {s,db,bucket}=await fixture(t);
+    const id=crypto.randomUUID();
+    const bytes=Buffer.from('UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/u7T3/wF090Yt/+hJ/8En/wSfuAAAA==','base64');
+    const body=()=>new Request('https://kapok.test',{method:'PUT',headers:{'Content-Type':'image/webp'},body:bytes});
+    const lossy=createService({db,bucket:{put:async(...args)=>{await bucket.put(...args);throw new Error('lost response');}}});
+    await assert.rejects(lossy.putReflectionImage(author,id,body(),'upload'),/lost response/);
+    assert.deepEqual(await s.putReflectionImage(author,id,body(),'upload'),{id});
+    assert.equal((await bucket.list({prefix:'reflection-images/'})).objects.length,1);
+    const r=await s.saveReflection(author,null,{...content,photos:[{id,at:2,caption:'原来的图注'}]},'attach');
+    const shared=await team(s,r);
+    const rev=[shared.version,shared.sharingVersion,shared.generation].join('-');
+    const beforeRevocation=createService({db,bucket:{get:async key=>{
+        const file=await bucket.get(key);
+        await s.shareReflection(author,r.id,{...state(shared),scope:'private'},'revoke');
+        return file;
+    }}});
+    await denied(beforeRevocation.readReflectionImage(member,r.id,rev,id,false),'NOT_FOUND');
+    const current=await s.getOwnReflection(author,r.id);
+    const shortened=await s.saveReflection(author,r.id,{...content,text:'甲',...state(current)},'old-client-short-edit');
+    assert.equal(shortened.photos[0].at,1);
+    const removed=await s.saveReflection(author,r.id,{...content,...state(shortened),photos:[]},'remove-photo');
+    assert.equal(removed.photos,undefined);
+    await db.prepare("UPDATE reflection_images SET touched_at='2000-01-01' WHERE id=?").bind(id).run();
+    await s.putReflectionImage(author,crypto.randomUUID(),body(),'later');
+    assert.equal((await bucket.list({prefix:'reflection-images/'})).objects.length,1);
+    assert.equal(await db.prepare('SELECT id FROM reflection_images WHERE id=?').bind(id).first(),null);
 });

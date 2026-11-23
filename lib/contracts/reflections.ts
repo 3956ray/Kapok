@@ -19,7 +19,10 @@ export type ReflectionLink = {
     title: string;
     href: string;
 } | null;
+export type ReflectionPhotoRef = { id:string; at:number; caption:string };
+export type ReflectionPhoto = ReflectionPhotoRef & { url:string };
 export type ReflectionReader = {
+    photos?: ReflectionPhoto[];
     category?: string;
     id: string;
     title: string;
@@ -35,6 +38,7 @@ export type ReflectionReader = {
     link: ReflectionLink;
 };
 export type ReflectionAuthor = ReflectionReader & {
+    hasLocalPhotos?: boolean;
     isAuthor: true;
     version: number;
     sharingVersion: number;

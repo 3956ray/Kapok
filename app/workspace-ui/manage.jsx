@@ -1,3 +1,4 @@
+import { localImageExport } from './note-image-store.js';
 import Link from 'next/link';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -540,16 +541,21 @@ export function PersonalTools({ recycle }) {
     });
   }
   function exportData() {
-    return action.run(()=>downloadOwnData(ctx.actorId,ctx.authorize,ctx.isCurrent,data=>{
-      if (ctx.signal.aborted) return;
-      const url = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+    return action.run(async () => {
+      const session = await ctx.authorize();
+      let data;
+      await downloadOwnData(ctx.actorId, ctx.authorize, ctx.isCurrent, value => { data = value; });
+      const local = await localImageExport(ctx.actorId, data.reflections, db.drafts);
+      const after = await ctx.authorize();
+      if (after !== session || !ctx.isCurrent(session) || ctx.signal.aborted) throw Error('账号已变化，请重新确认后导出。');
+      const url = URL.createObjectURL(new Blob([JSON.stringify({ ...data, ...local },null,2)],{type:'application/json'}));
       const link = document.createElement('a');
       link.href = url;
       link.download = 'Kapok-个人数据-'+day()+'.json';
       link.click();
       setTimeout(()=>URL.revokeObjectURL(url),1000);
       notify('已生成个人数据文件');
-    }));
+    });
   }
   return (
     <div className="page-width desk-page">
@@ -572,7 +578,7 @@ export function PersonalTools({ recycle }) {
                 <div className="desk-copy">
                   <strong>{note.title}</strong>
                   <small>
-                    {note.category || '复盘'} · {shortDate(new Date(until).toISOString())} 到期
+                    {note.category || '复盘'}{note.hasLocalPhotos ? ' · 本机配图' : note.photos?.length ? ' · ' + note.photos.length + ' 张配图' : ''} · {shortDate(new Date(until).toISOString())} 到期
                   </small>
                 </div>
                 <button className="desk-action" disabled={action.busy} onClick={() => restore(note)}>

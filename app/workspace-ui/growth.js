@@ -1,3 +1,4 @@
+import { layoutPhotos } from './note-layout.js';
 // IDs, ownership and visibility come from the existing guarded D1 services.
 function fromReflection(row) {
   return {
@@ -114,13 +115,21 @@ export function reflectionSeedPath(params, bookmark) {
 }
 
 export function prepareSave(draft, existing, association, today) {
+  const layout = layoutPhotos(draft.parts || []);
+  const hasLocalPhotos = draft.scope !== 'team' && layout.some(photo => photo.localId);
+  const changePhotos = layout.length || existing?.photos?.length || existing?.hasLocalPhotos;
+  const text = changePhotos && draft.body.trim() ? draft.body : draft.body.trim();
+  const photos = layout.filter(photo => !hasLocalPhotos || !photo.localId)
+    .map(({ id, at, caption }) => ({ id, at: Math.min(at, text.length), caption }));
   const operation = {
     key: crypto.randomUUID(),
     id: existing?.id || null,
     scope: draft.scope,
     publish: draft.scope === 'team' && draft.publish === true,
+    ...(changePhotos && { layout: layout.map(photo => ({ ...photo, at: Math.min(photo.at, text.length) })) }),
     body: {
-      title: draft.title.trim(), text: draft.body.trim(), category: draft.category,
+      title: draft.title.trim(), text, category: draft.category,
+      ...(changePhotos && { photos, hasLocalPhotos }),
       date: existing?.date || today, ...association,
       ...(existing ? expected(existing) : {}),
     },

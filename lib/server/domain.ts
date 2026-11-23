@@ -8,6 +8,7 @@ import type { BootstrapResult, BootstrapStatus, InviteResult, JoinResult, Me, Pr
 import { safeReturnTo } from './return-to.ts';
 export { safeReturnTo } from './return-to.ts';
 import { createDataRightsService } from './data-rights.ts';
+import { createReflectionImages } from './reflection-images.ts';
 import { createReflectionService } from './reflections.ts';
 import { createTrainingService } from './training.ts';
 import { createTopicCollections } from './topic-collections.ts';
@@ -381,6 +382,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   const reflections = createReflectionService({ db, clock, activeMember, me: businessAccount, operation });
   const { attemptLearningInclusion, ...topics } = createTopicCollections({ db, clock, activeMember, operation, topicPolicy });
   return { readVideoCover: (source: string | null) => videoCover(bucket, source), me, getAccount, getBootstrap, bootstrap, join, updateProfile, getProfileAvatar, createInvite, activeMember, ...reflections,
+    ...createReflectionImages({db,bucket,activeMember,clock,operation}),
     ...createDataRightsService({ db, clock, activeMember, me: businessAccount, operation }),
     ...topics,
     ...createLearningActivity({ db, clock, activeMember, operation }),

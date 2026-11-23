@@ -1,0 +1,93 @@
+.note-composer, .note-draft-part { min-width: 0; }
+.note-tools, .note-proof-actions, .note-lightbox-footer, .note-lightbox-footer > div {
+  display: flex;
+  align-items: center;
+}
+.note-tools, .note-lightbox-footer { justify-content: space-between; gap: 12px; }
+.writing-main .note-insert {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 6px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--sheet);
+  color: var(--green);
+  cursor: pointer;
+}
+.writing-main .note-insert input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.note-insert:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+.note-insert:has(:disabled) { opacity: .55; }
+.note-picture-help { font: 400 12px/1.6 var(--sans); color: var(--muted); margin: 5px 0 10px; }
+.note-composer .writing-area { width: 100%; resize: vertical; }
+.writing-main .illustrated .writing-area { min-height: 65px; margin: 5px 0; }
+.note-proof-grid, .note-plates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 12px;
+}
+.note-proof-grid { margin: 6px 0 10px; }
+.note-proof, .note-plates figure { min-width: 0; margin: 0; }
+.note-proof-photo { background: var(--soft); aspect-ratio: 1.8; }
+.note-proof-photo img { width: 100%; height: 100%; object-fit: cover; }
+.note-proof-actions { min-height: 34px; gap: 2px; }
+.note-proof-actions > span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-right: auto; }
+.note-proof .icon-button { width: 32px; height: 34px; }
+.note-proof .icon-button svg { width: 15px; }
+.writing-main .note-proof input {
+  width: 100%; min-height: 34px; margin: 0; padding: 3px 0;
+  font: 400 13px/1.5 var(--sans);
+}
+.reader:has(.note-plates) h1, .newswire:has(.note-wire-photo) h3 { text-wrap: balance; }
+.note-prose .note-read-part + .note-read-part:has(> p, > .note-plates) { margin-top: 1.25em; }
+.note-plates { margin: 18px 0 4px; white-space: normal; }
+.note-plates.single { grid-template-columns: minmax(0, 1fr); }
+.note-plates button { display: grid; place-items: center; width: 100%; cursor: zoom-in; overflow: hidden; background: var(--soft); }
+.note-plates img { width: 100%; aspect-ratio: 1.5; object-fit: cover; }
+.note-plates.single img { aspect-ratio: auto; max-height: 62vh; object-fit: contain; }
+.note-plates figcaption { padding-top: 6px; font: 400 13px/1.6 var(--sans); color: var(--muted); }
+.note-image-status { display: grid; place-items: center; min-height: 48px; color: var(--muted); font: 400 12px/1.5 var(--sans); }
+.modal.note-lightbox { width: min(920px, calc(100vw - 28px)); }
+.note-lightbox-image { display: grid; place-items: center; background: var(--soft); margin-top: 12px; }
+.note-lightbox-image img { width: auto; max-width: 100%; height: auto; max-height: 68dvh; object-fit: contain; }
+.note-lightbox-footer { margin-top: 8px; font: 400 14px/1.5 var(--sans); overflow-wrap: anywhere; }
+.note-lightbox-footer > div { flex: none; }
+.wire-thumb.note-wire-photo { position: relative; aspect-ratio: 1.5; background: var(--soft); }
+.note-wire-photo > span[aria-label] {
+  position: absolute; bottom: 4px; right: 4px; display: flex; align-items: center; gap: 3px;
+  padding: 1px 5px; border-radius: 2px; color: white; background: #173129e8;
+  font: 500 11px/1.6 var(--sans); font-variant-numeric: tabular-nums;
+}
+.newswire .note-wire-excerpt {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; max-width: 50em;
+}
+@media (max-width: 520px) {
+  .note-proof-grid, .note-plates { gap: 10px 8px; }
+  .note-proof .icon-button { width: 30px; height: 36px; }
+  .note-picture-help { margin-bottom: 5px; }
+  .note-plates figcaption { font-size: 12px; }
+}
+
+.writer-page .writing-main > label > input,
+.writer-page .writing-main .writing-area {
+  font: 400 16px/1.75 var(--sans);
+  color: var(--ink);
+  padding: 8px 0;
+}
+.writer-page .writing-main > label > input::placeholder,
+.writer-page .writing-main .writing-area::placeholder { font: inherit; opacity: 1; }

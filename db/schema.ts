@@ -92,6 +92,8 @@ export const moderationAudit = sqliteTable('moderation_audit', {
 });
 
 export const reflections = sqliteTable('reflections', {
+    photos: text('photos').notNull().default('[]'),
+    localPhotosPending: integer('local_photos_pending').notNull().default(0),
     id: text('id').primaryKey(),
     ownerId: text('owner_id').notNull().references(() => users.id),
     teamId: text('team_id').notNull().references(() => teams.id),
@@ -119,6 +121,8 @@ export const reflections = sqliteTable('reflections', {
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull()
 }, t => [
+    check('reflection_photos',sql`json_valid(${t.photos}) AND json_type(${t.photos})='array' AND json_array_length(${t.photos})<=9`),
+    check('reflection_local_photos',sql`${t.localPhotosPending} IN (0,1)`),
     check('reflection_source_ref', sql`(${t.sourceKind} IS NULL AND ${t.sourceId} IS NULL) OR
         (${t.sourceKind} IS NOT NULL AND ${t.sourceKind} IN ('learning_post','topic_collection') AND ${t.sourceId} IS NOT NULL
         AND length(${t.sourceId}) BETWEEN 1 AND 80 AND ${t.sourceId} NOT GLOB '*[^A-Za-z0-9_-]*'
@@ -135,6 +139,25 @@ export const reflections = sqliteTable('reflections', {
     check('reflection_open', sql`${t.gate}='closed' OR (${t.scope}!='private' AND ${t.deletedAt} IS NULL)`),
     index('reflection_owner_date').on(t.ownerId, t.date, t.id),
     index('reflection_team_scope').on(t.teamId, t.scope, t.publishedAt, t.id)
+]);
+export const reflectionImages = sqliteTable('reflection_images', {
+    id:text('id').notNull(), ownerId:text('owner_id').notNull().references(()=>users.id),
+    teamId:text('team_id').notNull().references(()=>teams.id), objectKey:text('object_key').unique().notNull(),
+    digest:text('digest').notNull(), mime:text('mime').notNull(), bytes:integer('bytes').notNull(),
+    thumbMime:text('thumb_mime'),thumbBytes:integer('thumb_bytes'),thumbDigest:text('thumb_digest'),
+    state:text('state',{enum:['uploading','ready','deleting']}).notNull(),
+    reflectionId:text('reflection_id').references(()=>reflections.id,{onDelete:'set null'}), touchedAt:text('touched_at').notNull(),
+}, t=>[
+    primaryKey({columns:[t.ownerId,t.id]}), index('reflection_images_attachment').on(t.ownerId,t.reflectionId,t.touchedAt),
+    check('reflection_thumb_mime',sql`${t.thumbMime} IN ('image/jpeg','image/png','image/webp')`),
+    check('reflection_thumb_digest',sql`length(${t.thumbDigest})=64`),
+    check('reflection_thumb_bytes',sql`${t.thumbBytes} BETWEEN 1 AND 131072`),
+    check('reflection_thumb_fields',sql`(${t.thumbMime} IS NULL AND ${t.thumbBytes} IS NULL AND ${t.thumbDigest} IS NULL) OR
+        (${t.thumbMime} IS NOT NULL AND ${t.thumbBytes} IS NOT NULL AND ${t.thumbDigest} IS NOT NULL)`),
+    check('reflection_image_digest',sql`length(${t.digest})=64`),
+    check('reflection_image_mime',sql`${t.mime} IN ('image/jpeg','image/png','image/webp')`),
+    check('reflection_image_bytes',sql`${t.bytes} BETWEEN 1 AND 8388608`),
+    check('reflection_image_state',sql`${t.state} IN ('uploading','ready','deleting')`),
 ]);
 export const announcements = sqliteTable('announcements', {
     id: text('id').primaryKey(),

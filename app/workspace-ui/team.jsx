@@ -1,3 +1,4 @@
+import { NoteFeedPhoto } from './note-pictures';
 import { TextLinks } from '../components/learning-text';
 import { createRequestKey } from '../../lib/client/api';
 import { ProfileForm } from './profile-form';
@@ -227,6 +228,7 @@ export function Activity() {
                             e.title
                           )}
                         </h3>
+                        {e.n && e.snippet && <p className="note-wire-excerpt">{e.snippet}</p>}
                         {e.type === '讨论' && <p>{e.t.title}</p>}
                         {e.volume && (
                           <p>
@@ -234,6 +236,7 @@ export function Activity() {
                           </p>
                         )}
                       </div>
+                      {e.n && e.firstPhoto && <NoteFeedPhoto photo={e.firstPhoto} count={e.photoCount} />}
                       {e.type === '训练' && (
                         <span className="wire-thumb" data-photo-key={'wire:' + e.t.id}>
                           <img loading="lazy" alt="" src={teamPhoto(e.t)} />

@@ -1,3 +1,5 @@
+import type { ReflectionPhotoRef } from '../contracts/reflections';
+import { reflectionPhotoUrl, validateReflectionPhotos } from './reflection-images.ts';
 import type { DeletedReflection } from '../contracts/data-rights';
 import type { Me, Principal } from '../contracts/index';
 import type { Announcement, ActivityItem, ActivityPage, PublicMember, PublicProfile, Reflection, ReflectionAuthor, ReflectionReader } from '../contracts/reflections';
@@ -30,6 +32,8 @@ type Row = {
     id: string;
     owner_id: string;
     category?: string | null;
+    photos?:string;
+    local_photos_pending?:number;
     team_id: string;
     title: string;
     text: string;
@@ -147,10 +151,13 @@ export function createReflectionService({
     }
     async function present(r: Row, c: Awaited<ReturnType<typeof personal>>, resolveLink = true): Promise<Reflection> {
         const actor = c.user.id;
+        const refs: ReflectionPhotoRef[] = JSON.parse(r.photos ?? '[]');
+        const edition = [r.version,r.sharing_version,r.generation].join('-');
         const base: ReflectionReader = {
+            ...(refs.length ? {photos:refs.map(ref=>({...ref,url:reflectionPhotoUrl(r.id,edition,ref.id)}))} : {}),
             id: r.id,
             title: r.title,
-            text: r.text,
+            text: r.text===' ' ? '' : r.text,
             ...(r.category ? { category: r.category } : {}),
             date: r.date,
             updatedAt: r.updated_at,
@@ -166,6 +173,7 @@ export function createReflectionService({
         return {
             ...base,
             isAuthor: true,
+            ...(r.local_photos_pending ? {hasLocalPhotos:true} : {}),
             version: r.version,
             sharingVersion: r.sharing_version,
             generation: r.generation,
@@ -352,7 +360,7 @@ export function createReflectionService({
                 'expectedVersion',
                 'expectedSharingVersion',
                 'expectedGeneration',
-                'category'
+                'category', 'photos', 'hasLocalPhotos'
             ]
         );
         const title = text(raw.title ?? '', 60, true);
@@ -360,7 +368,13 @@ export function createReflectionService({
         if (raw.category !== undefined && (!category || Array.from(category).length > 20)) {
             throw new DomainError('INVALID_INPUT', '复盘类别需为 1–20 个字。');
         }
-        const body = text(raw.text, 5000);
+        const writtenText = text(raw.text, 5000, true);
+        const content = writtenText.trim() ? writtenText : '';
+        const photos = raw.photos === undefined ? undefined : validateReflectionPhotos(raw.photos,content);
+        if (raw.hasLocalPhotos!==undefined && typeof raw.hasLocalPhotos!=='boolean')
+            throw new DomainError('INVALID_INPUT','请确认本机图片状态。');
+        // Historic SQLite tables require at least one character. Only image-only notes use this placeholder.
+        const body = content || ' ';
         const date = text(raw.date, 10);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) {
             throw new DomainError('INVALID_INPUT', '请填写有效日期。');
@@ -374,6 +388,8 @@ export function createReflectionService({
         const normalized = {
             title,
             text: body,
+            ...(photos!==undefined ? {photos} : {}),
+            ...(raw.hasLocalPhotos!==undefined ? {hasLocalPhotos:raw.hasLocalPhotos} : {}),
             ...(category ? { category } : {}),
             date,
             trainingId: raw.trainingId ?? null,
@@ -385,11 +401,34 @@ export function createReflectionService({
         const target = op.replay?.result.id ?? id ?? crypto.randomUUID();
         if (op.replay) return privateSourceWrite(() => getOwnReflection(p, target, c));
         const old = id ? await getOwnReflection(p, id, c) : null;
+        // Older clients omit photos on edits. Preserve their attachments and keep offsets within the new text.
+        const nextPhotos = photos ?? (old?.photos ?? []).map(({id,at,caption})=>({id,at:Math.min(at,content.length),caption}));
+        const pending = raw.hasLocalPhotos ?? (photos!==undefined ? false : old?.hasLocalPhotos ?? false);
+        if (!content && !nextPhotos.length && !pending) throw new DomainError('INVALID_INPUT','请填写复盘正文或添加图片。');
         const a = await association(p, raw.trainingId, raw.videoId);
         const ref = raw.sourceRef === undefined && !a.training ? old?.sourceRef ?? null : explicitRef;
         const sourceGuards = ref && (ref.kind !== old?.sourceRef?.kind || ref.id !== old.sourceRef.id)
             ? [learningSourceGuard(db, op.opId, ref.kind, ref.id, c.user.id)] : [];
         const commitSave = (statements: D1PreparedStatement[], id: string) => {
+            if (nextPhotos.length || old?.photos?.length || pending || old?.hasLocalPhotos) {
+                const refs = JSON.stringify(nextPhotos);
+                const owner = c.user.id;
+                const keys = "SELECT json_extract(value,'$.id') FROM json_each(?)";
+                const team = '(SELECT team_id FROM reflections WHERE id=?)';
+                statements.push(
+                    assertGuard(db,op.opId,'images',`(SELECT count(*) FROM reflection_images WHERE owner_id=? AND team_id=${team}
+                        AND (reflection_id IS NULL OR reflection_id=?) AND state='ready' AND id IN (${keys}))=?`,
+                        [owner,id,id,refs,nextPhotos.length]),
+                    q(`UPDATE reflection_images SET reflection_id=NULL,touched_at=? WHERE owner_id=? AND reflection_id=?
+                        AND id NOT IN (${keys})`,now(),owner,id,refs),
+                    q(`UPDATE reflection_images SET reflection_id=?,touched_at=? WHERE owner_id=? AND id IN (${keys})`,id,now(),owner,refs),
+                    q('UPDATE reflections SET photos=?,local_photos_pending=? WHERE id=? AND owner_id=? AND last_committed_op_id=?',
+                        refs,Number(pending),id,owner,op.opId),
+                    assertGuard(db,op.opId,'saved-images',`EXISTS(SELECT 1 FROM reflections WHERE id=? AND photos=? AND local_photos_pending=?)
+                        AND (SELECT count(*) FROM reflection_images WHERE owner_id=? AND reflection_id=? AND state='ready' AND id IN (${keys}))=?`,
+                        [id,refs,Number(pending),owner,id,refs,nextPhotos.length])
+                );
+            }
             if (category) statements.push(q('UPDATE reflections SET category=? WHERE id=? AND owner_id=? AND last_committed_op_id=?',
                 category, id, c.user.id, op.opId));
             return privateSourceWrite(() => op.commit(statements, { id }));
@@ -484,6 +523,7 @@ export function createReflectionService({
         });
         if (op.replay) return getOwnReflection(p, id);
         const old = await getOwnReflection(p, id);
+        if (scope==='team' && old.hasLocalPhotos) throw new DomainError('INVALID_INPUT','请在保存图片的设备上完成上传后再分享。');
         const previous = await q('SELECT published_at FROM reflections WHERE id=?', id).first<{
             published_at: string | null;
         }>();
@@ -807,7 +847,12 @@ export function createReflectionService({
             UNION ALL SELECT 'tc:'||d.id,'discussion',t.id,t.title,substr(d.body,1,160),p.disc_name,d.created_at,NULL,d.id
                 FROM training_discussions d JOIN trainings t ON t.id=d.training_id JOIN profiles p ON p.user_id=d.author_id
                 WHERE t.team_id=? AND t.status IN ('published','archived') AND d.status='active'
-            ) SELECT * FROM (SELECT * FROM first_sources
+            ) SELECT feed.*, CASE WHEN feed.kind='reflection' THEN json_array_length(note.photos) END AS photoCount,
+                CASE WHEN feed.kind='reflection' AND json_array_length(note.photos)>0
+                     THEN '/api/v1/reflections/'||note.id||'/images/'||note.version||'-'||note.sharing_version||'-'||note.generation||'/'||
+                        json_extract(note.photos,'$[0].id')||'?size=thumb' END AS photoUrl,
+                CASE WHEN feed.kind='reflection' THEN json_extract(note.photos,'$[0].caption') END AS photoCaption
+            FROM (SELECT * FROM first_sources
             UNION ALL SELECT 'v:'||v.id,'training_video',t.id,v.title,'',coalesce(p.disc_name,'队内训练'),e.published_at,v.id,NULL
                 FROM video_events e JOIN videos v ON v.id=e.video_id JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
                 LEFT JOIN profiles p ON p.user_id=v.publisher_id WHERE v.team_id=? AND v.status='active' AND t.status='published'
@@ -821,10 +866,12 @@ export function createReflectionService({
                 WHERE lp.team_id=? AND ${learningActivityVisible}
             UNION ALL SELECT 'a:'||a.id,'announcement',a.id,a.title,'','队伍公告',a.published_at,NULL,NULL
                 FROM announcements a WHERE a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
-            ) WHERE ${member.sql} AND (?='' OR date<? OR (date=? AND key<?)) ORDER BY date DESC,key DESC LIMIT 101`,
+            ) feed LEFT JOIN reflections note ON feed.kind='reflection' AND note.id=feed.source
+            WHERE ${member.sql} AND (?='' OR feed.date<? OR (feed.date=? AND feed.key<?)) ORDER BY feed.date DESC,feed.key DESC LIMIT 101`,
             c.membership.teamId,c.user.id,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,...member.values,
-            boundary[0],boundary[0],boundary[0],boundary[1]).all<{ key:string;date:string }>();
-        const items=results.slice(0,100);
+            boundary[0],boundary[0],boundary[0],boundary[1]).all<{key:string;date:string;kind:string;photoCount:number|null;photoUrl:string|null;photoCaption:string|null}>();
+        const items=results.slice(0,100).map(({photoCount,photoUrl,photoCaption,...item}) => item.kind==='reflection'
+            ? {...item,photoCount:photoCount ?? 0,firstPhoto:photoUrl ? {url:photoUrl,caption:photoCaption ?? ''} : null} : item);
         const last=items.at(-1);
         return {items,next:results.length>100 && last ? btoa(JSON.stringify([last.date,last.key])) : null};
     }

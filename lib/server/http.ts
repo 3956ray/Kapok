@@ -21,7 +21,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       throw new DomainError('NOT_FOUND', '未找到此功能。', 404);
     }
     const method = request.method;
-    const putBytes = method === 'PUT' && /^(?:material-assets\/[^/]+|uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
+    const putBytes = method === 'PUT' && (/^workspace\/note-images\/[^/]+\/(?:content|thumbnail)$/.test(route) || /^(?:material-assets\/[^/]+|uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route));
     const topicWrite = (method === 'POST' && route === 'workspace/topics') ||
       (method === 'PATCH' && path.length === 3 && path[0] === 'workspace' && path[1] === 'topics');
     const maxBody = topicWrite ? maxTopicCoverJsonBytes : method === 'PATCH' && route === 'me/profile' ? maxAvatarJsonBytes : method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
@@ -48,6 +48,10 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     if (method === 'GET' && path[0] === 'workspace' && path[1] === 'topic-covers' && path.length === 5) {
       const image = await service.readWorkspaceTopicCover(principal,path[2],path[3],path[4]);
       return new Response(image.bytes,{headers:{...privateHeaders,'Content-Type':image.type,'X-Kapok-Actor':actor}});
+    }
+    if (method === 'GET' && path[0] === 'reflections' && path[2] === 'images' && path.length === 5) {
+      const image = await service.readReflectionImage(principal,path[1],path[3],path[4],new URL(request.url).searchParams.get('size')==='thumb');
+      return new Response(image.body,{headers:{...privateHeaders,'Content-Type':image.type,'Content-Length':String(image.size),'X-Kapok-Actor':actor}});
     }
     if (method === 'GET' && path[0] === 'profile-avatars' && path.length === 3) {
       const image = await service.getProfileAvatar(principal,path[1],path[2]);
@@ -279,6 +283,12 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'PATCH' && path[0] === 'collections' && path.length === 2) data = await service.saveCollection(principal, path[1], await body(), key);
     else if (path[0]==='trainings' && path[2]==='discussion' && method==='GET' && path.length===3) data=await service.readTrainingDiscussion(principal,path[1]);
     else if (path[0]==='trainings' && path[2]==='discussion' && ((method==='POST' && path.length===3) || (method==='PATCH' && path.length===4))) data=await service.writeTrainingDiscussion(principal,path[1],path[3] ?? null,await body(),key);
+    else if (method === 'PUT' && path[0]==='workspace' && path[1]==='note-images' && path[3]==='content' && path.length===4)
+      data=await service.putReflectionImage(principal,path[2],request,key);
+    else if (method === 'PUT' && path[0]==='workspace' && path[1]==='note-images' && path[3]==='thumbnail' && path.length===4)
+      data=await service.putReflectionThumbnail(principal,path[2],request,key);
+    else if (method === 'DELETE' && path[0]==='workspace' && path[1]==='note-images' && path.length===3)
+      data=await service.cancelReflectionImage(principal,path[2],key);
     else if (method === 'POST' && route === 'material-assets') data=await service.reserveMaterialAsset(principal,await body(),key);
     else if (method === 'PUT' && path[0] === 'material-assets' && path.length === 3 && path[2]==='content') data=await service.putMaterialAsset(principal,path[1],request,key);
     else if (method === 'GET' && path[0] === 'material-assets' && path.length === 2) return await service.getMaterialAsset(principal,path[1],request.headers.get('Range'));
