@@ -50,7 +50,7 @@ async function api(s, actor, method, path, { payload, key = '', type = 'applicat
 test('daily text articles publish and share atomically while archive posts retain explicit sharing', async t => {
     const { s, rows } = await fixture(t);
     await s.createLearningCategory(author, { name: '随谈' }, 'daily-category');
-    const create = category => s.saveLearningPost(author, null, { ...input, category }, 'create-' + category);
+    const create = category => s.saveLearningPost(author, null, { ...input, category }, crypto.randomUUID());
     const archive = await create('基本功');
     const publish = (post, key, share) => s.publishLearningPost(author, post.id,
         { ...publicationVersion(post), ...(share && { shareToActivity: true }) }, key);

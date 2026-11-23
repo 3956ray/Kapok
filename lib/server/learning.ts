@@ -217,8 +217,8 @@ export function createLearningService(deps: LearningDependencies & {
     }
     async function ownedRow(c: LearningContext, id: string) {
         const member = learningMemberFence(c);
-        const row = await q(`SELECT id,kind,version,status,body,collection_target_id FROM learning_posts WHERE id=? AND team_id=? AND owner_id=? AND ${member.sql}`,
-            id, c.membership.teamId, c.user.id, ...member.values).first<Pick<DraftRow, 'id' | 'kind' | 'version' | 'status'> & { body: string; collection_target_id: string | null }>();
+        const row = await q(`SELECT id,kind,category,version,status,body,collection_target_id FROM learning_posts WHERE id=? AND team_id=? AND owner_id=? AND ${member.sql}`,
+            id, c.membership.teamId, c.user.id, ...member.values).first<Pick<DraftRow, 'id' | 'kind' | 'category' | 'version' | 'status'> & { body: string; collection_target_id: string | null }>();
         if (!row) throw learningMissing();
         return row;
     }
