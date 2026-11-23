@@ -1,7 +1,7 @@
 import { parseYouTubeSource } from '../video-source.ts';
 
 const maxImageBytes = 2 * 1024 * 1024;
-const defaultCover = '/workspace-assets/media/defense.webp';
+const defaultCover = '/workspace-assets/media/video-cover-unavailable.svg';
 
 function sourceKey(source: string) {
     const youtube = parseYouTubeSource(source);

@@ -47,7 +47,7 @@ test('missing or invalid artwork returns the default image and avoids repeated u
   assert.equal(fetcher.mock.callCount(),0);
   for (let i=0;i<2;i++) {
     const r=await videoCover(bucket,'https://youtu.be/dQw4w9WgXcQ');
-    assert.equal(r.headers.get('location'),'/workspace-assets/media/defense.webp');
+    assert.equal(r.headers.get('location'),'/workspace-assets/media/video-cover-unavailable.svg');
   }
   assert.equal(fetcher.mock.callCount(),1);
 });
