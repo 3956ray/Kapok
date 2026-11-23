@@ -68,10 +68,10 @@ function NavBody({ narrow = false, mobile = false, onClose }) {
       to="/notes/new"
       className={'compose-link' + (pathname === '/notes/new' ? ' writing' : '')}
       onClick={onClose}
-      aria-label="写复盘"
+      aria-label="想和写"
     >
       <WriteNoteIcon size={18} />
-      <span className="nav-label">写复盘</span>
+      <span className="nav-label">想和写</span>
     </NavLink>
   );
   return (
@@ -94,7 +94,7 @@ function NavBody({ narrow = false, mobile = false, onClose }) {
         <nav aria-label="工作区导航">{dests.map(link)}</nav>
         <div className="compose-wrap">
           {narrow ? (
-            <Tip label="写复盘" side="right">
+            <Tip label="想和写" side="right">
               {compose}
             </Tip>
           ) : (
@@ -162,7 +162,7 @@ function Command({ open, setOpen }) {
       icon: BookOpen,
     })),
     ...dests.map((n) => ({ title: n.name, to: n.to, tag: '页面', icon: n.icon })),
-    { title: '写复盘', to: '/notes/new', tag: '操作', icon: WriteNoteIcon },
+    { title: '想和写', to: '/notes/new', tag: '操作', icon: WriteNoteIcon },
     { title: '训练合集', to: '/collections', tag: '页面', icon: Layers },
     { title: '新建合集', to: '/collections/new', tag: '操作', icon: Layers },
     { title: '新建', to: '/trainings/new', tag: '操作', icon: Clapperboard },
@@ -271,7 +271,7 @@ export function Shell({ children }) {
         : pathname.startsWith('/notes')
           ? '成长记录'
           : '工作区');
-  if (pathname === '/notes/new') group = '写复盘';
+  if (pathname === '/notes/new') group = '想和写';
   const detail =
     pathname === '/trainings/new'
       ? '发布内容'
@@ -399,7 +399,7 @@ export function Shell({ children }) {
             on: pathname.startsWith('/trainings') || inCollections,
           },
           { to: '/activity', name: '动态', Icon: Activity, on: pathname === '/activity' },
-          { to: '/notes/new', name: '写复盘', Icon: WriteNoteIcon, on: pathname === '/notes/new' },
+          { to: '/notes/new', name: '想和写', Icon: WriteNoteIcon, on: pathname === '/notes/new' },
           {
             to: '/growth',
             name: '成长',

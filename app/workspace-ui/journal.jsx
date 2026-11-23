@@ -120,7 +120,7 @@ export function Growth() {
         action={
           <NavLink to="/notes/new" className="btn primary">
             <WriteNoteIcon size={17} />
-            写复盘
+            想和写
           </NavLink>
         }
       />
@@ -311,7 +311,7 @@ export function Growth() {
               action={
                 <NavLink className="btn" to={filter === '收藏' ? '/trainings' : '/notes/new'}>
                   {filter !== '收藏' && <WriteNoteIcon size={17} />}
-                  {filter === '收藏' ? '浏览训练' : '写复盘'}
+                  {filter === '收藏' ? '浏览训练' : '想和写'}
                   {filter === '收藏' && <ArrowRight size={15} />}
                 </NavLink>
               }
@@ -428,7 +428,7 @@ export function NoteEditor({ n }) {
 }
 
 function Writer({ n, seed, sourceUnavailable = false }) {
-  useTitle(n ? '编辑复盘' : '写复盘');
+  useTitle(n ? '编辑复盘' : '想和写');
   const { params, path, back } = useNav(),
     { db, setDb, ctx, refreshShares, notify, trainings, noteCategoryNames, addNoteCategory, storageError } = useData();
   const key = editorDraftKey(n, params);
@@ -508,7 +508,7 @@ function Writer({ n, seed, sourceUnavailable = false }) {
   return (
     <div className="page-width form-page writer-page">
       <Back fallback="/growth" />
-      <PageHead title={n ? '编辑复盘' : '写复盘'} description={db.profile.name + '的训练手记'} />
+      <PageHead title={n ? '编辑复盘' : '想和写'} description={db.profile.name + '的训练手记'} />
       <form className="edit-form writing-sheet" onSubmit={save}>
         <div className="writing-main">
           <label>
@@ -559,21 +559,22 @@ function Writer({ n, seed, sourceUnavailable = false }) {
                 ))}
               </select>
             </label>
-            <label>
-              可见范围
-              <select
-                disabled={locked}
-                value={draft.scope}
-                onChange={(e) => patch({ scope: e.target.value })}
-              >
-                <option value="private">仅自己可见</option>
-                <option value="team">队内可读</option>
-              </select>
-            </label>
-            {draft.scope === 'team' && <label>
-              <input type="checkbox" checked={!!draft.publish} disabled={locked}
-                onChange={e => patch({publish:e.target.checked})} /> 同时发布到队内动态
-            </label>}
+            <div className="note-publish-options">
+              <label className="note-scope">
+                可见范围
+                <select disabled={locked} value={draft.scope} onChange={e => patch({ scope: e.target.value })}>
+                  <option value="private">仅自己可见</option>
+                  <option value="team">队内可读</option>
+                </select>
+              </label>
+              {draft.scope === 'team' && (
+                <label className="note-feed-choice">
+                  <input type="checkbox" disabled={locked} checked={!!draft.publish}
+                    onChange={e => patch({ publish: e.target.checked })} />
+                  <span>同时发布到队内动态</span>
+                </label>
+              )}
+            </div>
           </div>
           {attempt && (!hasContent || !draft.title.trim()) && (
             <p role="alert" className="form-error">

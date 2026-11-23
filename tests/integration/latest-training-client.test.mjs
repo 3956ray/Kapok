@@ -205,7 +205,7 @@ test('training title source follows authorized YouTube, Bilibili, local and empt
         assert.equal(link.title, label);
         assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
         assert.deepEqual([...actions.querySelectorAll('a, button')].map(control => control.getAttribute('aria-label')),
-            [label, '收藏与备注', '写复盘']);
+            [label, '收藏与备注', '想和写']);
         return link;
     }
     const stage = () => document.querySelector('.video-stage');

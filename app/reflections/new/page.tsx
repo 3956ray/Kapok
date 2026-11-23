@@ -28,11 +28,11 @@ export default async function NewReflection({
     const params = new URLSearchParams(collectionId ? { collection: collectionId } : { ...(trainingId ? { training: trainingId } : {}), ...(videoId ? { video: videoId } : {}) });
     if (source) { params.set('sourceKind', source.kind); params.set('sourceId', source.id); }
     if (query.resumeDraft === '1') params.set('resumeDraft', '1');
-    if (!context.user || !canReadPersonal(context.user, context.me) || !context.me?.profile) return <Shell title="写复盘" back="/growth" nav={false}>
+    if (!context.user || !canReadPersonal(context.user, context.me) || !context.me?.profile) return <Shell title="想和写" back="/growth" nav={false}>
         <AccessState context={context} returnTo={safeReturnTo('/reflections/new' + (params.size ? '?' + params.toString() : ''))} />
     </Shell>;
     if (context.user && isMember(context.me) && query.resumeDraft !== '1') return <WorkspaceEntry actorId={context.user.userId} path={'/notes/new' + (params.size ? '?' + params : '')} />;
-    return <Shell title="写复盘" back="/growth" canCompose={isMember(context.me)}>
+    return <Shell title="想和写" back="/growth" canCompose={isMember(context.me)}>
         <ReflectionEditor
             key={`${context.user.userId}:${collectionId ?? (source ? source.kind + ':' + source.id : 'new')}`}
             actorId={context.user.userId}

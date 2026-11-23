@@ -64,7 +64,7 @@ const GrowthList = memo(function GrowthList({ actorId, rows, tab }: { actorId: s
             <span className="growth-empty-icon" aria-hidden="true">{tab === 'collections' ? <Bookmark size={30} /> : <ReflectionIcon size={30} />}</span>
             <h2>{tab === 'collections' ? '还没有收藏' : tab === 'reflections' ? '还没有复盘' : '还没有成长记录'}</h2>
             <p>{tab === 'collections' ? '收藏训练视频、学习资料或合集，方便之后回看。' : tab === 'reflections' ? '记下训练中的发现，以及下次想练的动作。' : '写下第一篇复盘，或从训练和学习资料里添加收藏。'}</p>
-            <Link prefetch={false} className="button" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab !== 'collections' && <ReflectionIcon size={16} aria-hidden="true" />}{tab === 'collections' ? '去看训练' : '写复盘'}</Link>
+            <Link prefetch={false} className="button" href={tab === 'collections' ? '/trainings' : '/reflections/new'}>{tab !== 'collections' && <ReflectionIcon size={16} aria-hidden="true" />}{tab === 'collections' ? '去看训练' : '想和写'}</Link>
             <p className="growth-privacy"><LockKeyhole size={14} aria-hidden="true" />私人备注仅自己可见，复盘由你决定是否分享。</p>
         </section>}
         </div>;

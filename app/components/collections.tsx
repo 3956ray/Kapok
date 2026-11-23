@@ -26,7 +26,7 @@ export function LearningBookmark({ actorId, sourceKind, sourceId, showReflection
             return item ? <CollectionCard compact actorId={actorId} item={item} /> :
                 <CollectionEditor actorId={actorId} sourceKind={sourceKind} sourceId={sourceId} privateNote refreshOnSave />;
         }}</AccountBoundary>
-        {showReflection && <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}><ReflectionIcon size={16} aria-hidden="true" />写复盘</Link>}
+        {showReflection && <Link className="button secondary" href={learningReflectionHref(sourceKind, sourceId)}><ReflectionIcon size={16} aria-hidden="true" />想和写</Link>}
     </div>;
 }
 

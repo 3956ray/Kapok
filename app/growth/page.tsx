@@ -14,7 +14,7 @@ export default async function Growth({ searchParams }: { searchParams?: Promise<
             <AccessState context={context} returnTo="/growth" />
         </Shell>;
     if (context.user && isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/growth' + (initialFilter === 'all' ? '' : '?filter=' + filter)} />;
-    const write = <Link href="/reflections/new" className="button secondary growth-compose" aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /><span>写复盘</span></Link>;
+    const write = <Link href="/reflections/new" className="button secondary growth-compose" aria-label="想和写" title="想和写"><ReflectionIcon size={18} aria-hidden="true" /><span>想和写</span></Link>;
     return <Shell title="成长记录" surface="index" description="回看复盘、收藏和私人备注。" headingAside={write} canCompose={isMember(context.me)}>
         <LocalDrafts key={context.user.userId} actorId={context.user.userId} />
         <GrowthContent key={context.user.userId + initialFilter} actorId={context.user.userId} initialFilter={initialFilter} />

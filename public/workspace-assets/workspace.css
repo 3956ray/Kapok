@@ -2994,6 +2994,35 @@ kbd {
   min-width: 0;
   grid-column: 1 / -1;
 }
+.note-publish-options {
+  min-width: 0;
+}
+.note-scope select {
+  width: min(100%, 124px);
+  height: 36px;
+  min-height: 0;
+  padding: 0 8px;
+  font: 400 14px/1.4 var(--sans);
+}
+.writing-side .note-feed-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.note-feed-choice input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--green);
+}
 .writing-side .form-end {
   align-items: start;
   flex-direction: column;
@@ -3408,8 +3437,12 @@ kbd {
     display: none;
   }
   .writing-side .form-pair {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
     gap: 9px;
+  }
+  .note-scope select {
+    height: 40px;
+    font-size: 16px;
   }
   .writing-side .form-end {
     align-items: center;

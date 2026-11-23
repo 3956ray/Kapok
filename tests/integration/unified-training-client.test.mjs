@@ -190,7 +190,7 @@ test('YouTube restores waiting identity on error, then shows the provider slot a
         assert.equal(link.rel, 'noopener noreferrer');
         assert.equal(link.closest('[hidden]'), null);
         assert.deepEqual([...document.querySelectorAll('.training-title-action')].map(action => action.getAttribute('aria-label')),
-            ['在 YouTube 打开（新标签）', '收藏与备注', '写复盘']);
+            ['在 YouTube 打开（新标签）', '收藏与备注', '想和写']);
     }
     try {
         await mount({ trainingId: 't' });
@@ -550,10 +550,10 @@ test('V5.1 groups the title and date beside named circular actions and opens the
         assert.equal(heading.parentElement, date.parentElement);
         assert.equal(heading.nextElementSibling, date);
         const bookmark = title.querySelector('.training-title-bookmark');
-        const reflection = title.querySelector('[aria-label="写复盘"]');
+        const reflection = title.querySelector('[aria-label="想和写"]');
         assert.ok(bookmark instanceof window.HTMLButtonElement);
         assert.equal(bookmark.getAttribute('aria-label'), '收藏与备注');
-        assert.equal(reflection.getAttribute('aria-label'), '写复盘');
+        assert.equal(reflection.getAttribute('aria-label'), '想和写');
         assert.match(reflection.href, /training=t&video=a$/);
         const panel = document.getElementById(bookmark.getAttribute('aria-controls'));
         const intro = document.querySelector('.training-watch-info > .preserve');
@@ -574,7 +574,7 @@ test('V5.1 groups the title and date beside named circular actions and opens the
     try {
         await mount({ trainingId: 't' });
         const actions = [...document.querySelectorAll('.training-watch-title .training-title-action')];
-        assert.deepEqual(actions.map(action => action.getAttribute('aria-label')), ['写复盘']);
+        assert.deepEqual(actions.map(action => action.getAttribute('aria-label')), ['想和写']);
         assert.equal(actions[0].getAttribute('href'), '/reflections/new?training=t');
         assert.equal(document.querySelector('.private-note'), null);
     } finally { await unmount(); }

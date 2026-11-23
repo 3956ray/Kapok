@@ -162,9 +162,9 @@ test('reflection workspace navigation retains a local draft and the timestamped 
         reflections: () => response({ ...JSON.parse(localStorage.getItem(draftStorage)).pending.body, id: 'saved', version: 1, sharingVersion: 1, generation: 1 }),
     });
     navigation.length = 0;
-    const editor = () => h(Shell, { title: '写复盘', back: '/growth' },
+    const editor = () => h(Shell, { title: '想和写', back: '/growth' },
         h(ReflectionEditor, { actorId, trainingId: 't', videoId: 'v' }));
-    const linkToEditor = () => h('a', { href: editorPath }, '写复盘');
+    const linkToEditor = () => h('a', { href: editorPath }, '想和写');
     const follow = async (selector, path) => {
         const link = query(selector);
         assert.equal(link.getAttribute('href'), path);

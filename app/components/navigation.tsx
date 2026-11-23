@@ -17,7 +17,7 @@ const home = { href: '/home', text: '首页', Icon: House };
 const trainings = { href: '/trainings', text: '训练', Icon: CalendarDays };
 const growth = { href: '/growth', text: '成长', Icon: Sprout };
 const account = { href: '/me', text: '我的', Icon: UserRound };
-const mobileItems = [home, trainings, { href: '/reflections/new', text: '写复盘', Icon: ReflectionIcon }, growth, account];
+const mobileItems = [home, trainings, { href: '/reflections/new', text: '想和写', Icon: ReflectionIcon }, growth, account];
 const desktopItems = [home, { href: '/activity', text: '队内动态', Icon: Clock }, trainings, { href: '/learn', text: '学习库', Icon: BookOpen }, growth];
 
 // Warm only the intended screen's program. Its protected reads still start on mount.
@@ -100,7 +100,7 @@ export function WorkspaceSidebar({ canCompose }: { canCompose: boolean }) {
             <div className="workspace-team">
                 <span aria-hidden="true">K</span><div><strong>Kapok</strong><small>队内训练空间</small></div>
             </div>
-            {canCompose && <Link className="workspace-compose" href="/reflections/new" aria-label="写复盘" title="写复盘"><ReflectionIcon size={17} aria-hidden="true" /><span>写复盘</span></Link>}
+            {canCompose && <Link className="workspace-compose" href="/reflections/new" aria-label="想和写" title="想和写"><ReflectionIcon size={17} aria-hidden="true" /><span>想和写</span></Link>}
             <p className="workspace-nav-label">工作区</p>
             <nav className="workspace-nav" aria-label="工作区导航">{desktopItems.map(({ href, text, Icon }) =>
                 <Link key={href} href={href} prefetch={false} onMouseEnter={() => warmWorkspace(href)} onFocus={() => warmWorkspace(href)} title={text} aria-label={text} aria-current={href === current ? 'page' : undefined}>

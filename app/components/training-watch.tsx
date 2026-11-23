@@ -165,7 +165,7 @@ function WatchContent({ actorId, legacyVideoId, selectedVideoId, initialSeconds,
 function ReflectionLink({ linkRef, trainingId, videoId, onClick }: { linkRef: React.RefObject<HTMLAnchorElement | null>; trainingId: string; videoId?: string; onClick: () => void }) {
     const query = new URLSearchParams({ training: trainingId });
     if (videoId) query.set('video', videoId);
-    return <Link ref={linkRef} className="video-reflection-link training-title-action" href={'/reflections/new?' + query.toString()} onClick={onClick} aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /></Link>;
+    return <Link ref={linkRef} className="video-reflection-link training-title-action" href={'/reflections/new?' + query.toString()} onClick={onClick} aria-label="想和写" title="想和写"><ReflectionIcon size={18} aria-hidden="true" /></Link>;
 }
 
 function VideoRail({ videos, selectedId, onSelect }: { videos: Video[]; selectedId: string; onSelect: (id: string) => void }) {

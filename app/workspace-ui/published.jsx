@@ -62,7 +62,7 @@ export function Published() {
         action={
           <NavLink className="btn primary" to={newPath()}>
             {filter === '复盘' ? <WriteNoteIcon size={17} /> : <Plus size={15} />}
-            {filter === '合集' ? '新建合集' : filter === '复盘' ? '写复盘' : '新增内容'}
+            {filter === '合集' ? '新建合集' : filter === '复盘' ? '想和写' : '新增内容'}
           </NavLink>
         }
       />

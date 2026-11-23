@@ -272,7 +272,7 @@ function Reading({ post, draft, actorId, epoch, admin, comments, userId, activit
                         aria-controls={bookmarkId} aria-label="收藏与私人备注" title="收藏与私人备注"
                         onClick={() => setBookmarkOpen(open => !open)}><Bookmark size={18} aria-hidden="true" /></button>
                     <Link className="video-reflection-link training-title-action" href={learningReflectionHref('learning_post', post.id)}
-                        aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /></Link>
+                        aria-label="想和写" title="想和写"><ReflectionIcon size={18} aria-hidden="true" /></Link>
                     {addToTopic.trigger}
                 </div>
             </div>

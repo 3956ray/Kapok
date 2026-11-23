@@ -116,7 +116,7 @@ test('learning discussion isolates drafts by direct target, post and account and
     assert.ok(note.querySelector('textarea[name="note"]'));
     await click('收藏与私人备注');
     assert.equal(scroll.querySelectorAll('a[href^="/reflections/new"]').length, 1);
-    assert.equal(scroll.querySelector('[aria-label="写复盘"]').getAttribute('href'), '/reflections/new?sourceKind=learning_post&sourceId=p');
+    assert.equal(scroll.querySelector('[aria-label="想和写"]').getAttribute('href'), '/reflections/new?sourceKind=learning_post&sourceId=p');
     assert.equal(host.style.getPropertyValue('--video-viewport-height'), '500px');
     viewport.height = window.innerHeight;
     viewport.dispatchEvent(new Event('resize'));

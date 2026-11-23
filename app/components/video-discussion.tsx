@@ -528,7 +528,7 @@ function Discussion({ actorId, userId, admin, video, comments: initialComments, 
             <summary><Bookmark size={16} aria-hidden="true" />收藏与备注</summary>
             <SaveCollection actorId={actorId} sourceKind="video" sourceId={video.id} privateNote timestampSec={seconds === '' ? null : Number(seconds)} />
         </details>
-        <Link className="video-reflection-link" href={`/reflections/new?training=${video.trainingId}&video=${video.id}`}><ReflectionIcon size={16} aria-hidden="true" />写复盘</Link>
+        <Link className="video-reflection-link" href={`/reflections/new?training=${video.trainingId}&video=${video.id}`}><ReflectionIcon size={16} aria-hidden="true" />想和写</Link>
     </div>;
     const detail = <header className="video-detail-header">
         {!slots && <h2>{video.title}</h2>}

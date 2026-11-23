@@ -462,7 +462,7 @@ export function TrainingReader({ t,reload,backControl,collectionNav,videoPath,co
           )}
           <SavedButton id={t.id} kind={t.kind} />
           <IconButton
-            label="写复盘"
+            label="想和写"
             icon={WriteNoteIcon}
             onClick={() => go('/notes/new?training=' + t.id)}
           />
