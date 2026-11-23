@@ -6,7 +6,7 @@ import { readBilibiliDuration, resolveBilibiliShare } from './bilibili.ts';
 import { actorKey } from './identity.ts';
 
 export const privateHeaders = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Cookie, oai-authenticated-user-id, Cf-Access-Jwt-Assertion', 'X-Content-Type-Options': 'nosniff' };
-export async function dispatchApi(request: Request, path: string[], principal: Principal | null, service: Service): Promise<Response> {
+export async function dispatchApi(request: Request, path: string[], principal: Principal | null, service: Service, schedule?: (work: Promise<unknown>) => void): Promise<Response> {
   const requestId = crypto.randomUUID();
   let actor: string | undefined;
   try {
@@ -30,6 +30,17 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     if (route === 'admin/invites' || route === 'internal/bootstrap') throw new DomainError('NOT_FOUND', '此功能暂不可用。', 404);
     if (method === 'POST' && route === 'join' && principal.provider !== 'access') throw new DomainError('FORBIDDEN', '请使用已验证的邮箱账号完善资料。', 403);
     const allowedBeforeJoining = (method === 'GET' && (route === 'bootstrap' || route === 'me')) || (method === 'POST' && route === 'join');
+    if (method === 'GET' && path[0] === 'video-covers' && path.length === 3) {
+      const [, kind, id] = path;
+      let source: string | null;
+      if (kind === 'video') {
+        source = await service.getVideoCoverSource(principal, id);
+      } else if (kind === 'post' || kind === 'draft') {
+        const post = kind === 'draft' ? await service.getLearningPost(principal,id,'draft') : await service.getLearningPost(principal,id);
+        source = post.video?.url ?? null;
+      } else throw new DomainError('NOT_FOUND','未找到封面。',404);
+      return service.readVideoCover(source);
+    }
     if (principal.provider === 'access' && !allowedBeforeJoining) await service.activeMember(principal);
     const key = request.headers.get('Idempotency-Key') ?? '';
     let importPrecondition: unknown;
@@ -39,6 +50,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       try { importPrecondition = JSON.parse(importHeader); } catch { throw new DomainError('INVALID_INPUT', '导入审批条件无效。'); }
       if (!importPrecondition || method !== 'POST' || !(route === 'trainings/publish' || /^trainings\/[^/]+\/videos$/.test(route))) throw new DomainError('INVALID_INPUT', '导入审批条件无效。');
     }
+    let submittedVideo: string | undefined;
     const body = async () => {
       const reader = request.body?.getReader();
       const chunks: Uint8Array[] = []; let count = 0;
@@ -46,7 +58,11 @@ export async function dispatchApi(request: Request, path: string[], principal: P
       finally { await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
       const bytes = new Uint8Array(count); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
       const text = new TextDecoder().decode(bytes);
-      try { return JSON.parse(text); } catch { throw new DomainError('INVALID_INPUT', '提交内容无法读取。'); }
+      try {
+        const value = JSON.parse(text);
+        submittedVideo = value?.video?.url ?? value?.appendVideo?.url ?? value?.url;
+        return value;
+      } catch { throw new DomainError('INVALID_INPUT', '提交内容无法读取。'); }
     };
     const emptyBody = async () => { const value=await body(); if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length) throw new DomainError('INVALID_INPUT','此操作不接受额外内容。'); };
     const legacyGrowth = method === 'GET' && route === 'growth' && !pageRead;
@@ -269,6 +285,10 @@ export async function dispatchApi(request: Request, path: string[], principal: P
         throw new DomainError('FORBIDDEN', '权限已变化，请重新确认。', 403);
       }
       data = { value: data, after };
+    }
+    if (schedule && (method === 'POST' || method === 'PATCH') && typeof submittedVideo === 'string' &&
+        /^(?:trainings\/(?:publish|[\w-]+(?:\/videos)?)|videos\/[\w-]+|learning\/posts(?:\/[\w-]+)?)$/.test(route)) {
+      schedule(service.readVideoCover(submittedVideo).then(r => r.body?.cancel()).catch(() => {}));
     }
     return Response.json({ data, requestId }, { headers: { ...privateHeaders, 'X-Kapok-Actor': actor } });
   } catch (error) {

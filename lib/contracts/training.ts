@@ -1,6 +1,7 @@
 import type { LearningSourceKind, LearningSourceRef } from './reflections';
 
 export type Training = {
+    coverVideoId?: string | null;
     id: string;
     title: string;
     date: string;

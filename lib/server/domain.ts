@@ -1,3 +1,4 @@
+import { videoCover } from './video-covers.ts';
 import type { LearningAssociation, TopicAddOutcome, TopicPolicy } from '../contracts/topic-collections';
 import type { LearningPolicy } from '../contracts/learning';
 import type { MediaPolicy } from '../contracts/media';
@@ -352,7 +353,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   const businessAccount = (p: Principal | null) => p?.provider === 'access' ? activeMember(p) : me(p);
   const reflections = createReflectionService({ db, clock, activeMember, me: businessAccount, operation });
   const { attemptLearningInclusion, ...topics } = createTopicCollections({ db, clock, activeMember, operation, topicPolicy });
-  return { me, getAccount, getBootstrap, bootstrap, join, updateProfile, createInvite, activeMember, ...reflections,
+  return { readVideoCover: (source: string | null) => videoCover(bucket, source), me, getAccount, getBootstrap, bootstrap, join, updateProfile, createInvite, activeMember, ...reflections,
     ...createDataRightsService({ db, clock, activeMember, me: businessAccount, operation }),
     ...topics,
     ...createLearningActivity({ db, clock, activeMember, operation }),

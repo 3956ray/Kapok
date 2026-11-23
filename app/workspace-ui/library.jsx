@@ -47,7 +47,7 @@ export function Cover({ t, lazy = true }) {
   return (
     <img
       className={'cover cover-' + t.id}
-      src={t.photos?.[0]?.url || media((t.image || 'defense') + '.webp')}
+      src={t.photos?.[0]?.url || t.platformCover || media((t.image || 'defense') + '.webp')}
       loading={lazy ? 'lazy' : 'eager'}
       decoding="async"
       alt=""

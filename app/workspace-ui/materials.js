@@ -9,6 +9,7 @@ const workspacePhotos = extra => (extra.photos || []).map(photo=>({...photo,url:
 function training(row, account) {
   const extra = details(row);
   return { ...row, kind: 'training', format: '场上练习', sourceKind: 'training', sourceId: row.id,
+    platformCover: row.coverVideoId ? '/api/v1/video-covers/video/'+encode(row.coverVideoId) : '',
     category: extra.category || '训练', summary: row.description, body: extra.body || '',
     extra, canEdit: account.membership.role === 'admin', published: row.status === 'published',
     ownerId: row.publisherId === account.user.id ? 'me' : row.publisherId, author: row.publisherName || account.team?.name || '队内训练', photos:workspacePhotos(extra), steps: [] };
@@ -16,6 +17,7 @@ function training(row, account) {
 function post(row, account, draft = false) {
   const extra = details(row), mine = draft || row.isAuthor;
   return { ...row, sourceKind: 'learning_post', sourceId: row.id, extra, isDraft: draft, format: row.kind === 'video' ? '队员视频' : '场边图文',
+    platformCover: row.kind === 'video' && row.video?.source !== 'upload' ? '/api/v1/video-covers/'+(draft?'draft/':'post/')+encode(row.id) : '',
     canEdit: mine && row.status !== 'hidden', published: !draft || row.status === 'published',
     category: row.category, date: extra.date || (row.publishedAt || row.updatedAt).slice(0,10),
     ownerId: mine ? 'me' : row.author?.id, author: row.author?.discName || account.profile?.discName,
@@ -43,7 +45,7 @@ export function selectVideo(item,id) {
   const source = video?.url ? parseVideo(video.url) : item.source;
   const videoAsset = video?.source === 'upload' ? '/api/v1/videos/'+encode(video.id)+'/media' : item.videoAsset || null;
   const key = source?.url || videoAsset;
-  return { ...item, selectedVideo:video, videoAsset, source, duration:video?.durationSec || 0, timepoints:item.extra?.chapters?.[key] || [] };
+  return { ...item, selectedVideo:video, platformCover:video ? (source ? '/api/v1/video-covers/video/'+encode(video.id) : '') : item.platformCover, videoAsset, source, duration:video?.durationSec || 0, timepoints:item.extra?.chapters?.[key] || [] };
 }
 export async function deleteMaterial(ctx,item) {
   if (!item.canEdit) throw Error('没有管理权限。');

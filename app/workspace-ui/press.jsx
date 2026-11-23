@@ -5,6 +5,7 @@ import { NavLink } from './router';
 const pitchPhotos = { 'weak-side': 'sideline-catch', zone: 'sideline-team' };
 export function fieldPhoto(training) {
   if (training?.photos?.[0]?.url) return training.photos[0].url;
+  if (training?.platformCover) return training.platformCover;
   return media((pitchPhotos[training?.id] || training?.image || 'sideline-team') + '.webp');
 }
 export function teamPhoto(training) {

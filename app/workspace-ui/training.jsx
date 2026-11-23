@@ -338,7 +338,7 @@ function TrainingReader({ t,reload }) {
   const capture = nativeDuration > 0 ? readTime : null;
   const youtube = t.source?.platform === 'YouTube';
   const showPlayer = started || (youtube && measure.attempt > 0);
-  const cover = t.photos?.[0]?.url || '';
+  const cover = t.photos?.[0]?.url || t.platformCover || '';
   const editable = canEditMaterial(t);
 
   function playCitation(at, origin, savedDuration) {
@@ -503,7 +503,7 @@ function fileIssue(file, type) {
   return '';
 }
 
-function PhotoFields({ photos, choose, remove, describe, issue }) {
+function PhotoFields({ photos, choose, remove, describe, issue, linkedVideo }) {
   return (
     <div className="photo-fields">
       <div className="file-heading">
@@ -512,6 +512,7 @@ function PhotoFields({ photos, choose, remove, describe, issue }) {
         </span>
         {photos.length > 0 && <small>{photos.length} 张</small>}
       </div>
+      {linkedVideo && <p className="field-hint">默认使用视频原封面。上传照片后，第一张将作为封面。</p>}
       {photos.length > 0 && (
         <ul className="photo-proof-list">
           {photos.map((p, i) => (
@@ -995,6 +996,7 @@ function MaterialEditor({ t }) {
               </label>
               <FieldIssue issue={issue} name="body" />
               {<PhotoFields
+                linkedVideo={kind !== 'article' && Boolean(usingLink || t?.source)}
                 photos={photos}
                 choose={choosePhotos}
                 issue={issue?.field === 'photos' ? issue.message : ''}

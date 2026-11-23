@@ -1,3 +1,4 @@
+import { waitUntil } from 'cloudflare:workers';
 import { getChatGPTUser } from '../../../chatgpt-auth';
 import { dispatchApi, privateHeaders } from '../../../../lib/server/http';
 import { getService } from '../../../../lib/server/runtime';
@@ -7,7 +8,7 @@ async function handler(request: Request, context: { params: Promise<{ path: stri
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: { code: 'UNAUTHENTICATED', message: '请先登录。', retryable: false }, requestId: crypto.randomUUID() }, { status: 401, headers: privateHeaders });
   try {
-    return await dispatchApi(request, (await context.params).path, user.principal, getService());
+    return await dispatchApi(request, (await context.params).path, user.principal, getService(), waitUntil);
   } catch {
     return Response.json({ error: { code: 'SERVICE_UNAVAILABLE', message: '暂时未能连接服务，请稍后重试。', retryable: true }, requestId: crypto.randomUUID() }, { status: 503, headers: privateHeaders });
   }

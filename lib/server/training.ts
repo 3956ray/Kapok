@@ -75,6 +75,9 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     const now = () => clock().toISOString();
     const missing = () => new DomainError('NOT_FOUND', '内容不可用或当前无权查看。', 404);
     const selectTraining = (detail:boolean) => `SELECT id,title,date,description,status,version,${detail?'workspace_details':materialIndexDetails('workspace_details')} AS workspaceDetails,updated_at AS updatedAt,
+        (SELECT CASE WHEN v.source IN ('bilibili','youtube') THEN v.id END FROM videos v
+         WHERE v.training_id=trainings.id AND v.team_id=trainings.team_id AND v.status='active'
+         ORDER BY v.position,v.id LIMIT 1) AS coverVideoId,
         publisher_id AS publisherId,(SELECT p.disc_name FROM profiles p JOIN users pu ON pu.id=p.user_id
         WHERE p.user_id=trainings.publisher_id AND pu.status='active') AS publisherName FROM trainings`;
     const trainingSelect = selectTraining(true);
@@ -351,6 +354,14 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             : null;
         if(receipt.videoId && !savedVideo) throw missing();
         return { training: savedTraining, video: savedVideo };
+    }
+    async function getVideoCoverSource(p: Principal | null, id: string) {
+        const c = await activeMember(p);
+        const row = await q(`SELECT v.url FROM videos v JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
+            WHERE v.id=? AND v.team_id=? AND v.status='active' AND t.status!='deleted'
+            AND (?='admin' OR t.status IN ('published','archived'))`,id,c.membership.teamId,c.membership.role).first<{url:string|null}>();
+        if (!row) throw missing();
+        return row.url;
     }
     async function getVideo(p: Principal | null, id: string) {
         const c = await activeMember(p);
@@ -1532,6 +1543,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         saveTraining,
         publishTraining,
         getVideo,
+        getVideoCoverSource,
         addVideo,
         updateVideo,
         listComments,
