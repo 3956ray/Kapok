@@ -2069,6 +2069,8 @@ kbd {
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
 }
+.training-card.list.text-only { grid-template-columns: 1fr; }
+.text-only .card-meta .bookmark { margin-inline-start: auto; }
 .list .card-visual {
   aspect-ratio: 1.8;
 }

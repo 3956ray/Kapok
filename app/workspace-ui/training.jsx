@@ -34,6 +34,7 @@ import { useReferenceMedia, YouTubeFrame } from './reference-media.jsx';
 
 
 import { CategoryField } from './category-field.jsx';
+import { dailyArticleCategory, isDailyArticle } from '../../lib/contracts/learning.ts';
 import { noteCategoryLabel } from './categories.js';
 import { AddToCollection } from './collection-actions.jsx';
 
@@ -596,8 +597,10 @@ function MaterialEditor({ t }) {
   const titleLabel = kind === 'training' ? '训练名称' : label + '标题';
   const [title, setTitle] = useState(initial?.title ?? '');
   const [date, setDate] = useState(initial?.date ?? day());
+  const [placement, setPlacement] = useState(initial ? (isDailyArticle(initial) ? 'activity' : 'archive') : returnTo ? 'archive' : 'activity');
+  const daily = kind === 'article' && placement === 'activity';
   const [category, setCategory] = useState(
-    initial?.category ??
+    (categoryNames.includes(initial?.category) ? initial.category : null) ??
       (categoryNames.includes(params.get('category')) ? params.get('category') : categoryNames.find(v=>v==='战术') || categoryNames[0]),
   );
   const [summary, setSummary] = useState(initial?.summary ?? '');
@@ -765,7 +768,8 @@ function MaterialEditor({ t }) {
         source = parseVideo(resolved.url);
       }
       const picked=photos;
-      const input={kind,title:title.trim(),date,category,summary:summary.trim(),body:body.trim(),photos:picked,source,clipFile:usingFile && clip.file || null,timepoints:timepoints || []};
+      const shareToActivity = daily && (!t?.publishedVersion || t.status === 'withdrawn' || !isDailyArticle(t));
+      const input={kind,title:title.trim(),date,category:daily ? dailyArticleCategory : category,shareToActivity,summary:summary.trim(),body:body.trim(),photos:picked,source,clipFile:usingFile && clip.file || null,timepoints:timepoints || []};
       const signature=JSON.stringify([input,picked.map(p=>p.key),usingFile && clip.url]);
       if (attempted.current?.signature!==signature) attempted.current={signature,key:uid()};
       const attempt=attempted.current;
@@ -779,7 +783,7 @@ function MaterialEditor({ t }) {
       await ctx.refresh();
       if (ctx.signal.aborted) return;
       notify(label+(edit?'已更新':'已发布'));
-      go(returnTo ? returnTo+'?added='+encodeURIComponent(id) : '/trainings/'+encodeURIComponent(id),{replace:true});
+      go(returnTo ? returnTo+(daily ? '' : '?added='+encodeURIComponent(id)) : shareToActivity ? '/activity' : '/trainings/'+encodeURIComponent(id),{replace:true});
     } catch(err) {
       if (!controller.signal.aborted && mounted.current) {
         fail('publication',err.message || '暂时无法保存，请重试。');
@@ -849,12 +853,18 @@ function MaterialEditor({ t }) {
               <span>{kind === 'training' ? '训练日期' : '记录日期'}</span>
               <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
-            <CategoryField
+            {kind === 'article' && <label>图文用途
+              <select value={placement} onChange={e => setPlacement(e.target.value)}>
+                <option value="activity">日常分享 · 队内动态</option>
+                <option value="archive">训练资料 · 训练档案</option>
+              </select>
+            </label>}
+            {!daily && <CategoryField
               value={category}
               onChange={setCategory}
               names={categoryNames}
               onCreate={addCategory}
-            />
+            />}
           </div>
           <label>
             {label}简介<span className="label-lite">选填</span>

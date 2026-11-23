@@ -1,3 +1,9 @@
+import { isDailyArticle } from '../../lib/contracts/learning.ts';
+
+export function inTrainingCatalog(collection) {
+  return !collection.items.length || collection.items.some(item => !isDailyArticle(item));
+}
+
 export function catalogEntries(collections, remoteCollections, trainings) {
   return [
     ...collections.map((c) => ({

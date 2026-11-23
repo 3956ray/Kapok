@@ -8,7 +8,7 @@ import { SecureStatus, useSecureResource } from '../components/secure-resource';
 import { presentGrowth, bookmark, saveCollection, deleteNote } from './growth.js';
 import { presentMaterials, deleteMaterial } from './materials.js';
 import { presentTopics, deleteCollection } from './topics.js';
-import { categoryName, noteCategoryName, noteTopics } from './categories.js';
+import { newTrainingCategory, trainingCategoryNames, noteCategoryName, noteTopics } from './categories.js';
 
 export const kindName = { training: '训练', article: '图文', video: '视频' };
 export const categories = ['全部','进攻','防守','基础'];
@@ -142,7 +142,7 @@ function Verified({actorId,logoutHref,initial,session,logout,children}) {
     try { await action(); await refresh(); notify(message); } catch(error){ notify(error.message); }
     finally {busy.current.delete(key);}
   }
-  const categoryNames = [...new Set([...(data.categoryNames??[]),...data.collections.map(c=>c.category),...extra.category].filter(Boolean))];
+  const categoryNames = trainingCategoryNames([...(data.categoryNames??[]),...data.collections.map(c=>c.category),...extra.category]);
   const noteCategoryNames = [...new Set([...noteTopics,...data.notes.map(n=>n.category),...extra.note].filter(Boolean))];
   function register(field,raw,names,normalize) {
     const name=normalize(raw);
@@ -151,7 +151,7 @@ function Verified({actorId,logoutHref,initial,session,logout,children}) {
   }
   async function remove(action,item) {await action(ctx,item);await refresh();}
   return <Store.Provider value={{...data,db,setDb,ctx,logout,notify,toast,categoryNames,noteCategoryNames,
-    addCategory:name=>register('category',name,categoryNames,categoryName),
+    addCategory:name=>register('category',name,categoryNames,newTrainingCategory),
     addNoteCategory:name=>register('note',name,noteCategoryNames,noteCategoryName),
     refreshShares:refresh,sharesError,catalogReady:true,storageError,allComments:data.allComments ?? [],
     bookmark:id=>{const item=typeof id==='object'?id:data.trainings.find(t=>t.id===id);if(item)return toggle('item:'+item.id,()=>bookmark(ctx,item,data.saved[item.id]),data.saved[item.id]?'已取消收藏':'已收藏到成长记录');},

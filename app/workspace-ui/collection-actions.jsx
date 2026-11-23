@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Check, FolderPlus, Plus } from 'lucide-react';
+import { isDailyArticle } from '../../lib/contracts/learning.ts';
 import { useData } from './store';
 import { NavLink } from './router';
 import { DeleteAction, IconButton, Modal } from './ui';
@@ -21,6 +22,7 @@ export function AddToCollection({ id, sharedItem }) {
   const [error, setError] = useState('');
   const own = collections.filter(c => c.draft).map(c => c.draft);
   const incoming = sharedItem || trainings.find(t => t.id === id);
+  if (!incoming || isDailyArticle(incoming)) return null;
   async function add(target) {
     const before = own.find(c => c.id === target);
     if (!incoming || !before || pending || before.itemIds.includes(id)) return;

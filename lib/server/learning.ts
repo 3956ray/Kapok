@@ -2,7 +2,7 @@ import { materialDetails, materialIndexDetails, materialPhotoGuard } from './wor
 import type { LearningAssociation } from '../contracts/topic-collections';
 import type { Me, Principal } from '../contracts/index';
 import {
-    isDefaultLearningCategory, learningBounds, learningCategories, learningCategoryMax, learningDefaults, learningImageAltMax, normalizeLearningCategory, type LearningDraft, type LearningDraftOverview, type LearningImage,
+    isDailyArticle, isDefaultLearningCategory, learningBounds, learningCategories, learningCategoryMax, learningDefaults, learningImageAltMax, normalizeLearningCategory, type LearningDraft, type LearningDraftOverview, type LearningImage,
     type LearningImageReferenceInput,
     type LearningPolicy, type LearningPost, type LearningPostFields, type LearningPostHide, type LearningPostOverview, type LearningPostStatus,
 } from '../contracts/learning.ts';
@@ -322,13 +322,15 @@ export function createLearningService(deps: LearningDependencies & {
 
     async function changePublication(p: Principal | null, id: string, input: unknown, key: string, action: 'publish' | 'withdraw') {
         const c = await bindLearningMember(activeMember, p);
-        const r = learningObject(input, ['expectedVersion', 'expectedMembershipEpoch']);
+        const r = learningObject(input, ['expectedVersion', 'expectedMembershipEpoch', ...(action === 'publish' ? ['shareToActivity'] : [])]);
+        if (r.shareToActivity !== undefined && r.shareToActivity !== true) throw invalid();
         const expected = version(r.expectedVersion);
         const expectedMembershipEpoch = version(r.expectedMembershipEpoch);
         const current = await ownedRow(c, id);
         if (expectedMembershipEpoch !== c.membership.epoch) throw learningConflict();
         if (current.status === 'hidden') throw locked();
-        const op = await operation(c.user.id, 'learning-' + action, id, key, { expectedVersion: expected, expectedMembershipEpoch });
+        const op = await operation(c.user.id, 'learning-' + action, id, key, { expectedVersion: expected, expectedMembershipEpoch,
+            ...(r.shareToActivity && { shareToActivity: true }) });
         const status = action === 'publish' ? 'published' : 'withdrawn';
         const finalVersion = expected + 1;
         if (!op.replay) {
@@ -363,6 +365,12 @@ export function createLearningService(deps: LearningDependencies & {
                     assertGuard(db, op.opId, 'published-images', referencesReady('learning_publication_images'), [id]),
 
                 );
+            }
+            if (r.shareToActivity) {
+                if (!isDailyArticle(current)) throw invalid();
+                write.push(q(`INSERT INTO learning_activity_events(id,post_id,author_epoch,shared_at)
+                    SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM learning_activity_events
+                    WHERE post_id=? AND author_epoch=? AND revoked_at IS NULL)`, crypto.randomUUID(), id, c.membership.epoch, at, id, c.membership.epoch));
             }
             const target = action === 'publish' ? current.collection_target_id : null;
             if (target) write.push(q("INSERT INTO topic_learning_associations(post_id,published_version,status) VALUES(?,?,'pending')", id, finalVersion));

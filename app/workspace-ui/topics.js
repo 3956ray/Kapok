@@ -1,11 +1,13 @@
 import { loadMaterial, selectVideo } from './materials.js';
 
+import { trainingCategory } from './categories.js';
+
 function chapter(source, date) {
   const id = source.kind === 'video' ? 'video:' + source.id : source.id;
   return {
     id, reference: { kind: source.kind, id: source.id },
     kind: source.mediaKind, title: source.title, date, author: source.author?.discName || '',
-    category: source.category || '', summary: source.summary || '', photos: source.cover ? [{ url: source.cover.href, alt: source.cover.alt }] : [],
+    category: trainingCategory(source.category) || '', summary: source.summary || '', photos: source.cover ? [{ url: source.cover.href, alt: source.cover.alt }] : [],
     href: '/trainings/' + (source.trainingId || source.id) + (source.kind === 'video' ? '?video=' + source.id : ''),
   };
 }
@@ -14,7 +16,7 @@ export function presentTopic(row) {
   const items = row.items.map(source => chapter(source, row.updated));
   return {
     id: row.id, title: row.title, author: row.author, ownerId: row.isAuthor ? 'me' : row.ownerId,
-    category: row.category || '', summary: row.summary, created: row.updated, updated: row.updated,
+    category: trainingCategory(row.category) || '', summary: row.summary, created: row.updated, updated: row.updated,
     itemIds: items.map(item => item.id), items, version: row.version,
     shareId: row.published || row.status === 'published' ? row.id : null,
   };

@@ -1,3 +1,14 @@
+import { dailyArticleCategory } from '../../lib/contracts/learning.ts';
+
+export const trainingCategory = name => name === '基本概念' ? '基本功' : name;
+export const trainingCategoryNames = names => [...new Set(names.map(trainingCategory).filter(name => name && name !== dailyArticleCategory))];
+
+export function newTrainingCategory(raw) {
+  const name = categoryName(raw);
+  if (name === dailyArticleCategory) throw Error('日常图文请发布到队内动态。');
+  return trainingCategory(name);
+}
+
 export const noteTopics = ['技术动作', '战术判断', '团队配合', '临场心态'];
 export const pendingNoteCategory = '待归类';
 

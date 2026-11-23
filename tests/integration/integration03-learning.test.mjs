@@ -47,6 +47,31 @@ async function api(s, actor, method, path, { payload, key = '', type = 'applicat
     return dispatchApi(new Request(origin + '/api/v1/' + path, { method, headers, body }), path.split('?')[0].split('/'), actor, s);
 }
 
+test('daily text articles publish and share atomically while archive posts retain explicit sharing', async t => {
+    const { s, rows } = await fixture(t);
+    await s.createLearningCategory(author, { name: '随谈' }, 'daily-category');
+    const create = category => s.saveLearningPost(author, null, { ...input, category }, 'create-' + category);
+    const archive = await create('基本功');
+    const publish = (post, key, share) => s.publishLearningPost(author, post.id,
+        { ...publicationVersion(post), ...(share && { shareToActivity: true }) }, key);
+    await denied(publish(archive, 'wrong-placement', true), 'INVALID_INPUT');
+    assert.equal((await draft(s, archive.id)).status, 'draft');
+    await publish(archive, 'archive', false);
+    assert.equal((await rows('learning_activity_events')).length, 0);
+    const daily = await create('随谈');
+    const published = await publish(daily, 'daily', true);
+    assert.deepEqual(await publish(daily, 'daily', true), published);
+    const event = (await s.getLearningActivity(author, daily.id)).event;
+    assert.ok(event);
+    assert.equal((await s.listActivity(reader)).items[0].id, 'learning:' + event.id);
+    const revised = await publish(published, 'daily-update', true);
+    assert.equal((await rows('learning_activity_events')).length, 1);
+    await s.changeLearningActivity(author, daily.id, { expectedPublishedVersion: revised.publishedVersion,
+        expectedMembershipEpoch: revised.membershipEpoch, expectedEventId: event.id }, 'withdraw-event', false);
+    await publish(revised, 'edit-without-resharing', false);
+    assert.equal((await s.getLearningActivity(author, daily.id)).event, null);
+});
+
 test('learning endpoints separate author draft and public snapshot, use versions, and permanently fence administrator hide', async t => {
     const { s, make } = await fixture(t);
     const created = await api(s, author, 'POST', 'learning/posts', { payload: { ...input, collectionTargetId: 'future-topic' }, key: 'create' });

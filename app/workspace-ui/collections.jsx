@@ -21,7 +21,8 @@ import { NavLink, useNav, useTitle } from './router';
 import { fieldPhoto } from './press';
 import { kindName, shortDate, useData } from './store';
 import { Back, Empty, IconButton, Modal, PageHead, Segments, usePreference } from './ui';
-import { catalogEntries, matchText } from './collection-model';
+import { trainingCategory, trainingCategoryNames } from './categories.js';
+import { catalogEntries, inTrainingCatalog, matchText } from './collection-model';
 import { presentTopic, readChapter } from './topics.js';
 import { AddToCollection, DeleteCollection } from './collection-actions';
 import { playbackPoints } from './timepoints.js';
@@ -62,9 +63,9 @@ export function Collections() {
     }).catch(()=>{ if (!controller.signal.aborted) setFeatured([]); });
     return () => controller.abort();
   },[ctx]);
-  const entries = catalogEntries(collections, remoteCollections, trainings);
-  const categories = [...new Set(['全部', ...categoryNames, ...entries.map(c => c.category).filter(Boolean)])];
-  const activeFilter = categories.includes(filter) ? filter : '全部';
+  const entries = catalogEntries(collections.filter(inTrainingCatalog), remoteCollections, trainings);
+  const categories = ['全部', ...trainingCategoryNames([...categoryNames, ...entries.map(c => c.category)])];
+  const activeFilter = categories.includes(trainingCategory(filter)) ? trainingCategory(filter) : '全部';
   const createPath =
     '/collections/new' +
     (activeFilter === '全部' ? '' : '?category=' + encodeURIComponent(activeFilter));

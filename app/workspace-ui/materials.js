@@ -2,6 +2,9 @@ import { parseVideo } from './video-source.js';
 import { finishLearningImage, learningFileDigest, queueLearningImage } from '../../lib/client/learning-images.ts';
 import { cancelUploadReservation, finishUpload, hashUploadFile, resumeUpload } from '../../lib/client/upload.ts';
 
+import { trainingCategory } from './categories.js';
+import { isDefaultLearningCategory } from '../../lib/contracts/learning.ts';
+
 const encode = encodeURIComponent;
 const details = row => JSON.parse(row.workspaceDetails || '{}');
 const assetUrl = id => '/api/v1/material-assets/'+encode(id);
@@ -10,7 +13,7 @@ function training(row, account) {
   const extra = details(row);
   return { ...row, kind: 'training', format: '场上练习', sourceKind: 'training', sourceId: row.id,
     platformCover: row.coverVideoId ? '/api/v1/video-covers/video/'+encode(row.coverVideoId) : '',
-    category: extra.category || '训练', summary: row.description, body: extra.body || '',
+    category: trainingCategory(extra.category) || '训练', summary: row.description, body: extra.body || '',
     extra, canEdit: row.publisherId === account.user.id && (row.status !== 'hidden' || account.membership.role === 'admin'),
     canManageArchive: account.membership.role === 'admin' && row.status !== 'deleted', published: row.status === 'published',
     ownerId: row.publisherId === account.user.id ? 'me' : row.publisherId, author: row.publisherName || account.team?.name || '队内训练', photos:workspacePhotos(extra), steps: [] };
@@ -20,7 +23,7 @@ function post(row, account, draft = false) {
   return { ...row, sourceKind: 'learning_post', sourceId: row.id, extra, isDraft: draft, format: row.kind === 'video' ? '队员视频' : '场边图文',
     platformCover: row.kind === 'video' && row.video?.source !== 'upload' ? '/api/v1/video-covers/'+(draft?'draft/':'post/')+encode(row.id) : '',
     canEdit: mine && row.status !== 'hidden', published: !draft || row.status === 'published',
-    category: row.category, date: extra.date || (row.publishedAt || row.updatedAt).slice(0,10),
+    category: trainingCategory(row.category), date: extra.date || (row.publishedAt || row.updatedAt).slice(0,10),
     ownerId: mine ? 'me' : row.author?.id, author: row.author?.discName || account.profile?.discName,
     source: row.video && row.video.source!=='upload' ? parseVideo(row.video.url) : null, videoAsset:row.video?.source==='upload'?row.video.url:null, photos:[...row.images.map(p => ({ ...p, url:p.href })),...workspacePhotos(extra)], steps: [] };
 }
@@ -139,7 +142,7 @@ export async function saveMaterial(ctx,item,input,signal,attempt) {
     return id;
   }
   const base='learning/posts';
-  if (!['战术','基本功','基本概念'].includes(category) && category !== item?.category && !attempt.categorySaved) {
+  if (!isDefaultLearningCategory(category) && category !== item?.category && !attempt.categorySaved) {
     await ctx.write('learning/categories','POST',{name:category},key+'-category');
     attempt.categorySaved = true;
   }
@@ -180,6 +183,6 @@ export async function saveMaterial(ctx,item,input,signal,attempt) {
     }
     attempt.saved=await ctx.write(path,'PATCH',{...fields,...(kind==='article' && {images}),expectedVersion:version},key+'-edit');
   }
-  await ctx.write(path+'/publish','POST',{expectedVersion:attempt.saved.version,expectedMembershipEpoch:ctx.account.membership.epoch},key+'-publish');
+  await ctx.write(path+'/publish','POST',{expectedVersion:attempt.saved.version,expectedMembershipEpoch:ctx.account.membership.epoch,...(input.shareToActivity && {shareToActivity:true})},key+'-publish');
   return draft.id;
 }

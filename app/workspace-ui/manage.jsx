@@ -24,7 +24,7 @@ import { downloadOwnData } from '../../lib/client/data-export';
 import { NavLink, useTitle } from './router';
 import { Avatar, Back, Empty, Modal, PageHead } from './ui';
 import { day, shortDate, useData, useRoster } from './store';
-import { catalogEntries, matchText } from './collection-model';
+import { catalogEntries, inTrainingCatalog, matchText } from './collection-model';
 import { MediaCover, fieldPhoto } from './press';
 const sections = [
   ['trainings', '训练管理', ClipboardList],
@@ -396,7 +396,7 @@ function MemberDesk({rows,reload}) {
 }
 function FeaturedDesk({current,reload}) {
   const { collections, remoteCollections, trainings, ctx, notify } = useData();
-  const entries = catalogEntries(collections.filter(c=>c.published),remoteCollections,trainings).filter(e=>e.count || current.collections.some(c=>c.id===e.key));
+  const entries = catalogEntries(collections.filter(c=>c.published && inTrainingCatalog(c)),remoteCollections,trainings).filter(e=>e.count || current.collections.some(c=>c.id===e.key));
   const [pending, setPending] = useState(null);
   const action = useDeskAction();
   const keys = (pending || current.collections.map(c=>c.id)).filter((k) => entries.some((e) => e.key === k));

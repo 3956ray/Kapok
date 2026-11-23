@@ -14,6 +14,9 @@ import { NavLink, useTitle } from './router';
 import { canEditMaterial, clock, kindName, media, shortDate, useData } from './store';
 import { LibraryNav } from './collections';
 import { DeleteAction, Dropdown, Empty, IconButton, PageHead, Segments, usePreference } from './ui';
+import { isDailyArticle } from '../../lib/contracts/learning.ts';
+import { trainingCategory } from './categories.js';
+
 export function DeleteMaterial({ item, disabled, returnFocusId }) {
   const { deleteMaterial } = useData();
   if (item.kind!=='training' && !item.published) return null;
@@ -56,9 +59,10 @@ export function Cover({ t, lazy = true }) {
 }
 function TrainingCard({ t, mode, neighbor }) {
   const titleId = 'archive-title-' + t.id;
+  const textOnly = t.kind === 'article' && !t.photos?.length;
   return (
-    <article className={'training-card ' + mode} aria-labelledby={titleId}>
-      <div className="card-visual" data-photo-key={'card:' + t.id}>
+    <article className={'training-card ' + mode + (textOnly ? ' text-only' : '')} aria-labelledby={titleId}>
+      {!textOnly && <div className="card-visual" data-photo-key={'card:' + t.id}>
         <NavLink
           tabIndex={-1}
           aria-hidden="true"
@@ -75,7 +79,7 @@ function TrainingCard({ t, mode, neighbor }) {
             {clock(t.duration)}
           </span>
         )}
-      </div>
+      </div>}
       <div className="card-body">
         <div className="card-meta">
           <span className={'category cat-' + t.category}>
@@ -84,6 +88,7 @@ function TrainingCard({ t, mode, neighbor }) {
           </span>
           <span className="meta-rule" />
           <span>{t.format}</span>
+          {textOnly && <SavedButton id={t.id} kind={t.kind} />}
         </div>
         <h3>
           <NavLink id={titleId} to={'/trainings/' + t.id} photoKey={'card:' + t.id} className="card-title">
@@ -105,10 +110,12 @@ export function Library() {
   const { trainings, categoryNames } = useData();
   const createLabel = '新建训练';
   const featured = trainings.find((t) => t.kind === 'training' && t.published);
-  const [filter, setFilter] = usePreference('training-filter', '全部'),
+  const [storedFilter, setFilter] = usePreference('training-filter', '全部'),
     [mode, setMode] = usePreference('training-view', 'grid');
   const [sort, setSort] = usePreference('training-sort', '最新优先');
-  const visible = trainings.filter((t) => (t.published || t.status==='archived') && (filter === '全部' || t.category === filter));
+  const filter = categoryNames.includes(trainingCategory(storedFilter)) ? trainingCategory(storedFilter) : '全部';
+  const archive = trainings.filter(t => (t.published || t.status === 'archived') && !isDailyArticle(t));
+  const visible = archive.filter(t => filter === '全部' || t.category === filter);
   const createPath =
     '/trainings/new' + (categoryNames.includes(filter) ? '?category=' + encodeURIComponent(filter) : '');
   if (sort === '最早优先') visible.reverse();
@@ -170,7 +177,7 @@ export function Library() {
         <div className="archive-head">
           <div className="heading-line">
             <h2 id="archive-title" tabIndex={-1}>训练档案</h2>
-            <span className="count">{trainings.filter(t=>t.published || t.status==='archived').length}</span>
+            <span className="count">{archive.length}</span>
           </div>
           <div className="archive-tools">
             <Dropdown.Root>

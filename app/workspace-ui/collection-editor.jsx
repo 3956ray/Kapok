@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, Plus, Search, X } from 'lucide-react';
+import { isDailyArticle } from '../../lib/contracts/learning.ts';
 import { CategoryField } from './category-field';
 import { matchText } from './collection-model';
 import { DeleteCollection } from './collection-actions';
@@ -42,7 +43,7 @@ export function CollectionEditor({ collection: entry }) {
       returned = sessionStorage.getItem(pickKey);
     } catch {}
     const requested = [incoming !== saved?.originItem && incoming, returned, params.get('added')].filter(
-      (id) => id && trainings.some((t) => t.id === id),
+      (id) => id && trainings.some((t) => t.id === id && !isDailyArticle(t)),
     );
     return {
       ...initial,
@@ -74,7 +75,7 @@ export function CollectionEditor({ collection: entry }) {
   const selected = form.itemIds.map(id => available.get(id)).filter(Boolean);
   const choices = [...available.values()].filter(t => t.reference || (t.kind === 'training' ? ['published','archived'].includes(t.status) : !t.isDraft)).filter(
     (t) =>
-      (kind === 'all' || t.kind === kind) &&
+      !isDailyArticle(t) && (kind === 'all' || t.kind === kind) &&
       matchText(query, t.title, t.summary, t.author, t.category, t.body),
   );
   function patch(changes) {

@@ -1,6 +1,11 @@
 import type { LearningAssociation } from './topic-collections';
 
 export const learningCategories = ['战术', '基本功', '基本概念'] as const;
+// Existing daily articles use this category in drafts, publications and collection chapters.
+export const dailyArticleCategory = '随谈';
+export function isDailyArticle(item: { kind: string; category?: string | null }): boolean {
+    return item.kind === 'article' && item.category === dailyArticleCategory;
+}
 export const learningImageTypes = ['image/png', 'image/jpeg', 'image/webp'] as const;
 export const learningDefaults = {
     maxTitle: 120, maxSummary: 240, maxBody: 10000, maxImages: 6, maxImageBytes: 2 * 1024 * 1024,
