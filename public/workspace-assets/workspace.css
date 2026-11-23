@@ -2272,14 +2272,14 @@ kbd {
 .identity-mid {
   display: flex;
   gap: 12px;
-  align-items: baseline;
+  align-items: center;
   border-bottom: 1px solid var(--line);
   padding-bottom: 10px;
 }
 .identity-mid h2 {
   font: 600 36px/1.3 var(--serif);
 }
-.identity-mid span {
+.identity-mid > span {
   font: italic 600 26px var(--num);
   color: var(--red);
 }
@@ -5021,4 +5021,36 @@ html[data-direction='forward'][data-section='activity']::view-transition-new(kap
   .desk-gateway:hover > svg:last-child {
     transform: none;
   }
+}
+
+.avatar img { width:100%; height:100%; object-fit:cover; border-radius:inherit; display:block; }
+.account-avatar { position: relative; flex: none; border-radius: 50%; }
+.account-avatar .avatar-camera {
+  position: absolute; right: -1px; bottom: -1px; width: 22px; height: 22px;
+  display: grid; place-items: center; color: var(--paper); background: var(--green);
+  border: 2px solid var(--paper); border-radius: 50%;
+}
+.identity-mid h2 { min-width: 0; overflow-wrap: anywhere; }
+.member-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.member-name > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.member-portrait { margin-bottom: 8px; }
+.profile-fields { display: grid; gap: 16px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.avatar-editor {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center;
+  gap: 6px 16px; padding-bottom: 13px; border-bottom: 1px solid var(--line);
+}
+.avatar-options strong { font: 600 15px/1.4 var(--sans); }
+.avatar-options input[hidden] { display: none; }
+.avatar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0 16px; }
+.avatar-actions button {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+  font-size: 14px; color: var(--green);
+}
+.avatar-actions button:hover { text-decoration: underline; text-underline-offset: 4px; }
+.avatar-hint { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+@media (max-width: 540px) {
+  .account-avatar .avatar.large, .member-portrait .avatar.large { width: 48px; height: 48px; }
+  .identity-mid { flex-wrap: wrap; }
+  .member-name { gap: 6px; }
+  .member-name .avatar { width: 25px; height: 25px; }
 }

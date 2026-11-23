@@ -374,3 +374,32 @@ test('an administrator from a different login issuer cannot be the only successo
     assert.equal(list.find(m=>m.userId===ids[admin.subject]).canSignIn,true);
     await assert.rejects(change(admin,{role:'member',status:'active'},'invalid-successor'));
 });
+
+test('profile avatars follow current membership and profile versions across save, export and reset', async t => {
+    const {s,ids,change} = await fixture(t);
+    const original = (await s.getAccount(author)).profile;
+    const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWNY6W680t2YAUIBACG6BI0c0mdzAAAAAElFTkSuQmCC';
+    const fields = {discName:'Avatar owner',jerseyNumber:'A7',expectedVersion:original.version,avatar};
+    await s.updateProfile(author,fields,'avatar-save');
+    await s.updateProfile(author,fields,'avatar-save');
+    const saved = (await s.listMembers(member)).find(row=>row.id===ids.author);
+    assert.equal(saved.discName,fields.discName);
+    const picture = await s.getProfileAvatar(member,ids.author,saved.avatarDigest);
+    assert.equal(picture.type,'image/png');
+    assert.equal(Buffer.from(picture.bytes).toString('base64'),avatar.split(',')[1]);
+    assert.equal((await s.exportOwnData(author)).profile.avatar,avatar);
+    assert.equal((await s.exportOwnData(member)).profile.avatar,undefined);
+    await assert.rejects(s.updateProfile(author,{...fields,avatar:null},'stale-reset'));
+    const version = (await s.getAccount(author)).profile.version;
+    await assert.rejects(s.updateProfile(author,{...fields,avatar:'data:image/png;base64,QQ==',expectedVersion:version},'broken-photo'));
+    assert.equal((await s.getAccount(author)).profile.version,version);
+    await change(member,{role:'member',status:'paused'},'pause-viewer');
+    await assert.rejects(s.getProfileAvatar(member,ids.author,saved.avatarDigest));
+    await change(author,{role:'member',status:'paused'},'pause-owner');
+    await assert.rejects(s.getProfileAvatar(admin,ids.author,saved.avatarDigest));
+    await change(author,{role:'member',status:'active'},'resume-owner');
+    await s.updateProfile(author,{...fields,avatar:null,expectedVersion:version},'reset-avatar');
+    assert.equal((await s.listMembers(admin)).find(row=>row.id===ids.author).avatarDigest,undefined);
+    await assert.rejects(s.getProfileAvatar(admin,ids.author,saved.avatarDigest));
+    assert.equal((await s.exportOwnData(author)).profile.avatar,undefined);
+});

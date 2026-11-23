@@ -1,3 +1,4 @@
+import { validateAvatar, avatarBytes } from './profile-avatar.ts';
 import { videoCover } from './video-covers.ts';
 import type { LearningAssociation, TopicAddOutcome, TopicPolicy } from '../contracts/topic-collections';
 import type { LearningPolicy } from '../contracts/learning';
@@ -301,16 +302,33 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
       throw unavailable();
     }
   }
+  async function getProfileAvatar(principal: Principal | null, id: string, digest: string) {
+    const viewer = await activeMember(principal);
+    const access = accessMembershipFence(principal,viewer);
+    const row = await statement(`SELECT a.image FROM profile_avatars a
+      JOIN memberships subject ON subject.user_id=a.user_id JOIN users u ON u.id=subject.user_id
+      WHERE a.user_id=? AND a.digest=? AND subject.team_id=? AND subject.status='active' AND u.status='active'
+      AND EXISTS(SELECT 1 FROM memberships m JOIN users v ON v.id=m.user_id WHERE m.id=? AND m.team_id=subject.team_id
+        AND m.user_id=? AND m.status='active' AND m.epoch=? AND v.status='active') AND ${access.predicate}`,
+      id,digest,viewer.membership.teamId,viewer.membership.id,viewer.user.id,viewer.membership.epoch,...access.values).first<{image:string}>();
+    if (!row) throw new DomainError('NOT_FOUND','头像暂不可见。',404);
+    return { bytes:avatarBytes(row.image.slice(row.image.indexOf(',')+1)), type:row.image.slice(5,row.image.indexOf(';')) };
+  }
   async function updateProfile(principal: Principal | null, input: unknown, key: string): Promise<WriteResult> {
     const current = authenticated(principal);
-    const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'position', 'expectedVersion']);
+    const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'position', 'expectedVersion', 'avatar']);
     if (raw.position !== undefined && !['', '接盘手', '持盘手', '防守组'].includes(String(raw.position))) throw new DomainError('INVALID_INPUT', '请选择有效的场上位置。');
     const details = { ...profile(raw), ...(raw.position === undefined ? {} : { position: raw.position }), bio: raw.bio === undefined ? undefined : raw.bio };
     if (details.bio !== undefined && (typeof details.bio !== 'string' || details.bio.trim().length > 160)) throw new DomainError('INVALID_INPUT', '简介最多160字。');
     if (!Number.isSafeInteger(raw.expectedVersion) || Number(raw.expectedVersion) < 1) throw new DomainError('INVALID_INPUT', '请重新加载资料后再保存。');
     const context = await businessAccount(current);
     if (context.user?.status !== 'active' || !context.profile) throw new DomainError('FORBIDDEN', '请先完成建档。', 403);
-    const op = await operation(context.user.id, 'profile', context.user.id, key, { ...details, expectedVersion: raw.expectedVersion });
+    if (raw.avatar !== undefined && context.membership?.status !== 'active')
+      throw new DomainError('FORBIDDEN','仅有效队员可更新头像。',403);
+    const avatar = await validateAvatar(raw.avatar);
+    const op = await operation(context.user.id, 'profile', context.user.id, key, {
+      ...details, expectedVersion: raw.expectedVersion, ...(avatar !== undefined && {avatar:avatar?.digest ?? null})
+    });
     if (op.replay) return { operationId: op.opId, me: await me(current) };
     try {
       const access = accessMembershipFence(current, context);
@@ -321,6 +339,14 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
         assertGuard(db, op.opId, 'version', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, raw.expectedVersion]),
         statement('UPDATE profiles SET disc_name=?,jersey_number=?,bio=COALESCE(?,bio),version=version+1 WHERE user_id=? AND version=?', details.discName, details.jerseyNumber, typeof details.bio === 'string' ? details.bio.trim() : null, context.user.id, raw.expectedVersion),
         ...(typeof raw.position === 'string' ? [statement('UPDATE profiles SET position=? WHERE user_id=?', raw.position, context.user.id)] : []),
+        ...(avatar === undefined ? [] : [
+          assertGuard(db,op.opId,'avatar-member',`EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id
+            WHERE m.user_id=? AND m.id=? AND m.epoch=? AND u.status='active' AND m.status='active')`,
+            [context.user.id,context.membership!.id,context.membership!.epoch]),
+          avatar === null ? statement('DELETE FROM profile_avatars WHERE user_id=?',context.user.id)
+            : statement(`INSERT INTO profile_avatars(user_id,digest,image) VALUES(?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET digest=excluded.digest,image=excluded.image`,context.user.id,avatar.digest,avatar.url)
+        ]),
         assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, Number(raw.expectedVersion) + 1]),
       ], { userId: context.user.id });
       return { operationId: committed.operationId, me: await me(current) };
@@ -353,7 +379,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   const businessAccount = (p: Principal | null) => p?.provider === 'access' ? activeMember(p) : me(p);
   const reflections = createReflectionService({ db, clock, activeMember, me: businessAccount, operation });
   const { attemptLearningInclusion, ...topics } = createTopicCollections({ db, clock, activeMember, operation, topicPolicy });
-  return { readVideoCover: (source: string | null) => videoCover(bucket, source), me, getAccount, getBootstrap, bootstrap, join, updateProfile, createInvite, activeMember, ...reflections,
+  return { readVideoCover: (source: string | null) => videoCover(bucket, source), me, getAccount, getBootstrap, bootstrap, join, updateProfile, getProfileAvatar, createInvite, activeMember, ...reflections,
     ...createDataRightsService({ db, clock, activeMember, me: businessAccount, operation }),
     ...topics,
     ...createLearningActivity({ db, clock, activeMember, operation }),

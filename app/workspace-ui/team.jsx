@@ -1,6 +1,8 @@
+import { createRequestKey } from '../../lib/client/api';
+import { ProfileForm } from './profile-form';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ShieldCheck, RotateCcw, LockKeyhole,
+  Camera, ShieldCheck, RotateCcw, LockKeyhole,
   ChevronLeft, ChevronRight, RefreshCw,
   BookOpen,
   Layers,
@@ -14,9 +16,9 @@ import {
   Users,
 } from 'lucide-react';
 import { NavLink, useNav, useTitle } from './router';
-import { Empty, Modal, PageHead, Segments, usePreference } from './ui';
+import { Avatar, Empty, Modal, PageHead, Segments, usePreference } from './ui';
 import { DateMark, teamPhoto, Jersey, newspaperDate } from './press';
-import { eventTime, kindName, localDay, shortDate, useData } from './store';
+import { eventTime, kindName, localDay, shortDate, useData, useRoster } from './store';
 import { noteCategoryLabel } from './categories.js';
 import { catalogEntries } from './collection-model';
 import { FeedStatus } from './collections';
@@ -262,11 +264,13 @@ export function Activity() {
 }
 export function Members() {
   useTitle('队伍成员');
-  const { people, ctx } = useData();
+  const { ctx } = useData();
+  const people = useRoster();
   const {params} = useNav();
   const requested = params.get('person');
   const [query, setQuery] = useState(''),
-    [person, setPerson] = useState(() => people.find(p => p.id === (requested === ctx.account.user.id ? 'me' : requested)) || null);
+    [selectedId,setSelectedId] = useState(requested === ctx.account.user.id ? 'me' : requested);
+  const person = people.find(p=>p.id===selectedId);
   const visible = people.filter((p) => (p.name + p.number + p.position).includes(query.trim()));
   return (
     <div className="page-width roster-page">
@@ -291,13 +295,13 @@ export function Members() {
                 <span>场上位置</span>
               </div>
               {visible.map((p) => (
-                <button type="button" key={p.id} className="member" onClick={() => setPerson(p)}>
+                <button type="button" key={p.id} className="member" onClick={() => setSelectedId(p.id)}>
                   <b className="jersey-num" data-wide={String(p.number).length > 2}>
                     {p.number || '—'}
                   </b>
-                  <span>
-                    <strong>{p.name}</strong>
-                    <small>{p.role}</small>
+                  <span className="member-name">
+                    <Avatar person={p}/><span><strong>{p.name}</strong>
+                    <small>{p.role}</small></span>
                   </span>
                   <span className="position">{p.position}</span>
                   <ArrowUpRight size={17} />
@@ -320,7 +324,7 @@ export function Members() {
       <Modal
         open={!!person}
         onOpenChange={(v) => {
-          if (!v) setPerson(null);
+          if (!v) setSelectedId(null);
         }}
         title="队员档案"
         className="member-modal"
@@ -329,6 +333,7 @@ export function Members() {
           <div className="member-profile">
             <Jersey person={person} compact />
             <div>
+              <div className="member-portrait"><Avatar person={person} large/></div>
               <h2>
                 {person.name}
                 {person.number && <span className="sr">，背号 {person.number}</span>}
@@ -337,7 +342,7 @@ export function Members() {
                 {person.role} · {person.position}
               </p>
               <p>{person.bio || '尚未填写简介。'}</p>
-              <MemberReflections key={person.id} id={person.id === 'me' ? ctx.account.user.id : person.id} close={() => setPerson(null)} />
+              <MemberReflections key={person.id} id={person.id === 'me' ? ctx.account.user.id : person.id} close={() => setSelectedId(null)} />
             </div>
           </div>
         )}
@@ -369,17 +374,23 @@ export function Account() {
   const { db, ctx, notify, trainings, collections, logout } = useData(),
     p = db.profile;
   const { params } = useNav();
-  const [edit, setEdit] = useState(() => params.get('edit') === '1'),
-    [form, setForm] = useState(p);
-  const [saving,setSaving] = useState(false), [error,setError] = useState('');
-  async function save(e) {
-    e.preventDefault();
-    if (!form.name.trim() || saving) return;
-    setSaving(true);setError('');
+  const [editor,setEditor] = useState(()=>params.get('edit') === '1' ? {profile:p,version:ctx.account.profile.version} : null);
+  const [saving,setSaving] = useState(false);
+  const requestKey = useRef(createRequestKey()).current;
+  function openEditor() {setEditor({profile:p,version:ctx.account.profile.version});}
+  async function save(form,avatar) {
+    const fields = {discName:form.name,jerseyNumber:form.number.trim(),position:form.position,bio:form.bio,
+      expectedVersion:editor.version,...(avatar !== undefined && {avatar})};
     try {
-      await ctx.write('me','PATCH',{discName:form.name.trim(),jerseyNumber:form.number.trim(),bio:form.bio.trim(),position:form.position,expectedVersion:ctx.account.profile.version});
-      await ctx.refresh();setEdit(false);notify('个人资料已保存');
-    } catch(err){setError(err.message);} finally {setSaving(false);}
+      await ctx.write(avatar === undefined ? 'me' : 'me/profile','PATCH',fields,requestKey(ctx.actorId,fields));
+    } catch (error) {
+      if (error.code !== 'VERSION_CONFLICT') throw error;
+      await ctx.refresh();
+      throw new Error('资料已在其他页面更新。请重新打开编辑框后保存。');
+    }
+    await ctx.refresh();
+    setEditor(null);
+    notify('个人资料已保存');
   }
   return (
     <div className="page-width account-page">
@@ -390,6 +401,9 @@ export function Account() {
         </div>
         <div className="account-copy">
           <div className="identity-mid">
+            <button type="button" className="account-avatar" onClick={openEditor} aria-label="修改头像" title="修改头像">
+              <Avatar person={p} large/><span className="avatar-camera"><Camera size={13} aria-hidden="true"/></span>
+            </button>
             <h2>{p.name}</h2>
             <span>{p.number ? '#' + p.number : '未设置背号'}</span>
           </div>
@@ -397,10 +411,7 @@ export function Account() {
           <button
             type="button"
             className="btn"
-            onClick={() => {
-              setForm(p);
-              setEdit(true);
-            }}
+            onClick={openEditor}
           >
             <Pencil size={15} />
             编辑个人资料
@@ -447,59 +458,8 @@ export function Account() {
           <ExternalLink size={13} />
         </a>
       </footer>
-      <Modal title="编辑个人资料" open={edit} onOpenChange={setEdit}>
-        <form className="modal-form" onSubmit={save}>
-          <label>
-            盘名
-            <input
-              required
-              maxLength={20}
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
-          </label>
-          <div className="form-pair">
-            <label>
-              背号
-              <input
-                required
-                maxLength={4}
-                value={form.number}
-                onChange={(e) => setForm({ ...form, number: e.target.value })}
-              />
-            </label>
-            <label>
-              场上位置
-              <select
-                value={form.position}
-                onChange={(e) => setForm({ ...form, position: e.target.value })}
-              >
-                <option value="">尚未选择</option>
-                {['接盘手', '持盘手', '防守组'].map((v) => (
-                  <option key={v}>{v}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <label>
-            简介
-            <textarea
-              rows={3}
-              maxLength={160}
-              value={form.bio}
-              onChange={(e) => setForm({ ...form, bio: e.target.value })}
-            />
-          </label>
-          {error && <p role="alert">{error}</p>}
-          <div className="form-buttons">
-            <button type="button" className="btn" onClick={() => setEdit(false)}>
-              取消
-            </button>
-            <button type="submit" className="btn primary" disabled={saving || !form.name.trim()}>
-              保存资料
-            </button>
-          </div>
-        </form>
+      <Modal title="编辑个人资料" open={!!editor} onOpenChange={open=>{if (!open && !saving) setEditor(null);}}>
+        {editor && <ProfileForm profile={editor.profile} onSave={save} onBusy={setSaving} onCancel={()=>setEditor(null)}/>}
       </Modal>
     </div>
   );

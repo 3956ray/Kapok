@@ -16,6 +16,12 @@ export const profiles = sqliteTable('profiles', {
 export const teams = sqliteTable('teams', {
   id: text('id').primaryKey(), singleton: integer('singleton').notNull(), name: text('name').notNull(), description: text('description').notNull(), createdAt: text('created_at').notNull(),
 }, t => [uniqueIndex('team_singleton').on(t.singleton), check('team_slot', sql`${t.singleton}=1`)]);
+export const profileAvatars = sqliteTable('profile_avatars', {
+    userId: text('user_id').primaryKey().references(() => profiles.userId, {onDelete:'cascade'}),
+    digest: text('digest').notNull(),
+    image: text('image').notNull(),
+}, t => [check('avatar_digest', sql`length(${t.digest})=64`), check('avatar_image', sql`length(${t.image}) BETWEEN 1 AND 410000`)]);
+
 export const memberships = sqliteTable('memberships', {
   id: text('id').primaryKey(), teamId: text('team_id').notNull().references(() => teams.id), userId: text('user_id').notNull().references(() => users.id),
   role: text('role', { enum: ['admin', 'coach', 'member'] }).notNull(), status: text('status', { enum: ['active', 'paused', 'left'] }).notNull(), epoch: integer('epoch').notNull(), version: integer('version').notNull().default(1), joinedAt: text('joined_at').notNull(),

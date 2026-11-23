@@ -15,10 +15,14 @@ export function Mark({ small = false }) {
     </span>
   );
 }
-export function Avatar({ person, large = false }) {
+export function Avatar({ person, large = false, preview }) {
+  const url = preview ?? person.avatarUrl;
+  const [failed, setFailed] = useState('');
   return (
-    <span aria-hidden="true" className={'avatar tone-' + person.tone + (large ? ' large' : '')}>
-      {person.name.slice(-1)}
+    <span aria-hidden="true" className={'avatar tone-' + (person.tone || 'forest') + (large ? ' large' : '')}>
+      {url && url !== failed
+        ? <img src={url} loading={large ? 'eager' : 'lazy'} decoding="async" alt="" onError={() => setFailed(url)} />
+        : Array.from(person.name.trim()).at(-1) || '·'}
     </span>
   );
 }

@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSignOut } from '../components/signout';
 import { draftKey } from '../../lib/client/session-guard';
 import { api } from '../../lib/client/api';
@@ -29,6 +29,7 @@ export const useData = () => useContext(Store);
 const roleNames = { member:'队员', coach:'教练', admin:'管理员' };
 function person(row, ownId) {
   return { id: row.id === ownId ? 'me' : row.id, name: row.discName, number: row.jerseyNumber,
+    avatarUrl: row.avatarDigest ? '/api/v1/profile-avatars/'+encodeURIComponent(row.id)+'/'+row.avatarDigest : '',
     position: row.position || '', bio: row.bio || '', role: roleNames[row.role] || '队员', tone: 'forest' };
 }
 const workspaceRead = { confirmedPath: 'workspace' };
@@ -39,8 +40,23 @@ function snapshot(payload) {
   const growth = presentGrowth(payload);
   const topics = presentTopics(payload.topics);
   const people = members.map(row=>person(row,account.user.id));
-  const profile = person({ ...account.profile, id:account.user.id, role:account.membership.role },account.user.id);
+  const own = members.find(row => row.id === account.user.id);
+  const profile = person({ ...account.profile, avatarDigest:own?.avatarDigest, id:account.user.id, role:account.membership.role },account.user.id);
   return { ...materials,...growth,...topics,profile,people,account };
+}
+
+// Reopening a roster or discussion resolves current identities, including on an already-open teammate tab.
+export function useRoster() {
+  const {ctx,people} = useData();
+  const [result,setResult] = useState(null);
+  useEffect(()=>{
+    const controller = new AbortController();
+    ctx.read('members',controller.signal).then(rows=>{
+      if (!controller.signal.aborted) setResult({ctx,people:rows.map(row=>person(row,ctx.account.user.id))});
+    }).catch(()=>{});
+    return ()=>controller.abort();
+  },[ctx]);
+  return result?.ctx === ctx ? result.people : people;
 }
 
 export function DataProvider({actorId,logoutHref,children}) {

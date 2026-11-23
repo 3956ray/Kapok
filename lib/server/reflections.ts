@@ -650,11 +650,12 @@ export function createReflectionService({
     async function listMembers(p: Principal | null): Promise<PublicMember[]> {
         const c = await activeMember(p);
         return (await q(
-            `SELECT u.id,p.*,p.disc_name AS discName,p.jersey_number AS jerseyNumber,m.role FROM memberships m
+            `SELECT u.id,p.*,p.disc_name AS discName,p.jersey_number AS jerseyNumber,m.role,a.digest AS avatarDigest FROM memberships m
                         JOIN users u ON u.id=m.user_id JOIN profiles p ON p.user_id=u.id
+                        LEFT JOIN profile_avatars a ON a.user_id=u.id
                         WHERE m.team_id=? AND m.status='active' AND u.status='active' ORDER BY p.disc_name,u.id`,
             c.membership.teamId
-        ).all<PublicMember>()).results.map(({ id, discName, jerseyNumber, role, bio, position }) => ({ id, discName, jerseyNumber, role, bio, ...(position ? { position } : {}) }));
+        ).all<PublicMember>()).results.map(({ id, discName, jerseyNumber, role, bio, position, avatarDigest }) => ({ id, discName, jerseyNumber, role, bio, ...(avatarDigest ? {avatarDigest} : {}), ...(position ? { position } : {}) }));
     }
     async function getMemberProfile(p: Principal | null, id: string): Promise<PublicProfile> {
         const c = await activeMember(p);

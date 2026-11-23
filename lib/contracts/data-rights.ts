@@ -18,7 +18,7 @@ export type ManagedMember = NonNullable<Me['membership']> & {
 export type PersonalExport = {
     format: 'kapok-personal-v1';
     generatedAt: string;
-    profile: { discName: string; jerseyNumber: string; bio?: string };
+    profile: { discName: string; jerseyNumber: string; bio?: string; avatar?: string };
     reflections: {
         category: string | null;
         id: string;

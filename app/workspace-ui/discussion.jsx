@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Clock3, CornerDownRight, Play, Send, X } from 'lucide-react';
 import { useNav } from './router';
-import { shortDate, uid, useData } from './store';
+import { shortDate, uid, useData, useRoster } from './store';
 import { Avatar, Modal } from './ui';
 
 import { isReferenceSecond, maxTimepoints, parseTimeLabel, referenceTimeError, timeLabel } from './timepoints.js';
@@ -19,7 +19,8 @@ export default function Discussion(props) {
 }
 function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
   const { duration } = measure;
-  const { db, ctx, people, notify } = useData();
+  const { db, ctx, notify } = useData();
+  const people = useRoster();
   const video=general?null:t.selectedVideo;
   const trainingThread=t.kind==='training' && !video;
   const readPath=trainingThread?'trainings/'+t.id+'/discussion':video?'page-read/video-discussion/'+video.id:'page-read/article-discussion/'+t.id+'?version='+t.publishedVersion;
@@ -129,7 +130,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
   function personFor(id, savedName) {
     if (id === 'me') return db.profile;
     const member = people.find((p) => p.id === id);
-    return { name: savedName || member?.name || '队友', tone: member?.tone || 'sage' };
+    return { avatarUrl:member?.avatarUrl, name: savedName || member?.name || '队友', tone: member?.tone || 'sage' };
   }
   async function add(e) {
     e.preventDefault();

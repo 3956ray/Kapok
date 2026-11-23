@@ -23,7 +23,7 @@ import {
 import { downloadOwnData } from '../../lib/client/data-export';
 import { NavLink, useTitle } from './router';
 import { Avatar, Back, Empty, Modal, PageHead } from './ui';
-import { day, shortDate, useData } from './store';
+import { day, shortDate, useData, useRoster } from './store';
 import { catalogEntries, matchText } from './collection-model';
 import { MediaCover, fieldPhoto } from './press';
 const sections = [
@@ -295,6 +295,7 @@ function Notices({rows,reload}) {
 const roleNames = {member:'队员',coach:'教练',admin:'管理员'};
 const statusNames = {active:'正常',paused:'暂停',left:'离队'};
 function MemberDesk({rows,reload}) {
+  const roster = useRoster();
   const {ctx,notify} = useData();
   const [edit,setEdit] = useState(null);
   const action = useDeskAction();
@@ -324,7 +325,7 @@ function MemberDesk({rows,reload}) {
         const rights = p;
         return (
           <article className="desk-row" key={p.id}>
-            <Avatar person={p} />
+            <Avatar person={p} preview={roster.find(person=>person.id===(p.id===ctx.account.user.id?'me':p.id))?.avatarUrl}/>
             <div className="desk-copy">
               <strong>
                 {p.name}

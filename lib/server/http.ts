@@ -1,3 +1,4 @@
+import { maxAvatarJsonBytes } from './profile-avatar.ts';
 import { learningCategoryPath, learningJsonBytes } from '../contracts/learning.ts';
 import type { Principal } from '../contracts/index';
 import { DomainError } from './domain.ts';
@@ -20,7 +21,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     }
     const method = request.method;
     const putBytes = method === 'PUT' && /^(?:material-assets\/[^/]+|uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
-    const maxBody = method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
+    const maxBody = method === 'PATCH' && route === 'me/profile' ? maxAvatarJsonBytes : method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
     if (!['GET', 'HEAD'].includes(method)) {
       if (request.headers.get('Origin') !== new URL(request.url).origin) throw new DomainError('FORBIDDEN', '请从本站提交操作。', 403);
       if (request.headers.get('X-Kapok-Actor') !== actor) throw new DomainError('ACCOUNT_CHANGED', '登录账号已变化，请重新加载页面后再提交。', 409);
@@ -40,6 +41,10 @@ export async function dispatchApi(request: Request, path: string[], principal: P
         source = post.video?.url ?? null;
       } else throw new DomainError('NOT_FOUND','未找到封面。',404);
       return service.readVideoCover(source);
+    }
+    if (method === 'GET' && path[0] === 'profile-avatars' && path.length === 3) {
+      const image = await service.getProfileAvatar(principal,path[1],path[2]);
+      return new Response(image.bytes,{headers:{...privateHeaders,'Content-Type':image.type,'X-Kapok-Actor':actor}});
     }
     if (principal.provider === 'access' && !allowedBeforeJoining) await service.activeMember(principal);
     const key = request.headers.get('Idempotency-Key') ?? '';
@@ -160,7 +165,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'PATCH' && path[0] === 'admin' && path[1] === 'members' && path.length === 3) data = await service.updateMembership(principal, path[2], await body(), key);
     else if (method === 'GET' && route === 'me') data = await service.getAccount(principal);
     else if (method === 'POST' && route === 'join') data = await service.join(principal, await body(), key);
-    else if (method === 'PATCH' && route === 'me') data = await service.updateProfile(principal, await body(), key);
+    else if (method === 'PATCH' && (route === 'me' || route === 'me/profile')) data = await service.updateProfile(principal, await body(), key);
     else if (method === 'GET' && route === 'reflections') data = await service.listMyReflections(principal);
     else if (method === 'POST' && route === 'reflections') data = await service.saveReflection(principal, null, await body(), key);
     else if (method === 'POST' && path[0] === 'reflections' && path[2] === 'restore' && path.length === 3) data = await service.restoreReflection(principal, path[1], await body(), key);

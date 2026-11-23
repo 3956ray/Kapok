@@ -62,6 +62,7 @@ export type ActivityPage = {
     nextCursor: string | null;
 };
 export type PublicMember = {
+    avatarDigest?: string;
     position?: string;
     bio?: string;
     id: string;

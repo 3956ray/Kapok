@@ -77,7 +77,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                     WHERE v.id=ti.source_id AND v.team_id=tc.team_id AND ${topicVideoVisible})))`)}) AS entry
             FROM topic_collection_items ti WHERE ti.collection_id=tc.id AND ti.snapshot=${snapshot} ORDER BY ti.position))`;
         const result = await db.batch([
-            owned('SELECT p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio FROM profiles p JOIN owner o ON o.id=p.user_id'),
+            owned('SELECT p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio,a.image AS avatar FROM profiles p JOIN owner o ON o.id=p.user_id LEFT JOIN profile_avatars a ON a.user_id=p.user_id'),
             owned(`SELECT r.id,r.title,r.text,r.category,r.date,r.training_id AS trainingId,r.video_id AS videoId,
                 r.source_kind AS sourceKind,r.source_id AS sourceId,r.deleted_at AS deletedAt,r.created_at AS createdAt,r.updated_at AS updatedAt,
                 CASE WHEN ${publishedLearningLink('r.source_kind', 'r.source_id', 'o.id')} IS NOT NULL
@@ -157,7 +157,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             materialAssets:result[9].results as PersonalExport['materialAssets'],
             trainingDiscussions:result[10].results as PersonalExport['trainingDiscussions'],
             generatedAt: clock().toISOString(),
-            profile,
+            profile: profile.avatar ? profile : {discName:profile.discName,jerseyNumber:profile.jerseyNumber,bio:profile.bio},
             reflections: availability<PersonalExport['reflections'][number]>(result[1].results),
             collections: availability<PersonalExport['collections'][number]>(result[2].results),
             comments: availability<PersonalExport['comments'][number]>(result[3].results),

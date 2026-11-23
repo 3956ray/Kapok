@@ -23,9 +23,10 @@ function validCrc(bytes: Uint8Array, start: number, end: number, expected: numbe
     return (crc ^ 0xffffffff) >>> 0 === expected;
 }
 
-async function png(bytes: Uint8Array<ArrayBuffer>, view: DataView): Promise<Dimensions> {
+async function png(bytes: Uint8Array<ArrayBuffer>, view: DataView, maxEdge: number): Promise<Dimensions> {
     if (bytes.length < 45 || tag(bytes, 12) !== 'IHDR' || view.getUint32(8) !== 13) throw invalid();
     const size = dimensions(view.getUint32(16), view.getUint32(20));
+    if (size.width > maxEdge || size.height > maxEdge) throw invalid();
     const [depth, color, compression, filter, interlace] = bytes.subarray(24, 29);
     const channels = [1, 0, 3, 1, 2, 0, 4][color];
     const depths = color === 0 ? [1, 2, 4, 8, 16] : color === 3 ? [1, 2, 4, 8] : [8, 16];
@@ -245,7 +246,7 @@ function webp(bytes: Uint8Array, view: DataView): Dimensions {
     return image;
 }
 
-export async function validatedLearningImage(body: ReadableStream<Uint8Array> | null, declaredType: string | null, maxBytes: number) {
+export async function validatedLearningImage(body: ReadableStream<Uint8Array> | null, declaredType: string | null, maxBytes: number, maxEdge: number = learningImageDimensions.maxEdge) {
     if (!body || !['image/png', 'image/jpeg', 'image/webp'].includes(declaredType ?? '')) throw invalid();
     const reader = body.getReader();
     const buffer = new Uint8Array(maxBytes);
@@ -272,7 +273,7 @@ export async function validatedLearningImage(body: ReadableStream<Uint8Array> | 
     let size: Dimensions;
     if (pngMagic.every((value, index) => bytes[index] === value)) {
         mimeType = 'image/png';
-        size = await png(bytes, view);
+        size = await png(bytes, view, maxEdge);
     } else if (bytes[0] === 255 && bytes[1] === 0xd8) {
         mimeType = 'image/jpeg';
         size = jpeg(bytes, view);
@@ -282,7 +283,7 @@ export async function validatedLearningImage(body: ReadableStream<Uint8Array> | 
     } else {
         throw invalid();
     }
-    if (mimeType !== declaredType) throw invalid();
+    if (mimeType !== declaredType || size.width > maxEdge || size.height > maxEdge) throw invalid();
     const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => n.toString(16).padStart(2, '0')).join('');
     return { bytes, mimeType, digest, ...size };
 }
