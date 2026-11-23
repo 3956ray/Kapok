@@ -40,7 +40,7 @@ function biliImage(value: unknown) {
         const url = new URL(value, 'https://www.bilibili.com');
         if (!['http:', 'https:'].includes(url.protocol) || !/^i[0-9]+\.hdslb\.com$/.test(url.hostname) ||
             !url.pathname.startsWith('/bfs/') || url.port || url.username || url.password) return null;
-        return 'https://' + url.hostname + url.pathname + '@960w.webp';
+        return 'https://' + url.hostname + url.pathname.split('@', 1)[0] + '@960w.webp';
     } catch { return null; }
 }
 

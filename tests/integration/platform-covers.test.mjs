@@ -34,7 +34,7 @@ test('Bilibili retrieves the upload cover from the video page when metadata is u
   t.mock.method(globalThis,'fetch', async (url, opts) => {
     assert.equal(opts.redirect,'error');
     if (url.includes('api.bilibili.com')) return new Response('',{status:412});
-    if (url.includes('www.bilibili.com')) return new Response('<meta content="//i0.hdslb.com/bfs/archive/test.jpg" property="og:image">');
+    if (url.includes('www.bilibili.com')) return new Response('<meta content="//i0.hdslb.com/bfs/archive/test.jpg@1200w_630h" property="og:image">');
     assert.equal(url,'https://i0.hdslb.com/bfs/archive/test.jpg@960w.webp');
     return new Response(jpeg);
   });
