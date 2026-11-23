@@ -1,9 +1,11 @@
+import { saveNote } from './growth.js';
 import { notePhotos, splitLayout } from './note-layout.js';
 import { readWorkspaceDrafts } from './local-drafts.js';
 import { learningBounds, learningImageDimensions } from '../../lib/contracts/learning.ts';
 import { draftKey } from '../../lib/client/session-guard.ts';
 
-async function imageStore(actorId, mode, action) {
+async function imageStore(actorId, mode, action, signal) {
+  signal?.throwIfAborted();
   if (!actorId) throw new Error('请重新确认账号。');
   const db = await new Promise((resolve, reject) => {
     const open = indexedDB.open('kapok:note-images:' + encodeURIComponent(actorId), 1);
@@ -16,11 +18,15 @@ async function imageStore(actorId, mode, action) {
     open.onerror = () => reject(new Error('无法打开本机图片库，请检查浏览器存储权限。'));
   });
   try {
+    signal?.throwIfAborted();
     return await new Promise((resolve, reject) => {
       const tx = db.transaction('photos', mode);
       const request = action(tx.objectStore('photos'));
-      tx.oncomplete = () => resolve(request?.result);
-      tx.onabort = () => reject(new Error('图片未能存入本机，请检查可用空间后重试。'));
+      const abort = () => { try { tx.abort(); } catch { /* Already completed. */ } };
+      signal?.addEventListener('abort', abort, { once: true });
+      const finish = () => signal?.removeEventListener('abort', abort);
+      tx.oncomplete = () => { finish(); resolve(request?.result); };
+      tx.onabort = () => { finish(); reject(signal?.reason || Error('图片未能存入本机，请检查可用空间后重试。')); };
     });
   } finally { db.close(); }
 }
@@ -41,9 +47,10 @@ async function thumbnailFor(image, file) {
   return null;
 }
 
-export async function stageNoteImages(actorId, files) {
+export async function stageNoteImages(actorId, files, signal) {
   const records = [];
   for (const file of files) {
+    signal?.throwIfAborted();
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('请选择 JPG、PNG 或 WebP 图片。');
     if (!file.size || file.size > learningBounds.maxImageBytes) throw new Error('每张图片需有内容，且不超过 8 MB。');
     const bytes = await file.arrayBuffer();
@@ -72,7 +79,7 @@ export async function stageNoteImages(actorId, files) {
   }
   await imageStore(actorId, 'readwrite', store => {
     for (const record of records) store.put(record, record.id);
-  });
+  }, signal);
   return records.map(({ id }) => ({ localId: id, alt: '' }));
 }
 
@@ -124,6 +131,9 @@ export function persistPrivateLayout(actorId, saved, operation) {
   } else {
     try { localStorage.removeItem(key); } catch { /* Cleared server marker supersedes stale local layout. */ }
   }
+  if (operation.key) {
+    try { localStorage.removeItem(layoutPrefix(actorId) + 'unconfirmed:' + operation.key); } catch { /* Harmless duplicate for export. */ }
+  }
 }
 
 // Keep the selected original available for the author's export. Only the team-facing copy needs the service's pixel bound.
@@ -158,6 +168,8 @@ async function uploadOriginal(record) {
   } finally { URL.revokeObjectURL(source); }
 }
 
+const receiptLifetime = 10 * 60 * 1000;
+
 export async function uploadNoteImages(ctx, layout, progress) {
   const photos = layout.filter(photo => photo.localId);
   if (!photos.length) return;
@@ -168,12 +180,13 @@ export async function uploadNoteImages(ctx, layout, progress) {
     const record = await readNoteImage(ctx.actorId, photo.localId);
     for (const variant of ['content', 'thumbnail']) {
       const receipt = variant + 'UploadedAt';
-      if (Date.now() - record[receipt] < 10 * 60 * 1000) continue;
+      if (Date.now() - record[receipt] < receiptLifetime) continue;
       const blob = variant === 'thumbnail' ? storedBlob(record, true) : await uploadOriginal(record);
       if (!blob) continue;
       // Persist derived content before PUT. A dropped response can be replayed with identical bytes.
-      if (variant === 'content' && record.uploadBytes) {
-        await imageStore(ctx.actorId, 'readwrite', store => store.put(record, photo.localId));
+      if (variant === 'content') {
+        record.uploadAttempted = true;
+        await imageStore(ctx.actorId, 'readwrite', store => store.put(record, photo.localId), ctx.signal);
       }
       const response = await fetch('/api/v1/workspace/note-images/' + encodeURIComponent(photo.id) + '/' + variant, {
         method: 'PUT', credentials: 'same-origin', cache: 'no-store', signal: ctx.signal,
@@ -186,8 +199,94 @@ export async function uploadNoteImages(ctx, layout, progress) {
       if (response.headers.get('X-Kapok-Actor') !== ctx.actorId || result?.data?.id !== photo.id)
         throw Error('请重新确认登录账号。');
       record[receipt] = Date.now();
-      await imageStore(ctx.actorId, 'readwrite', store => store.put(record, photo.localId));
+      await imageStore(ctx.actorId, 'readwrite', store => store.put(record, photo.localId), ctx.signal);
     }
+  }
+}
+
+// Reconcile a possibly committed write with its original key before requiring bytes from the device.
+export async function saveIllustratedNote(ctx, operation, mark, progress) {
+  if (operation.scope !== 'team' || !operation.layout?.some(photo => photo.localId)) return saveNote(ctx, operation);
+  if (operation.uploadedAt || operation.uploaded) {
+    try { return await saveNote(ctx, operation); }
+    catch (error) {
+      if (!error.beforeSave || !['VERSION_CONFLICT', 'INVALID_INPUT'].includes(error.code) ||
+          Date.now() - (operation.uploadedAt || 0) < receiptLifetime) throw error;
+      // The service confirmed refusal. Detached uploads may have expired while this draft was closed.
+    }
+  }
+  try { await uploadNoteImages(ctx, operation.layout, progress); }
+  catch (error) { error.beforeSave = true; throw error; }
+  const sent = { ...operation, uploadedAt: Date.now() };
+  mark(sent);
+  progress('');
+  return saveNote(ctx, sent);
+}
+
+export async function cancelDetachedNoteImages(ctx, ids) {
+  // The DELETE is owner- and detached-only. Invalidate receipts before it, even if its response is lost.
+  await Promise.allSettled([...new Set(ids)].map(async id => {
+    const record = await readNoteImage(ctx.actorId, id);
+    if (!record.uploadAttempted && !record.contentUploadedAt) return;
+    delete record.contentUploadedAt;
+    delete record.thumbnailUploadedAt;
+    delete record.uploadAttempted;
+    await imageStore(ctx.actorId, 'readwrite', store => store.put(record, id), ctx.signal);
+    await ctx.write('workspace/note-images/' + encodeURIComponent(id), 'DELETE', {}, id + '-discard');
+  }));
+}
+
+function accountLayouts(storage, actorId) {
+  const prefix = layoutPrefix(actorId);
+  const layouts = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key?.startsWith(prefix)) layouts.push(JSON.parse(storage.getItem(key)));
+  }
+  return layouts;
+}
+
+function draftFiles(draft) {
+  return [...(draft.deviceImageIds || []), ...(draft.stagedImageIds || []),
+    ...notePhotos(draft).map(p => p.localId), ...(draft.operation?.layout || []).map(p => p.localId)].filter(Boolean);
+}
+
+export async function discardLocalDraftFiles(ctx, draft) {
+  const candidates = new Set(draftFiles(draft));
+  if (!candidates.size) return;
+  const drafts = readWorkspaceDrafts(localStorage, draftKey(ctx.actorId, 'bloom-notes'));
+  for (const other of Object.values(drafts)) for (const id of draftFiles(other)) candidates.delete(id);
+  for (const saved of accountLayouts(localStorage, ctx.actorId)) for (const p of saved.photos) candidates.delete(p.localId);
+  if (candidates.size) await imageStore(ctx.actorId, 'readwrite', store => {
+    for (const id of candidates) store.delete(id);
+  }, ctx.signal);
+}
+
+export async function clearUnsavedNoteImages(actorId, storage, signal) {
+  signal.throwIfAborted();
+  const drafts = Object.values(readWorkspaceDrafts(storage, draftKey(actorId, 'bloom-notes')));
+  const candidates = new Set(drafts.flatMap(draftFiles));
+  if (!candidates.size) return;
+  const uncertain = [];
+  for (const draft of drafts) {
+    const op = draft.operation;
+    if (op?.scope === 'private' && op.body?.hasLocalPhotos && op.layout?.length) {
+      // Its private row might already exist even if the response never arrived.
+      uncertain.push({ operation: op.key, noteId: op.id, photos: op.layout });
+    }
+  }
+  const saved = accountLayouts(storage, actorId);
+  for (const entry of [...saved, ...uncertain]) {
+    for (const p of entry.photos) candidates.delete(p.localId);
+  }
+  // These limited records survive ordinary text-draft removal and remain available to an authorized export.
+  for (const entry of uncertain) {
+    storage.setItem(layoutPrefix(actorId) + 'unconfirmed:' + entry.operation, JSON.stringify(entry));
+  }
+  if (candidates.size) {
+    await imageStore(actorId, 'readwrite', store => {
+      for (const id of candidates) store.delete(id);
+    }, signal);
   }
 }
 
@@ -196,13 +295,8 @@ export async function pruneNoteImages(actorId) {
   const daysAgo = Date.now() - 86400000;
   const db = readWorkspaceDrafts(localStorage, draftKey(actorId, 'bloom-notes'));
   const used = new Set(Object.values(db).flatMap(notePhotos).map(p => p.localId));
-  const prefix = layoutPrefix(actorId);
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith(prefix)) {
-      const layout = JSON.parse(localStorage.getItem(key));
-      for (const p of layout.photos) if (p.localId) used.add(p.localId);
-    }
+  for (const layout of accountLayouts(localStorage, actorId)) {
+    for (const p of layout.photos) if (p.localId) used.add(p.localId);
   }
   await imageStore(actorId, 'readwrite', store => {
     const request = store.index('added').openKeyCursor(IDBKeyRange.upperBound(daysAgo));
@@ -225,6 +319,8 @@ export async function localImageExport(actorId, reflections, drafts) {
     layouts[note.id] = meta.photos;
     for (const p of meta.photos) if (p.localId) ids.add(p.localId);
   }
+  const unconfirmed = accountLayouts(localStorage, actorId).filter(layout => layout.operation);
+  for (const entry of unconfirmed) for (const p of entry.photos) if (p.localId) ids.add(p.localId);
   const pictureDrafts = {};
   for (const [key, draft] of Object.entries(drafts)) {
     const photos = notePhotos(draft);
@@ -244,6 +340,7 @@ export async function localImageExport(actorId, reflections, drafts) {
   }
   return {
     ...(Object.keys(layouts).length && { privatePhotoLayouts: layouts }),
+    ...(unconfirmed.length && { unconfirmedPrivatePhotoLayouts: unconfirmed }),
     ...(Object.keys(pictureDrafts).length && { pictureDrafts }),
     ...(ids.size && { noteImages: files }),
   };

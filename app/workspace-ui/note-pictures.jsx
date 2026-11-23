@@ -30,7 +30,8 @@ export function NoteImage({ photo, alt = '', thumbnail = false, ...props }) {
 }
 
 export function NotePictureEditor({ draft, patch, saving, preparing, onPreparing }) {
-  const { ctx: { actorId } } = useData();
+  const { ctx } = useData();
+  const { actorId } = ctx;
   const parts = noteParts(draft);
   const count = notePhotos(draft).length;
   const totalText = parts.reduce((sum, part) => sum + part.text.length, 0);
@@ -46,7 +47,10 @@ export function NotePictureEditor({ draft, patch, saving, preparing, onPreparing
   }, [actorId]);
 
   function update(next) {
-    patch({ body: noteBody(next), parts: next.some(part => part.photos.length) ? next : [] });
+    const deviceImageIds = [...new Set([...(draft.deviceImageIds || []),
+      ...notePhotos(draft).map(p => p.localId).filter(Boolean),
+      ...next.flatMap(part => part.photos.map(p => p.localId).filter(Boolean))])];
+    patch({ body: noteBody(next), parts: next.some(part => part.photos.length) ? next : [], ...(deviceImageIds.length && { deviceImageIds }) });
   }
   function remember(element, index) {
     cursor.current = { index, at: element.selectionEnd };
@@ -66,7 +70,7 @@ export function NotePictureEditor({ draft, patch, saving, preparing, onPreparing
     pending.current = true;
     onPreparing(true);
     try {
-      const photos = await stageNoteImages(actorId, files);
+      const photos = await stageNoteImages(actorId, files, ctx.signal);
       if (!mounted.current) return;
       const next = [...parts];
       let after = index;

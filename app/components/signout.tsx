@@ -53,6 +53,8 @@ export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) 
                 }
                 const account = await api<BootstrapStatus>('bootstrap', undefined, actorId, controller.signal);
                 if ((account.actorId ?? account.siteUserId) !== actorId) throw new Error(accountChangedMessage);
+                const { clearUnsavedNoteImages } = await import('../workspace-ui/note-image-store.js');
+                await clearUnsavedNoteImages(actorId, localStorage, controller.signal);
             } catch (e) {
                 // Ordinary expiry already conceals via its recoverable signal; do not turn it into cleanup.
                 if (!controller.signal.aborted) setError(e instanceof Error ? e.message : '尚未确认当前账号，请重新加载后再退出。');

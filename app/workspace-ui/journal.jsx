@@ -1,6 +1,6 @@
 import { IllustratedNote, NotePictureEditor } from './note-pictures';
 import { notePhotos } from './note-layout.js';
-import { persistPrivateLayout, readPrivateLayout, savedParts, uploadNoteImages } from './note-image-store.js';
+import { persistPrivateLayout, readPrivateLayout, savedParts, saveIllustratedNote, cancelDetachedNoteImages, discardLocalDraftFiles } from './note-image-store.js';
 import { TextLinks } from '../components/learning-text';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
@@ -19,7 +19,7 @@ import { Back, DeleteAction, Empty, IconButton, Modal, PageHead, Segments, usePr
 import { NavLink, useNav, useTitle } from './router';
 import { day, eventTime, localDay, useData } from './store';
 import { DateMark, FieldPrint, fieldPhoto } from './press';
-import { editRemark, removeBookmark, prepareSave, saveNote, reflectionSeedPath } from './growth.js';
+import { editRemark, removeBookmark, prepareSave, reflectionSeedPath } from './growth.js';
 import { ReflectionSharingControls } from '../components/reflection-sharing-controls';
 import { listDeviceDrafts } from '../../lib/client/reflection-draft';
 import { CategoryField } from './category-field';
@@ -168,12 +168,21 @@ export function Growth() {
               <NavLink to={d.resume} className="draft-link">
                 {d.title.trim() || '未命名复盘'} <ArrowRight size={15} />
               </NavLink>
-              <DeleteAction label="删除草稿" title={d.title.trim() || '未命名复盘'}
-                description="的未保存修改将被清除。" onDelete={() => setDb((old) => {
-                  const drafts = { ...old.drafts };
-                  delete drafts[key];
-                  return { ...old, drafts };
-                }, true)} />
+              <DeleteAction label="删除草稿" disabled={!!d.operation} title={d.title.trim() || '未命名复盘'}
+                description="的未保存修改将被清除。" onDelete={async () => {
+                  let discarded;
+                  setDb(old => {
+                    const drafts = { ...old.drafts };
+                    if (drafts[key]?.operation) throw Error('请先核对上次保存结果。');
+                    discarded = drafts[key];
+                    delete drafts[key];
+                    return { ...old, drafts };
+                  }, true);
+                  if (discarded) {
+                    await cancelDetachedNoteImages(ctx, discarded.stagedImageIds || []);
+                    await discardLocalDraftFiles(ctx, discarded);
+                  }
+                }} />
             </div>
           ))}
         </section>
@@ -460,18 +469,15 @@ function Writer({ n, seed, sourceUnavailable = false }) {
         trainingId: original.trainingId, videoId: original.videoId, sourceRef: original.sourceRef ?? null,
       } : linked && linked.kind !== 'training' ? { sourceRef: { kind: 'learning_post', id: linked.id } }
         : { trainingId: draft.training || null, videoId: null, sourceRef: null };
-      let operation = draft.operation || prepareSave(draft, draft.base, association, day());
-      patch({ operation });
-      if (operation.scope === 'team' && operation.layout?.some(photo => photo.localId) && !operation.uploaded) {
-        try { await uploadNoteImages(ctx, operation.layout, setProgress); }
-        catch (err) { err.beforeSave = true; throw err; }
-        operation = { ...operation, uploaded: true };
-        patch({ operation });
-      }
-      setProgress('');
-      const saved = await saveNote(ctx, operation);
+      const operation = draft.operation || prepareSave(draft, draft.base, association, day());
+      const localIds = operation.scope === 'team' ? operation.layout?.flatMap(p => p.localId ? [p.localId] : []) || [] : [];
+      const staged = [...new Set([...(draft.stagedImageIds || []), ...localIds])];
+      patch({ operation, ...(staged.length && { stagedImageIds: staged }) });
+      const saved = await saveIllustratedNote(ctx, operation, next => patch({ operation: next }), setProgress);
       ctx.signal.throwIfAborted();
       persistPrivateLayout(ctx.actorId, saved, operation);
+      const kept = new Set(saved.photos?.map(p => p.id));
+      await cancelDetachedNoteImages(ctx, staged.filter(id => !kept.has(id)));
       await refreshShares();
       let message = '复盘已保存';
       try {
