@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
+import { cleanupReflectionImages } from '../../lib/server/reflection-image-cleanup.ts';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
 const admin = sitesPrincipal('admin');
@@ -31,7 +32,7 @@ async function fixture(t, beforeReflections = null, legacy = false, beforePhotoM
     const files = (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql')).sort();
     for (const file of files) {
         if (legacy && file === '0005_two_scope_reflections.sql') continue;
-        if (beforePhotoMigration && file === '0026_reflection_photos.sql') continue;
+        if (beforePhotoMigration && file >= '0026') continue;
         if (file === '0003_reflections.sql' && beforeReflections) await beforeReflections(db);
         const sql = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
         // Trigger bodies contain semicolons; migration breakpoints delimit whole statements.
@@ -1052,7 +1053,80 @@ test('lost image upload acknowledgment recovers without duplicate R2 bytes; a re
     const removed=await s.saveReflection(author,r.id,{...content,...state(shortened),photos:[]},'remove-photo');
     assert.equal(removed.photos,undefined);
     await db.prepare("UPDATE reflection_images SET touched_at='2000-01-01' WHERE id=?").bind(id).run();
-    await s.putReflectionImage(author,crypto.randomUUID(),body(),'later');
-    assert.equal((await bucket.list({prefix:'reflection-images/'})).objects.length,1);
+    await cleanupReflectionImages(db,bucket,new Date());
+    assert.equal((await bucket.list({prefix:'reflection-images/'})).objects.length,0);
     assert.equal(await db.prepare('SELECT id FROM reflection_images WHERE id=?').bind(id).first(),null);
+});
+
+test('scheduled image expiry spans authors, retries R2 failures and leaves fresh and attached generations intact', async t=>{
+    const {s,db,bucket,ids}=await fixture(t);
+    const image=Buffer.from('UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/u7T3/wF090Yt/+hJ/8En/wSfuAAAA==','base64');
+    async function upload(who,id) {
+        const request=()=>new Request('https://kapok.test',{method:'PUT',headers:{'Content-Type':'image/webp'},body:image});
+        await s.putReflectionImage(who,id,request(),'gc');
+        await s.putReflectionThumbnail(who,id,request(),'gc-thumb');
+    }
+    const expired=crypto.randomUUID(), secondAuthor=crypto.randomUUID(), fresh=crypto.randomUUID(), kept=crypto.randomUUID();
+    await upload(author,expired); await upload(member,secondAuthor); await upload(author,fresh); await upload(author,kept);
+    const note=await s.saveReflection(author,null,{...content,photos:[{id:kept,at:0,caption:''}]},'attach');
+    await db.prepare("UPDATE reflection_images SET touched_at='2000-01-01' WHERE id!=?").bind(fresh).run();
+    await db.prepare("UPDATE memberships SET status='paused' WHERE user_id=?").bind(ids.member).run();
+    const broken={list:bucket.list.bind(bucket),delete:async()=>{
+        await assert.rejects(s.saveReflection(author,note.id,{...content,...state(note),photos:[{id:expired,at:0,caption:''}]},'late-attach'));
+        throw new Error('temporary R2 failure');
+    }};
+    await assert.rejects(cleanupReflectionImages(db,broken,new Date()),/temporary R2 failure/);
+    assert.deepEqual((await db.prepare("SELECT id FROM reflection_images WHERE state='deleting' ORDER BY id").all()).results.map(x=>x.id),[expired,secondAuthor].sort());
+    await cleanupReflectionImages(db,bucket,new Date());
+    assert.equal((await bucket.list({prefix:'reflection-images/'})).objects.length,4);
+    assert.deepEqual((await db.prepare('SELECT id FROM reflection_images ORDER BY id').all()).results.map(x=>x.id),[fresh,kept].sort());
+    const plan=(await db.prepare('EXPLAIN QUERY PLAN SELECT object_key FROM reflection_images WHERE reflection_id IS NULL AND touched_at<? ORDER BY touched_at,object_key LIMIT 24').bind('2026').all()).results;
+    assert.ok(plan.some(row=>row.detail.includes('reflection_images_expiry')));
+    assert.equal((await s.getOwnReflection(author,note.id)).photos[0].id,kept);
+});
+
+test('an interrupted original or thumbnail PUT after cancellation is reclaimed without deleting a reused UUID', async t=>{
+    const {s,db,bucket}=await fixture(t);
+    const image=Buffer.from('UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/u7T3/wF090Yt/+hJ/8En/wSfuAAAA==','base64');
+    const request=()=>new Request('https://kapok.test',{method:'PUT',headers:{'Content-Type':'image/webp'},body:image});
+    for(const thumb of [false,true]) {
+        const id=crypto.randomUUID();
+        if(thumb) await s.putReflectionImage(author,id,request(),'initial');
+        const started=Promise.withResolvers(), resume=Promise.withResolvers();
+        const lost=createService({db,bucket:{put:async(...args)=>{
+            started.resolve(); await resume.promise; await bucket.put(...args); throw new Error('worker interrupted after R2 write');
+        }}});
+        const attempt=thumb ? lost.putReflectionThumbnail(author,id,request(),'late-thumb') : lost.putReflectionImage(author,id,request(),'late');
+        await started.promise;
+        const oldKey=await db.prepare('SELECT object_key FROM reflection_images WHERE id=?').bind(id).first('object_key');
+        await s.cancelReflectionImage(author,id,'stop');
+        await s.putReflectionImage(author,id,request(),'reuse');
+        await s.saveReflection(author,null,{...content,photos:[{id,at:0,caption:''}]},'attach-'+id);
+        resume.resolve();
+        await assert.rejects(attempt,/worker interrupted/);
+        const lateKey=thumb ? oldKey+'/thumbnail' : oldKey;
+        assert.ok(await bucket.head(lateKey));
+        await cleanupReflectionImages(db,bucket,new Date(Date.now()+2*86400000));
+        assert.equal(await bucket.head(lateKey),null);
+        const replacement=await db.prepare('SELECT object_key FROM reflection_images WHERE id=?').bind(id).first('object_key');
+        assert.ok(await bucket.head(replacement));
+    }
+});
+
+test('orphan scans resume after a failed page and complete a bounded sweep without touching other prefixes',async t=>{
+    const {db,bucket}=await fixture(t);
+    const prefix='reflection-images/';
+    for(let index=0;index<66;index++) await bucket.put(prefix+crypto.randomUUID(),'old');
+    await bucket.put('workspace/untouched','other media');
+    await bucket.put(prefix+'unrecognized','other shape');
+    const at=new Date(Date.now()+2*86400000);
+    await cleanupReflectionImages(db,bucket,at);
+    const cursor=await db.prepare('SELECT cursor FROM reflection_image_sweep WHERE id=1').first('cursor');
+    assert.ok(cursor);
+    const broken={list:bucket.list.bind(bucket),delete:async()=>{throw new Error('failed orphan cleanup');}};
+    await assert.rejects(cleanupReflectionImages(db,broken,at),/failed orphan cleanup/);
+    assert.equal(await db.prepare('SELECT cursor FROM reflection_image_sweep WHERE id=1').first('cursor'),cursor);
+    await cleanupReflectionImages(db,bucket,at);
+    assert.equal(await db.prepare('SELECT cursor FROM reflection_image_sweep WHERE id=1').first('cursor'),null);
+    assert.deepEqual((await bucket.list()).objects.map(object=>object.key),[prefix+'unrecognized','workspace/untouched']);
 });

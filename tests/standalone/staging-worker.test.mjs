@@ -46,6 +46,7 @@ const migrations = [
   "0024_profile_avatars.sql",
   "0025_workspace_topic_covers.sql",
   "0026_reflection_photos.sql",
+  "0027_reflection_image_cleanup.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
@@ -368,4 +369,21 @@ test("real bundle enrolls signed Access identities concurrently and resolves old
   assert.equal(await db.prepare("SELECT count(*) AS count FROM teams").first("count"), 1);
   assert.equal(await db.prepare("SELECT count(*) AS count FROM memberships").first("count"), 2);
   assert.equal(await db.prepare("SELECT count(*) AS count FROM invites").first("count"), 0);
+});
+
+test("deployed Worker runs the orphan sweep on its configured cron with no member requests",async t=>{
+  const cron="*/15 * * * *";
+  assert.deepEqual(config.triggers.crons,[cron]);
+  // Deliver the scheduled event to the Worker entrypoint; Miniflare's HTTP-only static-asset router has no scheduled handler.
+  const app=start(t,{unsafeTriggerHandlers:true,assets:undefined});
+  await migratedDb(app);
+  const bucket=await app.getR2Bucket("BUCKET");
+  const key="reflection-images/"+crypto.randomUUID();
+  await bucket.put(key,"retired original");
+  await bucket.put(key+"/thumbnail","retired thumbnail");
+  const query=new URLSearchParams({cron,time:String(Date.now()+2*86400000)});
+  const event=await app.dispatchFetch(origin+"/cdn-cgi/handler/scheduled?"+query);
+  assert.equal(event.status,200,await event.text());
+  assert.equal(await bucket.head(key),null);
+  assert.equal(await bucket.head(key+"/thumbnail"),null);
 });

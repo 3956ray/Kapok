@@ -149,6 +149,7 @@ export const reflectionImages = sqliteTable('reflection_images', {
     reflectionId:text('reflection_id').references(()=>reflections.id,{onDelete:'set null'}), touchedAt:text('touched_at').notNull(),
 }, t=>[
     primaryKey({columns:[t.ownerId,t.id]}), index('reflection_images_attachment').on(t.ownerId,t.reflectionId,t.touchedAt),
+    index('reflection_images_expiry').on(t.touchedAt,t.objectKey).where(sql`${t.reflectionId} IS NULL`),
     check('reflection_thumb_mime',sql`${t.thumbMime} IN ('image/jpeg','image/png','image/webp')`),
     check('reflection_thumb_digest',sql`length(${t.thumbDigest})=64`),
     check('reflection_thumb_bytes',sql`${t.thumbBytes} BETWEEN 1 AND 131072`),
@@ -159,6 +160,10 @@ export const reflectionImages = sqliteTable('reflection_images', {
     check('reflection_image_bytes',sql`${t.bytes} BETWEEN 1 AND 8388608`),
     check('reflection_image_state',sql`${t.state} IN ('uploading','ready','deleting')`),
 ]);
+export const reflectionImageSweep = sqliteTable('reflection_image_sweep', {
+    id: integer('id').primaryKey(), cursor:text('cursor'),
+}, t=>[check('reflection_image_sweep_singleton',sql`${t.id}=1`)]);
+
 export const announcements = sqliteTable('announcements', {
     id: text('id').primaryKey(),
     teamId: text('team_id').notNull().references(() => teams.id),

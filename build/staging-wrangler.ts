@@ -39,6 +39,7 @@ export const stagingWorkerConfig = {
   compatibility_flags: ["nodejs_compat"],
   workers_dev: false,
   preview_urls: false,
+  triggers: { crons: ["*/15 * * * *"] },
   routes: deploy ? [{ pattern: host, custom_domain: true }] : [],
   assets: { binding: "ASSETS", run_worker_first: true },
   r2_buckets: [{ binding: "BUCKET", bucket_name: deploy?.bucketName ?? "kapok-local-media" }],

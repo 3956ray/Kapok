@@ -1,3 +1,4 @@
+import { cleanupReflectionImages } from "../lib/server/reflection-image-cleanup";
 import handler from "vinext/server/fetch-handler";
 import { verifyAccessPrincipal } from "../lib/server/access-identity";
 import { authArtPath, authEntryPath, isFrameworkRequest, publicAuthEntry, publicReturnTo, rootCredentialRequest } from "../lib/server/auth-entry";
@@ -11,6 +12,12 @@ const denied = (request: Request) => new Response(request.method === "HEAD" ? nu
 });
 
 export default {
+  async scheduled(event: ScheduledController, env: Cloudflare.Env) {
+    if (event.cron === "*/15 * * * *") {
+      if (!env.DB || !env.BUCKET) throw new Error("Reflection image cleanup requires DB and BUCKET");
+      await cleanupReflectionImages(env.DB, env.BUCKET, new Date(event.scheduledTime));
+    }
+  },
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.protocol !== "https:" || url.host !== env.ACCESS_ALLOWED_HOST) return denied(request);

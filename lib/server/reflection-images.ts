@@ -42,12 +42,6 @@ export function createReflectionImages({ db, bucket, activeMember, clock }: Lear
         await store().delete([row.object_key,row.object_key+'/thumbnail']);
         await q("DELETE FROM reflection_images WHERE object_key=? AND state='deleting' AND reflection_id IS NULL",row.object_key).run();
     }
-    async function cleanup(owner: string) {
-        const cutoff = new Date(clock().getTime()-24*60*60*1000).toISOString();
-        const {results} = await q(`SELECT id FROM reflection_images WHERE owner_id=? AND reflection_id IS NULL AND touched_at<?
-            ORDER BY touched_at LIMIT 3`,owner,cutoff).all<{id:string}>();
-        for (const row of results) await removeDetached(owner,row.id,'touched_at<?',[cutoff]);
-    }
     async function putReflectionImage(p: Principal | null,id: string,request: Request,key: string) {
         const c = await bindLearningMember(activeMember,p);
         const f = learningMemberFence(c);
@@ -81,17 +75,16 @@ export function createReflectionImages({ db, bucket, activeMember, clock }: Lear
                 throw conflict();
             }
         }
-        await cleanup(owner).catch(()=>{ /* A future upload retries any detached objects. */ });
         return {id};
     }
     async function putReflectionThumbnail(p: Principal | null,id:string,request:Request,key:string) {
         const c=await bindLearningMember(activeMember,p), f=learningMemberFence(c);
         if (!uuid.test(id) || !/^[A-Za-z0-9_-]{1,128}$/.test(key)) throw invalid();
-        const target = q(`SELECT object_key,thumb_digest,reflection_id FROM reflection_images WHERE owner_id=? AND team_id=?
-            AND id=? AND state='ready' AND ${f.sql}`,c.user.id,c.membership.teamId,id,...f.values);
-        const row = await target.first<{object_key:string;thumb_digest:string|null;reflection_id:string|null}>();
-        if (!row) throw missing();
         const image=await validatedLearningImage(request.body,request.headers.get('Content-Type'),128*1024,512);
+        const row=await q(`UPDATE reflection_images SET touched_at=? WHERE owner_id=? AND team_id=? AND id=?
+            AND state='ready' AND ${f.sql} RETURNING object_key,thumb_digest,reflection_id`,
+            clock().toISOString(),c.user.id,c.membership.teamId,id,...f.values).first<{object_key:string;thumb_digest:string|null;reflection_id:string|null}>();
+        if (!row) throw missing();
         if (row.thumb_digest===image.digest) return {id};
         if (row.thumb_digest || row.reflection_id) throw conflict();
         const b=store(), objectKey=row.object_key+'/thumbnail';
