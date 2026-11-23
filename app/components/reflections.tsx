@@ -1,4 +1,5 @@
 'use client';
+import { TextLinks } from './learning-text';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -500,7 +501,7 @@ export function ReflectionRead({
                         <p className="privacy-line">{r.isAuthor && (r as ReflectionAuthor).scope === 'private' ? <LockKeyhole size={16} aria-hidden="true" /> : <UsersRound size={16} aria-hidden="true" />}{r.isAuthor ? scopeLabel(r as ReflectionAuthor) : '全队可读'}</p>
                     </header>
                     {!r.isAuthor && bookmarkTrigger && <ReflectionBookmark key={r.id} actorId={actorId} sourceId={r.id} trigger={bookmarkTrigger} />}
-                    <p className="preserve reflection-body">{r.text}</p>
+                    <p className="preserve reflection-body"><TextLinks text={r.text}/></p>
                     {r.link ? <Link className="detail-row" href={r.link.href}>
                         <span className="detail-tile"><CalendarDays size={20} aria-hidden="true" /></span>
                         <span><strong>关联来源</strong><small>{r.link.title}</small></span>

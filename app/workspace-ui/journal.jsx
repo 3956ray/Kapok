@@ -39,7 +39,7 @@ function PrivateRemark({ text }) {
         {expanded ? '收起备注' : '展开备注'}
         <ChevronDown size={13} />
       </button>
-      <p id={id}>{expanded ? <TextLinks text={text}/> : letters.slice(0, 48).join('') + '…'}</p>
+      <p id={id}>{expanded ? <TextLinks text={text}/> : <><TextLinks text={letters.slice(0, 48).join('')} clipped={letters.length > 48}/>…</>}</p>
     </div>
   );
 }
@@ -455,12 +455,15 @@ function Writer({ n, seed, sourceUnavailable = false }) {
       patch({ operation });
       await saveNote(ctx, operation);
       await refreshShares();
-      setDb(d => {
-        const drafts = { ...d.drafts };
-        delete drafts[key];
-        return { ...d, drafts };
-      });
-      notify('复盘已保存');
+      let message = '复盘已保存';
+      try {
+        setDb(d => {
+          const drafts = { ...d.drafts };
+          delete drafts[key];
+          return { ...d, drafts };
+        }, true);
+      } catch { message = '复盘已保存，本机草稿暂未清除。'; }
+      notify(message);
       if (location.hash.slice(1) === path) back('/growth');
     } catch (e) {
       setError(e.message || '保存失败，草稿已保留。');

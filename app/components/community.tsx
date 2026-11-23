@@ -1,4 +1,5 @@
 'use client';
+import { TextLinks } from './learning-text';
 
 import Link from 'next/link';
 import { useCallback, useRef, useState } from 'react';
@@ -174,7 +175,7 @@ export function AnnouncementRead({
                     <span>更新于 <time dateTime={secure.data.updatedAt}>{secure.data.updatedAt.slice(0, 10)}</time></span>
                 </div>
                 <h2 className="detail-title">{secure.data.title}</h2>
-                <p id="body" className="preserve reflection-body">{secure.data.text}</p>
+                <p id="body" className="preserve reflection-body"><TextLinks text={secure.data.text}/></p>
             </article>}
         </div>
     </>;

@@ -28,3 +28,17 @@ test('withdrawn publications cannot re-enter the workspace through the owner dra
     await assert.rejects(loadMaterial(ctx, { ...withdrawn, isDraft: true }, undefined, true), /已移除/);
     await assert.rejects(deleteMaterial(ctx, { ...withdrawn, publishedVersion: 3, canEdit: true }), /已变化/);
 });
+
+test('deleting an old device draft survives an overlapping write from another tab', async () => {
+    const { JSDOM } = await import('jsdom');
+    const { readWorkspaceDrafts, writeWorkspaceDrafts } = await import('../../app/workspace-ui/local-drafts.js');
+    const dom = new JSDOM('', { url: 'https://kapok.test' });
+    const storage = dom.window.localStorage;
+    storage.setItem('notes', JSON.stringify({ a: { body: 'first' }, b: { body: 'second' } }));
+    const stale = readWorkspaceDrafts(storage, 'notes');
+    writeWorkspaceDrafts(storage, 'notes', ['a'], { b: stale.b });
+    writeWorkspaceDrafts(storage, 'notes', ['b'], { ...stale, b: { body: 'new' } });
+    assert.deepEqual(readWorkspaceDrafts(storage, 'notes'), { b: { body: 'new' } });
+    assert.equal(storage.getItem('notes'), null);
+    dom.window.close();
+});

@@ -1,4 +1,5 @@
 'use client';
+import { TextLinks } from './learning-text';
 import { ReflectionIcon } from './reflection-icon';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
@@ -145,7 +146,7 @@ function WatchContent({ actorId, legacyVideoId, selectedVideoId, initialSeconds,
                             <ReflectionLink linkRef={reflection} trainingId={training.id} videoId={selectedId} onClick={rememberReflection} />
                         </div>
                     </div>
-                    {training.description && <p className="preserve">{training.description}</p>}
+                    {training.description && <p className="preserve"><TextLinks text={training.description}/></p>}
                     {selected && <div ref={setNote} hidden />}
                     {training.status === 'archived' && <p className="notice">已归档。历史视频与讨论仍可回看，不能新增视频或讨论。</p>}
                     {requested && requested !== selectedId && <p className="notice" role="status">所选视频当前不可用。{selected ? '已切换到可观看的视频。' : ''}</p>}

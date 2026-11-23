@@ -1,4 +1,5 @@
 'use client';
+import { TextLinks } from './learning-text';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -100,7 +101,7 @@ function ManagedTraining({ actorId, training, uploads }: { actorId: string; trai
             <p className="notice success" role="status">{training.status === 'draft' ? '训练草稿已保存 · 仅管理员可见' : '训练已发布 · 全队可见'}</p>}
         <section className="panel training-surface">
             <div className="section-heading"><h2>训练信息</h2><Link href={path + '/edit'}>编辑信息</Link></div>
-            <p className="preserve">{training.description || '暂无训练简介。'}</p>
+            <p className="preserve"><TextLinks text={training.description || '暂无训练简介。'}/></p>
         </section>
         {writable ? <AddVideoDialog actorId={actorId} trainingId={training.id}
             nextPosition={Math.min(10000, Math.max(-1, ...videos.map(v => v.position)) + 1)}

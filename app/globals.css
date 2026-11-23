@@ -885,7 +885,7 @@ a.learning-row:hover { background:var(--selected); border-radius:inherit; }
 .learning-byline { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .learning-byline .default-avatar { width:36px; height:36px; font-size:16px; }
 .learning-body { white-space:pre-wrap; line-height:1.8; max-width:66ch; }
-.learning-body a { display:inline; min-height:0; overflow-wrap:anywhere; text-decoration:underline; }
+.body-link, .learning-body a { display:inline; min-height:0; overflow-wrap:anywhere; text-decoration:underline; }
 .learning-media { display:grid; gap:8px; justify-items:start; margin-bottom:16px; }
 .learning-media iframe { width:100%; aspect-ratio:16/9; border:0; border-radius:12px; background:var(--text); }
 .learning-association { margin-block:14px; }

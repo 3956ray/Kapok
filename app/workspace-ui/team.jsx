@@ -159,7 +159,7 @@ export function Activity() {
                   <small>
                     {e.type} <i>/</i> {shortDate(e.date)}
                   </small>
-                  <blockquote>{e.type === '讨论' ? e.title : e.n.body}</blockquote>
+                  <blockquote><TextLinks text={e.snippet} clipped={Array.from(e.snippet).length >= 160}/></blockquote>
                   <NavLink
                     to={e.href}
                     className="voice-by"

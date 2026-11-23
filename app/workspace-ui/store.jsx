@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { useSignOut } from '../components/signout';
 import { draftKey } from '../../lib/client/session-guard';
 import { api } from '../../lib/client/api';
+import { readWorkspaceDrafts, writeWorkspaceDrafts } from './local-drafts.js';
 import { acknowledgeMutation } from '../../lib/client/navigation-state';
 import { SecureStatus, useSecureResource } from '../components/secure-resource';
 import { presentGrowth, bookmark, saveCollection, deleteNote } from './growth.js';
@@ -75,15 +76,15 @@ export function DataProvider({actorId,logoutHref,children}) {
 function Verified({actorId,logoutHref,initial,session,logout,children}) {
   const [data,setData] = useState(initial);
   const storage = draftKey(actorId,'bloom-notes');
-  const [drafts,setDrafts] = useState(()=>{try{return JSON.parse(localStorage.getItem(storage)) || {};}catch{return {};}});
+  const [drafts,setDrafts] = useState(()=>{try{return readWorkspaceDrafts(localStorage,storage);}catch{return {};}});
   const [storageError,setStorageError] = useState(false);
   const currentDrafts = useRef(drafts);
   const pendingDraftKeys = useRef(new Set());
   useEffect(() => {
     function sync(event) {
-      if (event.storageArea !== localStorage || (event.key !== null && event.key !== storage)) return;
+      if (event.storageArea !== localStorage || (event.key !== null && event.key !== storage && !event.key.startsWith(storage + ':'))) return;
       try {
-        const merged = JSON.parse(localStorage.getItem(storage)) || {};
+        const merged = readWorkspaceDrafts(localStorage,storage);
         for (const key of pendingDraftKeys.current) {
           if (Object.hasOwn(currentDrafts.current,key)) merged[key] = currentDrafts.current[key];
           else delete merged[key];
@@ -154,13 +155,8 @@ function Verified({actorId,logoutHref,initial,session,logout,children}) {
     }
     let result=next;
     try {
-      const stored=JSON.parse(localStorage.getItem(storage)) || {};
-      for (const key of changed) {
-        if (Object.hasOwn(next,key)) stored[key]=next[key];
-        else delete stored[key];
-      }
-      localStorage.setItem(storage,JSON.stringify(stored));
-      result=stored;
+      writeWorkspaceDrafts(localStorage,storage,changed,next);
+      result=readWorkspaceDrafts(localStorage,storage);
       pendingDraftKeys.current.clear();
       setStorageError(false);
     } catch {

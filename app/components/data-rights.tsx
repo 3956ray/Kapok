@@ -1,4 +1,5 @@
 'use client';
+import { TextLinks } from './learning-text';
 
 import Link from 'next/link';
 import { useId, useRef, useState } from 'react';
@@ -188,7 +189,7 @@ export function ReflectionRecycle({ actorId }: { actorId: string }) {
             {secure.data?.map(r => <article className="panel" key={r.id}>
                 <h2>{r.title.trim() || '未命名复盘'}</h2>
                 <p className="detail-meta"><time dateTime={r.date}>{r.date}</time> · 恢复截止 <time dateTime={r.recoverUntil}>{new Date(r.recoverUntil).toLocaleString('zh-CN')}</time></p>
-                <details><summary>查看本人原稿</summary><p className="reflection-body">{r.text}</p></details>
+                <details><summary>查看本人原稿</summary><p className="reflection-body"><TextLinks text={r.text}/></p></details>
                 <button className="secondary" disabled={busy || secure.locked || !!pending && pending.path !== `reflections/${r.id}/restore`} onClick={() => void restore(r)}>{busy ? '正在确认…' : pending ? '重新确认上次恢复请求' : '仅恢复为私密原稿'}</button>
             </article>)}
         </div>

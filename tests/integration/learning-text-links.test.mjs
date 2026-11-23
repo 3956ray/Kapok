@@ -44,3 +44,12 @@ test('adjacent ASCII separators split URLs and preserve commas and semicolons in
         'https://example.test', 'https://other.test?q=one,two;three', 'https://www.one.test', 'https://www.two.test',
     ]);
 });
+
+test('a clipped excerpt keeps a partial URL plain and earlier links clickable', async () => {
+    const { TextLinks } = await import('../../app/components/learning-text.tsx');
+    const text = 'https://example.test/complete 看 https://example.test/par';
+    const dom = new JSDOM(renderToStaticMarkup(React.createElement(TextLinks, { text, clipped: true })));
+    assert.equal(dom.window.document.body.textContent, text);
+    assert.deepEqual([...dom.window.document.links].map(a => a.href), ['https://example.test/complete']);
+    dom.window.close();
+});
