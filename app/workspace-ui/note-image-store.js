@@ -1,5 +1,6 @@
 import { notePhotos, splitLayout } from './note-layout.js';
 import { readWorkspaceDrafts } from './local-drafts.js';
+import { learningBounds, learningImageDimensions } from '../../lib/contracts/learning.ts';
 import { draftKey } from '../../lib/client/session-guard.ts';
 
 async function imageStore(actorId, mode, action) {
@@ -44,7 +45,7 @@ export async function stageNoteImages(actorId, files) {
   const records = [];
   for (const file of files) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('请选择 JPG、PNG 或 WebP 图片。');
-    if (!file.size || file.size > 8 * 1024 * 1024) throw new Error('每张图片需有内容，且不超过 8 MB。');
+    if (!file.size || file.size > learningBounds.maxImageBytes) throw new Error('每张图片需有内容，且不超过 8 MB。');
     const bytes = await file.arrayBuffer();
     const header = new Uint8Array(bytes, 0, Math.min(16, bytes.byteLength));
     const signature = String.fromCharCode(...header);
@@ -55,16 +56,18 @@ export async function stageNoteImages(actorId, files) {
     };
     if (!matches[file.type]) throw new Error('无法读取「' + file.name + '」，文件格式与内容不符。');
     const url = URL.createObjectURL(file);
-    let preview;
+    let preview, width, height;
     try {
       const image = new Image();
       image.src = url;
       await image.decode();
+      width = image.naturalWidth;
+      height = image.naturalHeight;
       preview = await thumbnailFor(image, file);
     } catch { throw new Error('无法读取「' + file.name + '」，请重新选择图片。'); }
     finally { URL.revokeObjectURL(url); }
     // Store bytes so private WebKit windows can save the original and preview atomically.
-    records.push({ id: crypto.randomUUID(), bytes, type: file.type, added: Date.now(),
+    records.push({ id: crypto.randomUUID(), bytes, type: file.type, width, height, added: Date.now(),
       ...(preview && { previewBytes: await preview.arrayBuffer(), previewType: preview.type }) });
   }
   await imageStore(actorId, 'readwrite', store => {
@@ -123,6 +126,38 @@ export function persistPrivateLayout(actorId, saved, operation) {
   }
 }
 
+// Keep the selected original available for the author's export. Only the team-facing copy needs the service's pixel bound.
+async function uploadOriginal(record) {
+  if (record.uploadBytes) return new Blob([record.uploadBytes], { type: record.uploadType });
+  const original = storedBlob(record);
+  const { maxEdge, maxPixels } = learningImageDimensions;
+  if (!record.width || (Math.max(record.width, record.height) <= maxEdge && record.width * record.height <= maxPixels)) return original;
+  const source = URL.createObjectURL(original);
+  try {
+    const image = new Image();
+    image.src = source;
+    await image.decode();
+    const ratio = Math.min(maxEdge / Math.max(record.width, record.height), Math.sqrt(maxPixels / (record.width * record.height)));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.floor(record.width * ratio));
+    canvas.height = Math.max(1, Math.floor(record.height * ratio));
+    const context = canvas.getContext('2d');
+    if (!context) throw Error('本机暂无法缩放这张图片，请重新选择。');
+    while (true) {
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .87));
+      if (!blob) throw Error('图片转换失败，请重试。');
+      if (blob.size <= learningBounds.maxImageBytes) {
+        record.uploadType = blob.type;
+        record.uploadBytes = await blob.arrayBuffer();
+        return blob;
+      }
+      canvas.width = Math.max(1, Math.floor(canvas.width * .7));
+      canvas.height = Math.max(1, Math.floor(canvas.height * .7));
+    }
+  } finally { URL.revokeObjectURL(source); }
+}
+
 export async function uploadNoteImages(ctx, layout, progress) {
   const photos = layout.filter(photo => photo.localId);
   if (!photos.length) return;
@@ -132,9 +167,14 @@ export async function uploadNoteImages(ctx, layout, progress) {
     progress('正在上传配图 ' + (i + 1) + ' / ' + photos.length);
     const record = await readNoteImage(ctx.actorId, photo.localId);
     for (const variant of ['content', 'thumbnail']) {
-      const blob = storedBlob(record, variant === 'thumbnail');
       const receipt = variant + 'UploadedAt';
-      if (!blob || Date.now() - record[receipt] < 10 * 60 * 1000) continue;
+      if (Date.now() - record[receipt] < 10 * 60 * 1000) continue;
+      const blob = variant === 'thumbnail' ? storedBlob(record, true) : await uploadOriginal(record);
+      if (!blob) continue;
+      // Persist derived content before PUT. A dropped response can be replayed with identical bytes.
+      if (variant === 'content' && record.uploadBytes) {
+        await imageStore(ctx.actorId, 'readwrite', store => store.put(record, photo.localId));
+      }
       const response = await fetch('/api/v1/workspace/note-images/' + encodeURIComponent(photo.id) + '/' + variant, {
         method: 'PUT', credentials: 'same-origin', cache: 'no-store', signal: ctx.signal,
         headers: { 'Content-Type': blob.type, 'X-Kapok-Actor': ctx.actorId, 'Idempotency-Key': photo.id + '-' + variant },

@@ -933,7 +933,9 @@ test('inline reflection images stay local until upload, attach atomically and fo
     assert.equal(note.hasLocalPhotos,true);
     assert.equal(note.text,'');
     await denied(team(s,note),'INVALID_INPUT');
-    const withText = await s.saveReflection(author,note.id,{...content,...state(note)},'retain-pending');
+    await denied(s.saveReflection(author,note.id,{...content,...state(note)},'legacy-edit-pending'),'VERSION_CONFLICT');
+    assert.equal((await s.getReflection(author,note.id)).version,note.version);
+    const withText = await s.saveReflection(author,note.id,{...content,...state(note),photos:[],hasLocalPhotos:true},'retain-pending');
     assert.equal(withText.hasLocalPhotos,true);
     await denied(team(s,withText,'no-partial-share'),'INVALID_INPUT');
     assert.equal((await upload(first,Buffer.from('bogus'))).status,415);

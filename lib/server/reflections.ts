@@ -401,6 +401,9 @@ export function createReflectionService({
         const target = op.replay?.result.id ?? id ?? crypto.randomUUID();
         if (op.replay) return privateSourceWrite(() => getOwnReflection(p, target, c));
         const old = id ? await getOwnReflection(p, id, c) : null;
+        // Device-only placements cannot be shifted to a new text revision without their owner's layout.
+        if (old?.hasLocalPhotos && photos === undefined)
+            throw new DomainError('VERSION_CONFLICT','请在保存配图的浏览器打开新版编辑器，再修改这篇复盘。',409);
         // Older clients omit photos on edits. Preserve their attachments and keep offsets within the new text.
         const nextPhotos = photos ?? (old?.photos ?? []).map(({id,at,caption})=>({id,at:Math.min(at,content.length),caption}));
         const pending = raw.hasLocalPhotos ?? (photos!==undefined ? false : old?.hasLocalPhotos ?? false);

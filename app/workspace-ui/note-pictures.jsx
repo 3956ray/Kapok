@@ -5,7 +5,6 @@ import { useData } from './store';
 import { IconButton, Modal } from './ui';
 import { maxNotePhotos, noteBody, noteParts, notePhotos } from './note-layout.js';
 import { pruneNoteImages, readNoteImage, stageNoteImages, storedBlob } from './note-image-store.js';
-import './note-pictures.css';
 
 export function NoteImage({ photo, alt = '', thumbnail = false, ...props }) {
   const { ctx: { actorId } } = useData();
@@ -167,14 +166,13 @@ export function NotePictureEditor({ draft, patch, saving, preparing, onPreparing
 }
 
 export function IllustratedNote({ note }) {
-  const photos = notePhotos(note);
+  const parts = noteParts(note);
+  const photos = parts.flatMap(part => part.photos);
   const [selected, select] = useState(null);
   const current = photos[selected];
-  let offset = 0;
   return <div className="note-prose">
-    {noteParts(note).map((part, i) => {
-      const start = offset;
-      offset += part.photos.length;
+    {parts.map((part, i) => {
+      const start = photos.indexOf(part.photos[0]);
       return <div key={i} className="note-read-part">
         {part.text && part.text.split(/\n\s*\n/).map((para, j) => <p key={j}><TextLinks text={para}/></p>)}
         {part.photos.length > 0 && <div className={'note-plates' + (part.photos.length === 1 ? ' single' : '')}>
