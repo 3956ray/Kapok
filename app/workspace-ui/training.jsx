@@ -848,11 +848,12 @@ function MaterialEditor({ t }) {
           </label>
           <FieldIssue issue={issue} name="title" />
           <div className="form-pair">
-            <label className="publication-date">
+            <label className="publication-field">
               <span>{kind === 'training' ? '训练日期' : '记录日期'}</span>
               <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
             </label>
-            {kind === 'article' && <label>图文用途
+            {kind === 'article' && <label className="publication-field">
+              <span>图文用途</span>
               <select value={placement} onChange={e => setPlacement(e.target.value)}>
                 <option value="activity">日常分享 · 队内动态</option>
                 <option value="archive">训练资料 · 训练档案</option>

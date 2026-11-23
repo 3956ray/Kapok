@@ -14,13 +14,13 @@
   display: grid;
   gap: 19px;
 }
-.material-form .publication-date > span,
+.material-form .publication-field > span,
 .material-form .field-label-line {
   display: flex;
   align-items: center;
   min-height: 26px;
 }
-.material-form .publication-date > input,
+.material-form .publication-field > :is(input, select),
 .material-form .category-field > select {
   margin-top: 4px;
   height: 45px;
