@@ -63,6 +63,28 @@ function imageType(bytes: Uint8Array) {
     return null;
 }
 
+async function fetchImage(url: string, signal: AbortSignal) {
+    const image = await bytesAt(url, maxImageBytes, signal);
+    const mime = imageType(image);
+    if (!mime) throw new Error('Invalid image');
+    return { image, mime };
+}
+
+async function youtubeCover(id: string) {
+    // A regional CDN error or a missing rendition should not hide available artwork.
+    // Keep all candidates on fixed Google hosts, for this exact video, within seven seconds.
+    const candidates = [
+        'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg',
+        'https://img.youtube.com/vi/' + id + '/hqdefault.jpg',
+        'https://i.ytimg.com/vi_webp/' + id + '/hqdefault.webp',
+    ];
+    for (const url of candidates) {
+        try { return await fetchImage(url, AbortSignal.timeout(2200)); }
+        catch { /* Try the next official rendition. */ }
+    }
+    throw new Error('No YouTube artwork');
+}
+
 // Only platform artwork enters this namespace. Member-uploaded images keep their own authorization and lifecycle.
 export async function videoCover(bucket: R2Bucket | undefined, source: string | null): Promise<Response> {
     const key = source && sourceKey(source);
@@ -73,22 +95,28 @@ export async function videoCover(bucket: R2Bucket | undefined, source: string | 
     const headers = (type: string) => ({ 'Content-Type': type, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
     const age = stored ? Date.now() - stored.uploaded.getTime() : Infinity;
     if (stored?.size && age < 7 * 86400000) return new Response(stored.body, { headers: headers(stored.httpMetadata?.contentType || 'image/jpeg') });
-    if (stored?.size === 0 && age < 300000) { await stored.body.cancel(); return fallback(); }
+    const [provider, id] = key.split('/');
+    const youtube = provider === 'youtube';
+    const currentMiss = !youtube || stored?.customMetadata?.probe === 'youtube-v2';
+    if (stored?.size === 0 && currentMiss && age < (youtube ? 30000 : 300000)) { await stored.body.cancel(); return fallback(); }
     try {
-        const [provider, id] = key.split('/');
-        const signal = AbortSignal.timeout(7000);
-        const url = provider === 'youtube' ? 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg' : await biliCover(id, signal);
-        if (!url) throw new Error('No platform cover');
-        const image = await bytesAt(url, maxImageBytes, signal);
-        const mime = imageType(image);
-        if (!mime) throw new Error('Invalid image');
+        let cover;
+        if (youtube) {
+            cover = await youtubeCover(id);
+        } else {
+            const signal = AbortSignal.timeout(7000);
+            const url = await biliCover(id, signal);
+            if (!url) throw new Error('No platform cover');
+            cover = await fetchImage(url, signal);
+        }
+        const { image, mime } = cover;
         await bucket?.put(objectKey, image, { httpMetadata: { contentType: mime } }).catch(()=>{});
         await stored?.body.cancel();
         return new Response(image, { headers: headers(mime) });
     } catch {
         if (stored?.size) return new Response(stored.body, { headers: headers(stored.httpMetadata?.contentType || 'image/jpeg') });
         await stored?.body.cancel();
-        await bucket?.put(objectKey, new Uint8Array(), { onlyIf: stored ? { etagMatches: stored.etag } : { etagDoesNotMatch: '*' } }).catch(()=>{});
+        await bucket?.put(objectKey, new Uint8Array(), { ...(youtube && {customMetadata:{probe:'youtube-v2'}}), onlyIf: stored ? { etagMatches: stored.etag } : { etagDoesNotMatch: '*' } }).catch(()=>{});
         return fallback();
     }
 }

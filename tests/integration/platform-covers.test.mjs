@@ -12,7 +12,7 @@ function memoryBucket() {
       return data ? { ...data, size:data.bytes.length, body:new Response(data.bytes).body } : null;
     },
     put: async (key, bytes, options) => {
-      objects.set(key, { bytes, httpMetadata:options.httpMetadata, uploaded:new Date(), etag:'test' });
+      objects.set(key, { bytes, httpMetadata:options.httpMetadata, customMetadata:options.customMetadata, uploaded:new Date(), etag:'test' });
     },
   };
 }
@@ -49,5 +49,43 @@ test('missing or invalid artwork returns the default image and avoids repeated u
     const r=await videoCover(bucket,'https://youtu.be/dQw4w9WgXcQ');
     assert.equal(r.headers.get('location'),'/workspace-assets/media/video-cover-unavailable.svg');
   }
-  assert.equal(fetcher.mock.callCount(),1);
+  assert.equal(fetcher.mock.callCount(),3);
+});
+
+test('YouTube retries another official host for the same video despite a cached legacy miss', async t => {
+  const bucket = memoryBucket();
+  const key = 'platform-covers/v1/youtube/dQw4w9WgXcQ';
+  await bucket.put(key, new Uint8Array(), {});
+  const urls = [];
+  t.mock.method(globalThis,'fetch', async (url, options) => {
+    assert.equal(options.redirect,'error');
+    urls.push(url);
+    if (urls.length === 1) return new Response('temporarily unavailable', { status:503 });
+    return new Response(jpeg);
+  });
+  const response = await videoCover(bucket,'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=0s');
+  assert.equal(response.headers.get('content-type'),'image/jpeg');
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()),jpeg);
+  assert.deepEqual(urls,['https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg','https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg']);
+  assert.deepEqual(bucket.objects.get(key).bytes,jpeg);
+});
+test('YouTube probes WebP when JPEG renditions fail and quickly retries a temporary miss', async t => {
+  const bucket = memoryBucket();
+  const key = 'platform-covers/v1/youtube/dQw4w9WgXcQ';
+  const webp = new TextEncoder().encode('RIFF1234WEBP');
+  const url = 'https://youtu.be/dQw4w9WgXcQ';
+  let available = false, attempts = 0;
+  t.mock.method(globalThis,'fetch',async href => {
+    attempts++;
+    return available && href === 'https://i.ytimg.com/vi_webp/dQw4w9WgXcQ/hqdefault.webp'
+      ? new Response(webp) : new Response('Bad gateway',{ status:502 });
+  });
+  assert.equal((await videoCover(bucket,url)).status,302);
+  available = true;
+  assert.equal((await videoCover(bucket,url)).status,302);
+  assert.equal(attempts,3);
+  bucket.objects.get(key).uploaded = new Date(Date.now() - 31000);
+  const recovered = await videoCover(bucket,url);
+  assert.equal(recovered.headers.get('content-type'),'image/webp');
+  assert.deepEqual(new Uint8Array(await recovered.arrayBuffer()),webp);
 });
