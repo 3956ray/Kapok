@@ -77,13 +77,13 @@ function returnFocusFor(control) {
 }
 
 export function RouterProvider({ children, initialPath = base }) {
-  const [path, setPath] = useState(() => currentPath(initialPath));
+  const [{ path, chapter }, setRoute] = useState(() => ({path:currentPath(initialPath)}));
   const current = useRef({ path: currentPath(initialPath), index: index(), photo: history.state?.kapokPhoto });
   const positions = useRef(new Map());
   const transition = useRef(null);
   const pendingComment = useRef(null);
   const version = useRef(0);
-  const change = useCallback((to, id, back, restore, nextPhoto) => {
+  const change = useCallback((to, id, back, restore, nextPhoto, step) => {
     const ticket = ++version.current;
     pendingComment.current?.disconnect();
     const previous = current.current;
@@ -118,24 +118,24 @@ export function RouterProvider({ children, initialPath = base }) {
     const y = restore ? (positions.current.get(id) ?? history.state?.kapokY ?? 0) : 0;
     const marker = back && restore ? history.state?.kapokReturnFocus : null;
     current.current = { path: to, index: id, photo: nextPhoto };
+    const root = document.documentElement;
+    const animate = Boolean(document.startViewTransition) && !matchMedia('(prefers-reduced-motion: reduce)').matches;
     const update = () => {
       if (ticket !== version.current) return;
-      flushSync(() => setPath(to));
-      window.scrollTo({ top: y, behavior: 'instant' });
+      if (step) root.dataset.collectionStep = animate ? 'reading' : 'direct';
+      flushSync(() => setRoute({path:to,chapter:step?.chapter}));
+      if (!step) window.scrollTo({ top: y, behavior: 'instant' });
       const targetComment = !restore && commentTarget(to);
-      if (!targetComment) {
+      if (!targetComment && !step) {
         const main = document.querySelector('main');
         const origin = marker && main?.querySelectorAll(marker.selector)[marker.occurrence];
         (origin || main)?.focus({ preventScroll: true });
       }
       if (!restore) pendingComment.current = followComment(to);
+      const ready = step?.afterChange(animate);
       const target = lookup(!back);
-      if (
-        target &&
-        document.startViewTransition &&
-        !matchMedia('(prefers-reduced-motion: reduce)').matches
-      )
-        target.style.viewTransitionName = transitionName;
+      if (target && animate) target.style.viewTransitionName = transitionName;
+      return ready;
     };
     transition.current?.skipTransition();
     document
@@ -143,13 +143,17 @@ export function RouterProvider({ children, initialPath = base }) {
       .forEach((el) => el.style.removeProperty('view-transition-name'));
     document.documentElement.dataset.direction = back ? 'back' : 'forward';
     document.documentElement.dataset.section = to.split('/')[1].split('?')[0];
-    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (step) root.dataset.collectionStep = 'outgoing';
+    else delete root.dataset.collectionStep;
+    if (animate) {
       const origin = lookup(back);
       if (origin) origin.style.viewTransitionName = transitionName;
       transition.current = document.startViewTransition(update);
       transition.current.ready.catch(() => {});
       transition.current.finished.finally(() => {
-        if (ticket === version.current) lookup(!back)?.style.removeProperty('view-transition-name');
+        if (ticket !== version.current) return;
+        lookup(!back)?.style.removeProperty('view-transition-name');
+        if (step) delete root.dataset.collectionStep;
       });
     } else update();
   }, []);
@@ -157,6 +161,7 @@ export function RouterProvider({ children, initialPath = base }) {
     (to, opts = {}) => {
       if (!to.startsWith('/') || to.startsWith('//')) return;
       if (to === current.current.path) {
+        if (opts.collectionStep) return;
         window.scrollTo({
           top: 0,
           behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
@@ -179,7 +184,7 @@ export function RouterProvider({ children, initialPath = base }) {
         '',
         '#' + to,
       );
-      change(to, newIndex, false, false, opts.photoKey);
+      change(to, newIndex, false, false, opts.photoKey, opts.collectionStep);
     },
     [change],
   );
@@ -220,7 +225,7 @@ export function RouterProvider({ children, initialPath = base }) {
   }, [change,initialPath]);
   const url = new URL(path, 'http://kapok.local');
   return (
-    <Router.Provider value={{ path, pathname: url.pathname, params: url.searchParams, go, back }}>
+    <Router.Provider value={{ path, chapter, pathname: url.pathname, params: url.searchParams, go, back }}>
       {children}
     </Router.Provider>
   );

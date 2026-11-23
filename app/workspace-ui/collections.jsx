@@ -1,5 +1,5 @@
 import { TextLinks } from '../components/learning-text';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -242,17 +242,14 @@ function Sharing({ collection, close }) {
 }
 
 export function CollectionView({ collection, sharedId, itemId, materialId }) {
-  const { db, saveCollection } = useData();
-  const { go, back, params } = useNav();
+  const { db, saveCollection, ctx } = useData();
+  const { go, back, params, path } = useNav();
   const [share, setShare] = useState(false);
   const [full, setFull] = useState(false);
-  const navigatorPosition = useRef(null);
+  const request = useRef(null);
+  const [pending, setPending] = useState(null);
   const returning = useRef(false);
-  const takePosition = useCallback(index => {
-    const previous = navigatorPosition.current;
-    navigatorPosition.current = null;
-    return previous?.index === index ? previous : null;
-  }, []);
+  useEffect(() => () => request.current?.abort(), [ctx, collection, path]);
   const contentsRequested = params.get('view') === 'contents';
   const contentsRef = useRef(null);
   const { title, summary, category, author, items, created } = collection;
@@ -279,6 +276,25 @@ export function CollectionView({ collection, sharedId, itemId, materialId }) {
     return (
       <ReaderProblem title="合集里没有这一项" to={base} text="打开目录可以查看这个版本的全部内容。" />
     );
+  async function chooseChapter(next, afterChange) {
+    const nextItem = items[next];
+    const video = nextItem.reference.kind === 'video' ? nextItem.reference.id : null;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const origin = location.hash;
+    const chapter = {ctx, collection, item:nextItem, video, attempt:0};
+    setPending({index:next,path});
+    try {
+      chapter.data = await readChapter(ctx, nextItem, collection, controller.signal, video);
+    } catch (error) {
+      chapter.error = error.message || '暂时无法读取这项内容。';
+    }
+    if (controller.signal.aborted || ctx.signal.aborted || location.hash !== origin) return;
+    request.current = null;
+    setPending(null);
+    go(chapterPath(nextItem,base), {replace:true, collectionStep:{chapter,afterChange}});
+  }
   function returnToIndex() {
     if (history.state?.kapokFrom?.split('?')[0] === base) {
       returning.current = true;
@@ -290,11 +306,8 @@ export function CollectionView({ collection, sharedId, itemId, materialId }) {
     return <ChapterLoader key={item.id} collection={collection} item={item} video={video} base={base}
       backControl={<button className="back-link" type="button" onClick={returnToIndex}><ArrowLeft size={15} />返回目录</button>}
       videoPath={id => item.reference.kind === 'video' && id !== video ? item.href.split('?')[0] + '?video=' + encodeURIComponent(id) : chapterPath(item,base,id)}
-      collectionNav={<CollectionNavigator title={title} items={items} index={index} takePosition={takePosition}
-        onChoose={(i,position) => {
-          navigatorPosition.current = position;
-          go(chapterPath(items[i],base), {replace:true});
-        }} onContents={returnToIndex} />} />;
+      collectionNav={<CollectionNavigator title={title} items={items} index={index}
+        pending={pending?.path === path ? pending.index : null} onChoose={chooseChapter} onContents={returnToIndex} />} />;
   }
   const cover = items[0];
   return (
@@ -398,11 +411,14 @@ export function CollectionView({ collection, sharedId, itemId, materialId }) {
 
 function ChapterLoader({ collection, item, video, base, ...controls }) {
   const { ctx } = useData();
-  const { params } = useNav();
+  const { params, chapter } = useNav();
   const [result, setResult] = useState(null);
   const [attempt, setAttempt] = useState(0);
   const reload = () => setAttempt(n => n + 1);
+  const prepared = attempt === 0 && chapter?.ctx === ctx && chapter.collection === collection &&
+    chapter.item === item && chapter.video === video ? chapter : null;
   useEffect(() => {
+    if (prepared) return;
     const controller = new AbortController();
     const commit = value => {
       if (!controller.signal.aborted) setResult({ctx, item, collection, video, attempt, ...value});
@@ -410,37 +426,71 @@ function ChapterLoader({ collection, item, video, base, ...controls }) {
     readChapter(ctx, item, collection, controller.signal, video)
       .then(data => commit({data}), e => commit({error:e.message || '暂时无法读取这项内容。'}));
     return () => controller.abort();
-  }, [ctx, item, collection, video, attempt]);
-  if (result?.ctx !== ctx || result.item !== item || result.collection !== collection || result.video !== video || result.attempt !== attempt)
+  }, [ctx, item, collection, video, attempt, prepared]);
+  const current = prepared || result;
+  if (current?.ctx !== ctx || current.item !== item || current.collection !== collection || current.video !== video || current.attempt !== attempt)
     return <p className="page-width pending-reader" role="status">正在读取内容…</p>;
-  if (result.error) return <ReaderProblem title="暂时打不开这一项" text={result.error} to={base} retry={reload} />;
-  return <TrainingReader key={[result.data.id, result.data.selectedVideo?.id, params.get('t')].join(':')}
-    t={result.data} reload={reload} collectionItem={{...result.data, id:item.id, reference:item.reference}} {...controls} />;
+  if (current.error) return <ReaderProblem title="暂时打不开这一项" text={current.error} to={base} retry={reload} />;
+  return <TrainingReader key={[current.data.id, current.data.selectedVideo?.id, params.get('t')].join(':')}
+    t={current.data} reload={reload} collectionItem={{...current.data, id:item.id, reference:item.reference}} {...controls} />;
 }
 
-function CollectionNavigator({ title, items, index, takePosition, onChoose, onContents }) {
+// Give the incoming poster or local first frame a moment to paint without starting playback.
+function prepareReaderCover(reader) {
+  const video = reader?.querySelector('video');
+  let image = reader?.querySelector('.platform-poster, .material-photos img');
+  const background = reader?.querySelector('.player-cover')?.style.backgroundImage;
+  const poster = video?.poster || (background && /^url\(["']?(.*?)["']?\)$/.exec(background)?.[1]);
+  if (!image && poster) {
+    image = new Image();
+    image.src = poster;
+  }
+  if (!image && (!video || video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)) return;
+  return new Promise(resolve => {
+    const deadline = setTimeout(finish, 160);
+    function finish() {
+      clearTimeout(deadline);
+      video?.removeEventListener('loadeddata', finish);
+      video?.removeEventListener('error', finish);
+      resolve();
+    }
+    if (image) image.decode().then(finish, finish);
+    else {
+      video.addEventListener('loadeddata', finish);
+      video.addEventListener('error', finish);
+    }
+  });
+}
+
+function CollectionNavigator({ title, items, index, pending, onChoose, onContents }) {
   const bar = useRef(null);
   const touch = useRef(null);
   const count = items.length;
   const start = Math.max(0, Math.min(index - 1, count - 3));
   const titleAction = index === count - 1 ? '读完，返回目录' : '打开合集目录：' + title;
 
-  useLayoutEffect(() => {
-    const previous = takePosition(index);
-    if (!previous) return;
-    const target = bar.current;
-    if (previous.wasScrolled || target.getBoundingClientRect().bottom > window.innerHeight)
-      window.scrollBy({ top: target.getBoundingClientRect().top - previous.top, behavior: 'instant' });
-    const control = previous.step && target.querySelector('[data-step="' + previous.step + '"]:not(:disabled)');
-    (control || target.querySelector('[aria-current="page"]'))?.focus({ preventScroll: true });
-  }, [index, takePosition]);
-
-  function choose(next) {
+  function choose(next, step = document.activeElement?.dataset.step) {
     if (next < 0 || next >= count || next === index) return;
     const top = bar.current.getBoundingClientRect().top;
     const wasScrolled = window.scrollY > 0;
-    const step = document.activeElement?.dataset.step;
-    onChoose(next, { index:next, top, wasScrolled, step });
+    onChoose(next, (waitForCover) => {
+      // The player and its controls remount when the material changes.
+      const target = document.querySelector('.collection-navigator');
+      if (!target) return;
+      if (wasScrolled || target.getBoundingClientRect().bottom > window.innerHeight)
+        window.scrollBy({ top: target.getBoundingClientRect().top - top, behavior: 'instant' });
+      const control = step && target.querySelector('[data-step="' + step + '"]:not(:disabled)');
+      (control || target.querySelector('[aria-current="page"]'))?.focus({ preventScroll: true });
+      if (waitForCover) {
+        const rect = target.getBoundingClientRect();
+        const style = document.documentElement.style;
+        style.setProperty('--collection-bar-top', rect.top + 'px');
+        style.setProperty('--collection-bar-bottom', rect.bottom + 'px');
+        style.setProperty('--reader-top', Math.max(0, document.querySelector('.topbar').getBoundingClientRect().bottom) + 'px');
+        style.setProperty('--reader-bottom', document.querySelector('.phone-nav').getBoundingClientRect().height + 'px');
+        return prepareReaderCover(target.closest('.detail-page'));
+      }
+    });
   }
 
   function arrowKey(event) {
@@ -463,7 +513,7 @@ function CollectionNavigator({ title, items, index, takePosition, onChoose, onCo
   }
 
   return (
-    <nav ref={bar} className="collection-navigator" aria-label="合集翻页" onKeyDown={arrowKey}
+    <nav ref={bar} className="collection-navigator" aria-label="合集翻页" aria-busy={pending != null} onKeyDown={arrowKey}
       onTouchStart={event => {
         const point = event.touches[0];
         touch.current = event.touches.length === 1 ? { x: point.clientX, y: point.clientY } : null;
@@ -475,23 +525,24 @@ function CollectionNavigator({ title, items, index, takePosition, onChoose, onCo
           <strong>{title}</strong>
         </button>
       </Tip>
+      {pending != null && <span className="sr" role="status">正在读取第 {pending + 1} 项</span>}
       <div className="collection-controls">
         {count > 1 && <div className="collection-switch">
           <IconButton label="上一项" data-step="prev" icon={ChevronLeft} disabled={index === 0}
-            onClick={() => choose(index - 1)} />
+            onClick={() => choose(index - 1, 'prev')} />
           <div className="collection-numbers">
             {items.slice(start, start + 3).map((item, offset) => {
               const i = start + offset;
               return <Tip key={i} label={item.title}>
-                <button type="button" className="collection-number" aria-label={'第 ' + (i + 1) + ' 项：' + item.title}
-                  aria-current={i === index ? 'page' : undefined} onClick={() => choose(i)}>
+                <button type="button" className="collection-number" data-pending={i === pending || undefined} aria-label={'第 ' + (i + 1) + ' 项：' + item.title}
+                  aria-current={i === index ? 'page' : undefined} onClick={() => choose(i,null)}>
                   <span>{String(i + 1).padStart(2, '0')}</span>
                 </button>
               </Tip>;
             })}
           </div>
           <IconButton label="下一项" data-step="next" icon={ChevronRight} disabled={index === count - 1}
-            onClick={() => choose(index + 1)} />
+            onClick={() => choose(index + 1, 'next')} />
         </div>}
         <IconButton className="collection-directory" label="查看合集目录" icon={ListOrdered} onClick={onContents} />
       </div>

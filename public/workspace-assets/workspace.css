@@ -3734,7 +3734,7 @@ html[data-direction='back']::view-transition-new(kapok-page) {
   animation: index-in 0.18s var(--ease);
 }
 @supports not (view-transition-name: kapok-page) {
-  .route-page > .page-width {
+  html:not([data-collection-step]) .route-page > .page-width {
     animation: index-in 0.18s var(--ease);
   }
 }
@@ -4322,6 +4322,8 @@ html[data-direction='forward'][data-section='activity']::view-transition-new(kap
   font-size: 13px;
   min-height: 42px;
 }
+.detail-page:has(.collection-navigator) .detail-toolbar { min-height: 44px; }
+.collection-number[data-pending] span { box-shadow: inset 0 0 0 1px var(--green); }
 .collection-navigator {
   display: flex;
   align-items: center;
@@ -5136,4 +5138,48 @@ html[data-direction='forward'][data-section='activity']::view-transition-new(kap
   .identity-mid { flex-wrap: wrap; }
   .member-name { gap: 6px; }
   .member-name .avatar { width: 25px; height: 25px; }
+}
+
+/* Only the outgoing pictures and copy are captured. The new player, navigation and
+   discussion remain live, even when the two items have very different heights. */
+html[data-collection-step] .route-page { view-transition-name: none; }
+html[data-collection-step='outgoing'] .detail-head { view-transition-name: kapok-previous-heading; }
+html[data-collection-step='outgoing'] .detail-summary { view-transition-name: kapok-previous-summary; }
+html[data-collection-step='outgoing'] .material-prose { view-transition-name: kapok-previous-prose; }
+html[data-collection-step='outgoing'] .player-stage,
+html[data-collection-step='outgoing'] .detail-page:not(:has(.player-stage)) .material-photos {
+  view-transition-name: kapok-previous-visual;
+}
+/* Leave an opening over the live controls even when a video and an article have different heights. */
+html[data-collection-step='reading']::view-transition {
+  pointer-events: none;
+  clip-path: inset(var(--reader-top) 0 var(--reader-bottom));
+  mask-image: linear-gradient(to bottom, black var(--collection-bar-top), transparent var(--collection-bar-top),
+    transparent var(--collection-bar-bottom), black var(--collection-bar-bottom));
+}
+::view-transition-group(kapok-previous-heading),
+::view-transition-group(kapok-previous-summary),
+::view-transition-group(kapok-previous-prose),
+::view-transition-group(kapok-previous-visual) { animation: none; }
+::view-transition-old(kapok-previous-heading),
+::view-transition-old(kapok-previous-summary),
+::view-transition-old(kapok-previous-prose) {
+  mix-blend-mode: normal;
+  animation: item-dissolve 180ms ease-out both;
+}
+::view-transition-group(kapok-previous-visual) { z-index: 1; }
+::view-transition-old(kapok-previous-visual) {
+  mix-blend-mode: normal;
+  animation: item-dissolve 380ms ease-in-out both;
+}
+html[data-collection-step='reading'] .detail-page :is(.detail-head, .detail-summary, .material-prose) {
+  animation: item-ink-in 190ms ease-out 100ms backwards;
+}
+@keyframes item-dissolve {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes item-ink-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
