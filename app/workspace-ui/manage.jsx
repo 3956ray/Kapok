@@ -429,7 +429,7 @@ function FeaturedDesk({current,reload}) {
         const i = keys.indexOf(e.key);
         return (
           <article className="desk-row" key={e.key}>
-            <MediaCover className="desk-thumb" item={e.cover} fallback={fieldPhoto(e.cover)} alt="" />
+            <MediaCover className="desk-thumb" item={e.cover} collectionCover={e.coverUrl} alt="" />
             <div className="desk-copy">
               <NavLink to={e.href}>{e.title}</NavLink>
               <small>

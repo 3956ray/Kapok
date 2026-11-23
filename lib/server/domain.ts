@@ -1,4 +1,5 @@
-import { validateAvatar, avatarBytes } from './profile-avatar.ts';
+import { validateAvatar } from './profile-avatar.ts';
+import { imageDataBytes } from './learning-image-validation.ts';
 import { videoCover } from './video-covers.ts';
 import type { LearningAssociation, TopicAddOutcome, TopicPolicy } from '../contracts/topic-collections';
 import type { LearningPolicy } from '../contracts/learning';
@@ -312,7 +313,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
         AND m.user_id=? AND m.status='active' AND m.epoch=? AND v.status='active') AND ${access.predicate}`,
       id,digest,viewer.membership.teamId,viewer.membership.id,viewer.user.id,viewer.membership.epoch,...access.values).first<{image:string}>();
     if (!row) throw new DomainError('NOT_FOUND','头像暂不可见。',404);
-    return { bytes:avatarBytes(row.image.slice(row.image.indexOf(',')+1)), type:row.image.slice(5,row.image.indexOf(';')) };
+    return { bytes:imageDataBytes(row.image.slice(row.image.indexOf(',')+1)), type:row.image.slice(5,row.image.indexOf(';')) };
   }
   async function updateProfile(principal: Principal | null, input: unknown, key: string): Promise<WriteResult> {
     const current = authenticated(principal);

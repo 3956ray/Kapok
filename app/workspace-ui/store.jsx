@@ -39,7 +39,7 @@ function snapshot(payload) {
   const { account, members } = payload;
   const materials = presentMaterials(account, payload.trainings, payload.posts, payload.categories, payload.drafts);
   const growth = presentGrowth(payload);
-  const topics = presentTopics(payload.topics);
+  const topics = presentTopics(payload.topics, materials.trainings);
   const people = members.map(row=>person(row,account.user.id));
   const own = members.find(row => row.id === account.user.id);
   const profile = person({ ...account.profile, avatarDigest:own?.avatarDigest, id:account.user.id, role:account.membership.role },account.user.id);

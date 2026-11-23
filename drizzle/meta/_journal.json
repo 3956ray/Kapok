@@ -162,6 +162,13 @@
       "when": 1795660000002,
       "tag": "0024_profile_avatars",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1795660000003,
+      "tag": "0025_workspace_topic_covers",
+      "breakpoints": true
     }
   ]
 }

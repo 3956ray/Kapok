@@ -43,6 +43,15 @@ function Route() {
   const [group, id, mode, ...extras] = pathname.split('/').slice(1);
   if (id && !mode && group === 'videos') return <LegacyVideo key={id} id={id}/>;
   if (id && !mode && (group === 'announcements' || group === 'notices')) return <AnnouncementReader key={id} id={id}/>;
+  if (group === 'trainings' && id && !mode && params.has('collection')) {
+    const match = /^\/(shared|collections)\/([\w-]+)$/.exec(params.get('collection'));
+    if (!match) return <Missing label="合集" />;
+    const [,kind,collectionId] = match;
+    const chapter = params.get('entry') || id;
+    if (kind === 'shared') return <SharedCollection key={collectionId} id={collectionId} itemId={chapter} materialId={id} />;
+    const collection = collections.find(c => c.id === collectionId);
+    return collection ? <CollectionView key={collectionId} collection={collection} itemId={chapter} materialId={id} /> : <Missing label="可访问的合集" />;
+  }
   if ((group === 'collections' || group === 'shared') && id) {
     const chapter = mode === 'items' && extras.length === 1 && extras[0];
     if (mode && !chapter && !(group === 'collections' && mode === 'edit' && !extras.length))

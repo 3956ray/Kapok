@@ -7,6 +7,7 @@ import { reflectionShared } from './reflections.ts';
 import { privateOwnerFence, publishedLearningLink, requirePrivateOwner } from './learning-sources.ts';
 import { learningActivityVisible } from './learning-activity.ts';
 import { learningPostVisible } from './learning.ts';
+import { topicCoverVersion } from './topic-cover.ts';
 import { topicVideoVisible, topicVisible } from './topic-collections.ts';
 
 type Context = Me & {
@@ -108,9 +109,11 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 FROM learning_posts lp JOIN owner o ON o.id=lp.owner_id
                 LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY lp.created_at,lp.id`),
             owned(`SELECT tc.id,tc.status,tc.created_at AS createdAt,tc.updated_at AS updatedAt,
-                json_object('title',tc.title,'summary',tc.summary,'category',tc.category,'version',tc.version,'items',json(${topicItems(0)})) AS draft,
-                CASE WHEN tcp.collection_id IS NOT NULL THEN json_object('title',tcp.title,'summary',tcp.summary,'category',tcp.category,'version',tcp.version,
-                    'publishedAt',tcp.published_at,'available',${bool(`${teamSource('tc.team_id')} AND ${topicVisible}`)},'items',json(${topicItems(1)})) END AS publication
+                json_patch(json_object('title',tc.title,'summary',tc.summary,'category',tc.category,'version',tc.version,'items',json(${topicItems(0)})),
+                    json_object('coverVersion',${topicCoverVersion('tc.version')})) AS draft,
+                CASE WHEN tcp.collection_id IS NOT NULL THEN json_patch(json_object('title',tcp.title,'summary',tcp.summary,'category',tcp.category,'version',tcp.version,
+                    'publishedAt',tcp.published_at,'available',${bool(`${teamSource('tc.team_id')} AND ${topicVisible}`)},'items',json(${topicItems(1)})),
+                    json_object('coverVersion',${topicCoverVersion('tcp.version')})) END AS publication
                 FROM topic_collections tc JOIN owner o ON o.id=tc.owner_id
                 LEFT JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id ORDER BY tc.created_at,tc.id`),
             owned(`SELECT li.id,li.post_id AS postId,li.mime_type AS mimeType,li.bytes,li.width,li.height,li.created_at AS createdAt

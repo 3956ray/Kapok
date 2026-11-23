@@ -246,6 +246,13 @@ function webp(bytes: Uint8Array, view: DataView): Dimensions {
     return image;
 }
 
+export function imageDataBytes(encoded: string) {
+    let raw: string;
+    try { raw = atob(encoded); }
+    catch { throw new DomainError('INVALID_IMAGE','图片无法读取。',415); }
+    return Uint8Array.from(raw,ch=>ch.charCodeAt(0));
+}
+
 export async function validatedLearningImage(body: ReadableStream<Uint8Array> | null, declaredType: string | null, maxBytes: number, maxEdge: number = learningImageDimensions.maxEdge) {
     if (!body || !['image/png', 'image/jpeg', 'image/webp'].includes(declaredType ?? '')) throw invalid();
     const reader = body.getReader();

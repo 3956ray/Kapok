@@ -88,6 +88,11 @@ export async function exportTopicHtml(ctx, editionId, signal) {
   const link = (path,label) => '<a rel="noreferrer" href="'+escape(new URL(path,origin).href)+'">'+escape(label)+'</a>';
   const parts = ['<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src &apos;none&apos;; style-src &apos;unsafe-inline&apos;; img-src data:; media-src data:; base-uri &apos;none&apos;; form-action &apos;none&apos;"><title>',escape(title),'</title><style>body{max-width:44rem;margin:auto;padding:2rem 1.2rem;font:17px/1.7 system-ui;color:#183c2e;background:#fafaf5}section{border-top:1px solid #c4d1c2;margin-top:2rem}p{white-space:pre-wrap;overflow-wrap:anywhere}img,video{max-width:100%;height:auto}a{color:#215a44}h1,h2{overflow-wrap:anywhere}figure{margin:1em 0}</style><main><h1>',escape(title),'</h1>'];
   const editionPath = '/learn/shares/'+enc(editionId);
+  if (directory.isAuthor && directory.coverVersion) {
+    const path = '/api/v1/workspace/topic-covers/share/' + enc(editionId) + '/' + directory.coverVersion;
+    const image = await readBinary(ctx,{type:'image',path},signal);
+    parts.push('<figure><img alt="合集封面" src="',image,'"></figure>');
+  }
   if (directory.isAuthor && directory.summary) parts.push('<p>',escape(directory.summary),'</p>');
   parts.push(link(editionPath,'登录查看队内版本'));
   const entries = [];

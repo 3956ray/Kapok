@@ -8,7 +8,8 @@ import { saveTopic } from './topics';
 import { kindName, uid, useData } from './store';
 import { NavLink, useNav, useTitle } from './router';
 import { Back, IconButton, PageHead } from './ui';
-import { fieldPhoto } from './press';
+import { prepareCollectionCover } from './profile-avatar.js';
+import { MediaCover } from './press';
 
 function readDraft(key) {
   try {
@@ -60,6 +61,25 @@ export function CollectionEditor({ collection: entry }) {
   const [emptyError, setEmptyError] = useState(false);
   const [sending, setSending] = useState(false);
   const request = useRef(null);
+  const coverRequest = useRef(null);
+  const [preparing, setPreparing] = useState(false);
+  const coverUrl = form.cover === undefined ? collection?.coverUrl : form.cover;
+  useEffect(() => () => coverRequest.current?.abort(), []);
+  async function pickCover(file) {
+    if (!file || coverRequest.current || request.current) return;
+    const controller = new AbortController();
+    coverRequest.current = controller;
+    setPreparing(true);
+    try {
+      const cover = await prepareCollectionCover(file);
+      if (!controller.signal.aborted) patch({ cover });
+    } catch (e) {
+      if (!controller.signal.aborted) setError(e.message);
+    } finally {
+      coverRequest.current = null;
+      if (!controller.signal.aborted) setPreparing(false);
+    }
+  }
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => {
     try {
@@ -123,7 +143,7 @@ export function CollectionEditor({ collection: entry }) {
   }
   async function save(e) {
     e.preventDefault();
-    if (request.current) return;
+    if (request.current || coverRequest.current) return;
     if (!form.title.trim()) {
       setError('请填写合集名称。');
       return;
@@ -140,7 +160,7 @@ export function CollectionEditor({ collection: entry }) {
     setSending(true);
     setError('');
     try {
-      const fingerprint = JSON.stringify([form.draftId, form.baseVersion, form.title, form.summary, form.category, form.itemIds]);
+      const fingerprint = JSON.stringify([form.draftId, form.baseVersion, form.title, form.summary, form.category, form.itemIds, ...(form.cover !== undefined ? [form.cover] : [])]);
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(fingerprint));
       const key = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
       result = await saveTopic(ctx, collection, form, selected, key);
@@ -193,6 +213,18 @@ export function CollectionEditor({ collection: entry }) {
               placeholder="队友可以按什么顺序看？"
             />
           </label>
+          <div className="collection-cover-field">
+            {coverUrl && <img src={coverUrl} alt="自选合集封面" />}
+            <div><strong>合集封面 <small>选填</small></strong>
+              <p>{coverUrl ? '仅用于这份合集。' : '默认使用目录第一项的封面。'}</p>
+            </div>
+            <label className="media-chooser">{preparing ? '处理中…' : coverUrl ? '更换图片' : '选择图片'}
+              <input type="file" aria-label="选择合集封面" accept="image/jpeg,image/png,image/webp"
+                disabled={preparing || sending} onChange={e => { pickCover(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            {coverUrl && <button type="button" className="ink-link" disabled={preparing || sending}
+              onClick={() => patch({ cover:null })}>恢复默认</button>}
+          </div>
         </section>
         <div className="edit-spread">
           <section className="material-picker" aria-label="选择内容">
@@ -249,7 +281,7 @@ export function CollectionEditor({ collection: entry }) {
                   aria-pressed={form.itemIds.includes(t.id)}
                   onClick={() => toggle(t)}
                 >
-                  <img src={fieldPhoto(t)} alt="" loading="lazy" />
+                  <MediaCover item={t} alt="" loading="lazy" />
                   <span>
                     <strong>{t.title}</strong>
                     <small>
@@ -331,7 +363,7 @@ export function CollectionEditor({ collection: entry }) {
           >
             取消编辑
           </button>
-          <button className="btn primary" disabled={sending} type="submit">
+          <button className="btn primary" disabled={sending || preparing} type="submit">
             <Check size={16} />
             {sending ? '正在发布…' : collection ? '保存合集修改' : '发布合集'}
           </button>

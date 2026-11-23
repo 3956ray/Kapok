@@ -44,6 +44,7 @@ const migrations = [
   "0022_workspace_profile_position.sql",
   "0023_announcement_revisions.sql",
   "0024_profile_avatars.sql",
+  "0025_workspace_topic_covers.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {

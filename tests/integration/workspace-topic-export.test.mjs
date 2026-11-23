@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { exportTopicHtml } from '../../app/workspace-ui/topic-export.js';
 
-function fixture(t, { revoke = false, change = false } = {}) {
+function fixture(t, { revoke = false, change = false, isAuthor = true } = {}) {
   const paths = [], user = {id:'mine'}, signal = new AbortController().signal;
   const source = {kind:'post',id:'a',author:user}, other = {kind:'post',id:'b',author:{id:'other'}};
-  const edition = {isAuthor:true,title:'<我的目录>',summary:'训练资料',items:[source,other]};
+  const edition = {isAuthor,coverVersion:3,title:'<我的目录>',summary:'训练资料',items:[source,other]};
   const own = {isAuthor:true,author:user,title:'本人文章',summary:'摘要',body:'<script>privateText()</script>',images:[{id:'old-photo',alt:'旧图'}],
     workspaceDetails:JSON.stringify({photos:[{id:'mine-photo',alt:'新图'},{id:'others-photo',alt:'队友的照片'}]}),publishedVersion:1};
   let editions = 0, articles = 0;
@@ -32,6 +32,8 @@ test('offline topic embeds only owned publication assets, escapes content, and l
   const html = await file.text();
   assert.match(html,/&lt;我的目录&gt;/);
   assert.match(html,/&lt;script&gt;privateText\(\)&lt;\/script&gt;/);
+  assert.match(html,/<img alt="合集封面"/);
+  assert.ok(paths.includes('/api/v1/workspace/topic-covers/share/s/3'));
   assert.match(html,/data:image\/png;base64,AQID/);
   assert.match(html,/href="https:\/\/kapok.test\/learn\/posts\/b"/);
   assert.doesNotMatch(html,/<script>|队友的照片|others-photo/);
@@ -46,4 +48,11 @@ test('offline topic refuses to release a file after membership revocation during
 test('offline topic rejects an outdated copy if a source was edited while assets downloaded', async t => {
   const {ctx,signal} = fixture(t,{change:true});
   await assert.rejects(exportTopicHtml(ctx,'s',signal),/权限已变化/);
+});
+
+test('offline topic keeps another author’s edition cover behind the member link', async t => {
+  const {ctx,signal,paths} = fixture(t,{isAuthor:false});
+  const {file} = await exportTopicHtml(ctx,'s',signal);
+  assert.doesNotMatch(await file.text(),/<img alt="合集封面"/);
+  assert.ok(!paths.some(path => path.includes('topic-covers')));
 });

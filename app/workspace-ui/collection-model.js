@@ -15,6 +15,7 @@ export function catalogEntries(collections, remoteCollections, trainings) {
       author: c.author,
       date: c.updated || c.created,
       count: c.itemIds.length,
+      coverUrl: c.coverUrl,
       cover: c.items?.[0] || trainings.find((t) => t.id === c.itemIds[0]),
       contents: c.items
         .map(item => item.title)

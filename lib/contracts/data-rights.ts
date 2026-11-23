@@ -79,7 +79,7 @@ export type ExportedLearningPost = {
     publication: (ExportedLearningContent & { publishedAt: string; available: boolean }) | null;
 };
 export type ExportedTopicRevision = {
-    title: string; summary: string; category: string; version: number;
+    title: string; summary: string; category: string; version: number; coverVersion?: number;
     items: (TopicReference & { position: number; sourceAvailable: boolean })[];
 };
 export type ExportedTopicCollection = {

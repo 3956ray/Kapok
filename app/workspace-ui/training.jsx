@@ -321,7 +321,7 @@ export function TrainingDetail({ t }) {
   const {params}=useNav();
   return <MaterialLoader item={t}>{(item,reload)=><TrainingReader key={[item.id,item.selectedVideo?.id,params.get('t')].join(':')} t={item} reload={reload}/>}</MaterialLoader>;
 }
-function TrainingReader({ t,reload }) {
+export function TrainingReader({ t,reload,backControl,collectionNav,videoPath }) {
   const { go,params } = useNav();
   const rawTime=params.get('t');
   const start=rawTime && /^\d+$/.test(rawTime) && Number(rawTime)<=359999 && (!t.duration || Number(rawTime)<=t.duration) ? Number(rawTime) : null;
@@ -358,7 +358,7 @@ function TrainingReader({ t,reload }) {
   return (
     <div className="page-width detail-page">
       <div className="detail-toolbar">
-        <Back />
+        {backControl || <Back />}
         <div className="detail-management">{editable && (
           <><IconButton
             label={'编辑' + label}
@@ -369,7 +369,7 @@ function TrainingReader({ t,reload }) {
         )}
         {t.kind!=='training' && !t.isDraft && <LearningActions item={t} reload={reload}/>}</div>
       </div>
-      {t.videos?.length>1 && <nav className="segments" aria-label="选择视频">{t.videos.map(v=><NavLink className="btn" key={v.id} aria-current={v.id===t.selectedVideo?.id ? 'page' : undefined} to={'/trainings/'+t.id+'?video='+v.id}>{v.title}</NavLink>)}</nav>}
+      {t.videos?.length>1 && <nav className="segments" aria-label="选择视频">{t.videos.map(v=><NavLink className="btn" key={v.id} aria-current={v.id===t.selectedVideo?.id ? 'page' : undefined} to={videoPath ? videoPath(v.id) : '/trainings/'+t.id+'?video='+v.id}>{v.title}</NavLink>)}</nav>}
       {(local || external) && (
         <section ref={attachStage} tabIndex={-1} data-photo-destination={t.id} className="player-stage" aria-label="训练播放器">
           {local && (
@@ -420,6 +420,7 @@ function TrainingReader({ t,reload }) {
           )}
         </section>
       )}
+      {collectionNav}
       {readingFrom && readingFrom.mediaKey === mediaKey && (
         <div className="citation-return">
           <span><Clock3 size={16} aria-hidden="true" />讨论引用 {timeLabel(readingFrom.at)}</span>

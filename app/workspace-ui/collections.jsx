@@ -1,5 +1,5 @@
 import { TextLinks } from '../components/learning-text';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -13,21 +13,21 @@ import {
   Layers,
   ListOrdered,
   Pencil,
-  Play,
+  ChevronLeft,
+  ChevronRight,
   Plus,
   Search,
   Share2,
 } from 'lucide-react';
 import { NavLink, useNav, useTitle } from './router';
-import { fieldPhoto } from './press';
+import { MediaCover } from './press';
 import { kindName, shortDate, useData } from './store';
-import { Back, Empty, IconButton, Modal, PageHead, Segments, usePreference } from './ui';
+import { Back, Empty, IconButton, Modal, PageHead, Segments, Tip, usePreference } from './ui';
 import { trainingCategory, trainingCategoryNames } from './categories.js';
 import { catalogEntries, inTrainingCatalog, matchText } from './collection-model';
-import { presentTopic, readChapter } from './topics.js';
-import { AddToCollection, DeleteCollection } from './collection-actions';
-import { playbackPoints } from './timepoints.js';
-import { ChapterList, useVideoPlayback } from './timepoint-controls.jsx';
+import { chapterPath, presentTopic, readChapter } from './topics.js';
+import { DeleteCollection } from './collection-actions';
+import { TrainingReader } from './training';
 
 export function LibraryNav({ active }) {
   return (
@@ -118,8 +118,7 @@ export function Collections() {
                 tabIndex={-1}
                 aria-hidden="true"
               >
-                <img
-                  src={fieldPhoto(c.cover)}
+                <MediaCover item={c.cover} collectionCover={c.coverUrl}
                   alt=""
                   loading={i === 0 ? 'eager' : 'lazy'}
                   data-photo-key={'collection:' + c.key}
@@ -242,12 +241,18 @@ function Sharing({ collection, close }) {
   </Modal>;
 }
 
-export function CollectionView({ collection, sharedId, itemId }) {
+export function CollectionView({ collection, sharedId, itemId, materialId }) {
   const { db, saveCollection } = useData();
   const { go, back, params } = useNav();
   const [share, setShare] = useState(false);
   const [full, setFull] = useState(false);
-  const landing = useRef(true);
+  const navigatorPosition = useRef(null);
+  const returning = useRef(false);
+  const takePosition = useCallback(index => {
+    const previous = navigatorPosition.current;
+    navigatorPosition.current = null;
+    return previous?.index === index ? previous : null;
+  }, []);
   const contentsRequested = params.get('view') === 'contents';
   const contentsRef = useRef(null);
   const { title, summary, category, author, items, created } = collection;
@@ -263,35 +268,34 @@ export function CollectionView({ collection, sharedId, itemId }) {
     el.scrollIntoView({ block: 'start', behavior: 'instant' });
   }
   useEffect(() => {
-    if (!landing.current) return;
-    landing.current = false;
-    if (!itemId && contentsRequested) {
+    if (!itemId && (contentsRequested || returning.current)) {
+      returning.current = false;
       const frame = requestAnimationFrame(showContents);
       return () => cancelAnimationFrame(frame);
     }
   }, [itemId, contentsRequested]);
   useTitle(item ? item.title + ' · ' + title : title);
-  if (itemId && !item)
+  if (itemId && (!item || (materialId && item.href.split('?')[0] !== '/trainings/' + materialId)))
     return (
       <ReaderProblem title="合集里没有这一项" to={base} text="打开目录可以查看这个版本的全部内容。" />
     );
   function returnToIndex() {
-    if (history.state?.kapokFrom?.split('?')[0] === base) back(base);
-    else go(base, { replace: true });
+    if (history.state?.kapokFrom?.split('?')[0] === base) {
+      returning.current = true;
+      back(base);
+    } else go(base + '?view=contents', { replace:true });
   }
-  if (item)
-    return (
-      <ChapterLoader collection={collection}
-        key={item.id}
-        item={item}
-        base={base}
-        index={index}
-        items={items}
-        title={title}
-        sharedId={sharedId}
-        onContents={returnToIndex}
-      />
-    );
+  if (item) {
+    const video = item.reference.kind === 'video' ? item.reference.id : params.get('video');
+    return <ChapterLoader key={item.id} collection={collection} item={item} video={video} base={base}
+      backControl={<button className="back-link" type="button" onClick={returnToIndex}><ArrowLeft size={15} />返回目录</button>}
+      videoPath={id => item.reference.kind === 'video' && id !== video ? item.href.split('?')[0] + '?video=' + encodeURIComponent(id) : chapterPath(item,base,id)}
+      collectionNav={<CollectionNavigator title={title} items={items} index={index} takePosition={takePosition}
+        onChoose={(i,position) => {
+          navigatorPosition.current = position;
+          go(chapterPath(items[i],base), {replace:true});
+        }} onContents={returnToIndex} />} />;
+  }
   const cover = items[0];
   return (
     <div className="page-width collection-detail">
@@ -301,8 +305,7 @@ export function CollectionView({ collection, sharedId, itemId }) {
       </div>
       <article className="folio-jacket">
         <div className="folio-jacket-print">
-          <img
-            src={fieldPhoto(cover)}
+          <MediaCover item={cover} collectionCover={collection.coverUrl}
             alt=""
             data-photo-destination={'collection:' + (collection.id)}
           />
@@ -347,12 +350,11 @@ export function CollectionView({ collection, sharedId, itemId }) {
           <h2>目录</h2>
           <span>{items.length} 项</span>
         </div>
-        <div className="contents-actions">
+        <div className="contents-actions icon-actions material-actions">
           {!sharedId && collection.ownerId === 'me' && (
-            <NavLink className="btn" to={base + '/edit'}>
-              <Pencil size={14} />
-              编辑合集
-            </NavLink>
+            <Tip label="编辑合集"><NavLink className="icon-button" to={base + '/edit'} aria-label="编辑合集">
+              <Pencil size={18} aria-hidden="true" />
+            </NavLink></Tip>
           )}
           <IconButton
             disabled={!collection.published}
@@ -362,22 +364,19 @@ export function CollectionView({ collection, sharedId, itemId }) {
             className={saved ? 'saved' : ''}
             onClick={() => saveCollection(savedKey, { title, category, author, href: base })}
           />
-          <button type="button" className="btn" disabled={!collection.published} onClick={() => setShare(true)}>
-            <Share2 size={15} />
-            分享
-          </button>
+          <IconButton icon={Share2} label="分享" disabled={!collection.published || !items.length} onClick={() => setShare(true)} />
         </div>
       </div>
       <ol className="folio-contents">
         {items.map((t, i) => (
           <li key={t.id}>
             <NavLink
-              to={base + '/items/' + t.id}
+              to={chapterPath(t,base)}
               className="contents-entry"
               aria-label={'阅读第 ' + (i + 1) + ' 项：' + t.title}
             >
               <span className="folio-index">{String(i + 1).padStart(2, '0')}</span>
-              <img src={fieldPhoto(t)} alt="" loading="lazy" />
+              <MediaCover item={t} alt="" loading="lazy" />
               <div>
                 <small>
                   {kindName[t.kind]} <i>/</i> {t.author}
@@ -397,147 +396,106 @@ export function CollectionView({ collection, sharedId, itemId }) {
   );
 }
 
-function ChapterLoader({ collection, item, ...props }) {
+function ChapterLoader({ collection, item, video, base, ...controls }) {
   const { ctx } = useData();
-  const [value, setValue] = useState(null), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
+  const { params } = useNav();
+  const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+  const reload = () => setAttempt(n => n + 1);
   useEffect(() => {
     const controller = new AbortController();
-    readChapter(ctx,item,collection,controller.signal).then(data => {
-      if (!controller.signal.aborted) setValue({ item, data });
-    }).catch(e => { if (!controller.signal.aborted) setError(e.message || '暂时无法读取这项内容。'); });
+    const commit = value => {
+      if (!controller.signal.aborted) setResult({ctx, item, collection, video, attempt, ...value});
+    };
+    readChapter(ctx, item, collection, controller.signal, video)
+      .then(data => commit({data}), e => commit({error:e.message || '暂时无法读取这项内容。'}));
     return () => controller.abort();
-  }, [ctx, item, collection, attempt]);
-  if (error) return <ReaderProblem title="暂时打不开这一项" text={error} to={props.base}
-    retry={() => { setError(''); setAttempt(n => n + 1); }} />;
-  if (value?.item !== item) return <p className="page-width pending-reader" role="status">正在读取内容…</p>;
-  return <Chapter {...props} item={value.data} />;
+  }, [ctx, item, collection, video, attempt]);
+  if (result?.ctx !== ctx || result.item !== item || result.collection !== collection || result.video !== video || result.attempt !== attempt)
+    return <p className="page-width pending-reader" role="status">正在读取内容…</p>;
+  if (result.error) return <ReaderProblem title="暂时打不开这一项" text={result.error} to={base} retry={reload} />;
+  return <TrainingReader key={[result.data.id, result.data.selectedVideo?.id, params.get('t')].join(':')}
+    t={result.data} reload={reload} {...controls} />;
 }
 
-function Chapter({ item, items, index, title, base, sharedId, onContents }) {
-  const { go } = useNav();
-  const {stage,native,play,playhead,started,embedKey,embed,original,error} = useVideoPlayback(item.source);
-  const file = item.videoAsset;
-  const cover = fieldPhoto(item);
-  function step(delta) {
-    const next = items[index + delta];
-    if (next) go(base + '/items/' + next.id, { replace: true });
+function CollectionNavigator({ title, items, index, takePosition, onChoose, onContents }) {
+  const bar = useRef(null);
+  const touch = useRef(null);
+  const count = items.length;
+  const start = Math.max(0, Math.min(index - 1, count - 3));
+  const titleAction = index === count - 1 ? '读完，返回目录' : '打开合集目录：' + title;
+
+  useLayoutEffect(() => {
+    const previous = takePosition(index);
+    if (!previous) return;
+    const target = bar.current;
+    if (previous.wasScrolled || target.getBoundingClientRect().bottom > window.innerHeight)
+      window.scrollBy({ top: target.getBoundingClientRect().top - previous.top, behavior: 'instant' });
+    const control = previous.step && target.querySelector('[data-step="' + previous.step + '"]:not(:disabled)');
+    (control || target.querySelector('[aria-current="page"]'))?.focus({ preventScroll: true });
+  }, [index, takePosition]);
+
+  function choose(next) {
+    if (next < 0 || next >= count || next === index) return;
+    const top = bar.current.getBoundingClientRect().top;
+    const wasScrolled = window.scrollY > 0;
+    const step = document.activeElement?.dataset.step;
+    onChoose(next, { index:next, top, wasScrolled, step });
   }
+
+  function arrowKey(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: count - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    choose(next);
+  }
+
+  function endSwipe(event) {
+    const from = touch.current;
+    touch.current = null;
+    if (!from || event.touches.length || event.changedTouches.length !== 1) return;
+    const point = event.changedTouches[0];
+    const dx = point.clientX - from.x;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < 1.5 * Math.abs(point.clientY - from.y)) return;
+    event.preventDefault();
+    choose(index + (dx < 0 ? 1 : -1));
+  }
+
   return (
-    <div className="page-width chapter-page">
-      <button className="back-link" type="button" onClick={onContents}>
-        <ArrowLeft size={15} />
-        返回目录
-      </button>
-      <article className="chapter-reader">
-        <div className="chapter-dateline">
-          <span>{title}</span>
-          <span>
-            第 {index + 1} 项 / 共 {items.length} 项
-          </span>
-        </div>
-        <header>
-          <div className="folio-byline">
-            <span>{kindName[item.kind]}</span>
-            <i />
-            {item.category}
-          </div>
-          <h1>{item.title}</h1>
-          <div className="chapter-author">
-            <span>{item.author}</span>
-            <time dateTime={item.date}>{shortDate(item.date)}</time>
-          </div>
-        </header>
-        {item.summary && <p className="chapter-intro"><TextLinks text={item.summary}/></p>}
-        {item.source ? (
-          <div className="chapter-media" ref={stage}>
-            {started ? (
-              <iframe
-                key={embedKey}
-                src={embed}
-                title={item.title + ' 播放器'}
-                allow="autoplay; fullscreen; picture-in-picture"
-                referrerPolicy="strict-origin-when-cross-origin"
-                allowFullScreen
-              />
-            ) : (
-              <button type="button" onClick={() => play()}>
-                <img src={cover} alt="" />
-                <span>
-                  <Play size={16} />
-                  载入{item.source.platform}视频
-                </span>
-              </button>
-            )}
-            <a href={original} target="_blank" rel="noreferrer">
-              在{item.source.platform}打开 <ExternalLink size={13} />
-            </a>
-          </div>
-        ) : file ? (
-          <video
-            {...native}
-            aria-label={item.title}
-            controls
-            playsInline
-            preload="metadata"
-            poster={cover}
-            src={file}
-          >
-          </video>
-        ) : null}
-        {item.body && <div className="chapter-text"><TextLinks text={item.body}/></div>}
-        {item.photos?.map((p, i) => (
-          <figure key={p.url + i}>
-            <img src={p.url} alt={p.alt || item.title + '配图 ' + (i + 1)} />
-            {p.alt && <figcaption>{p.alt}</figcaption>}
-          </figure>
-        ))}
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {(file || item.source) && <ChapterList points={playbackPoints(item)} playback={{play,playhead,started}} />}
-        {!file && !item.source && item.steps?.length > 0 && (
-          <section className="chapter-steps">
-            <h2>动作要点</h2>
-            <ol>
-              {item.steps.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ol>
-          </section>
-        )}
-        <div className="chapter-actions">
-          {sharedId ? (
-            <AddToCollection
-              id={item.id}
-              sharedItem={item}
-            />
-          ) : (
-            <NavLink className="ink-link" to={item.href}>
-              查看原内容与复盘 <ArrowUpRight size={15} />
-            </NavLink>
-          )}
-        </div>
-      </article>
-      <nav className="chapter-nav" aria-label="合集翻页">
-        <button type="button" disabled={index === 0} onClick={() => step(-1)}>
-          <ArrowLeft size={15} />
-          上一项
+    <nav ref={bar} className="collection-navigator" aria-label="合集翻页" onKeyDown={arrowKey}
+      onTouchStart={event => {
+        const point = event.touches[0];
+        touch.current = event.touches.length === 1 ? { x: point.clientX, y: point.clientY } : null;
+      }}
+      onTouchEnd={endSwipe} onTouchCancel={() => { touch.current = null; }}>
+      <Tip label="查看合集目录">
+        <button className="collection-location" type="button" aria-label={titleAction} onClick={onContents}>
+          <small>合集 · {index + 1} / {count}</small>
+          <strong>{title}</strong>
         </button>
-        <button type="button" onClick={onContents}>
-          <ListOrdered size={15} />
-          目录
-        </button>
-        {index === items.length - 1 ? (
-          <button type="button" onClick={onContents}>
-            读完，返回目录
-            <Check size={15} />
-          </button>
-        ) : (
-          <button type="button" onClick={() => step(1)}>
-            下一项
-            <ArrowRight size={15} />
-          </button>
-        )}
-      </nav>
-    </div>
+      </Tip>
+      <div className="collection-controls">
+        {count > 1 && <div className="collection-switch">
+          <IconButton label="上一项" data-step="prev" icon={ChevronLeft} disabled={index === 0}
+            onClick={() => choose(index - 1)} />
+          <div className="collection-numbers">
+            {items.slice(start, start + 3).map((item, offset) => {
+              const i = start + offset;
+              return <Tip key={i} label={item.title}>
+                <button type="button" className="collection-number" aria-label={'第 ' + (i + 1) + ' 项：' + item.title}
+                  aria-current={i === index ? 'page' : undefined} onClick={() => choose(i)}>
+                  <span>{String(i + 1).padStart(2, '0')}</span>
+                </button>
+              </Tip>;
+            })}
+          </div>
+          <IconButton label="下一项" data-step="next" icon={ChevronRight} disabled={index === count - 1}
+            onClick={() => choose(index + 1)} />
+        </div>}
+        <IconButton className="collection-directory" label="查看合集目录" icon={ListOrdered} onClick={onContents} />
+      </div>
+    </nav>
   );
 }
 
@@ -567,8 +525,8 @@ function ReaderProblem({ title, text, to = '/collections', retry }) {
   );
 }
 
-export function SharedCollection({ id, itemId }) {
-  const { collections, ctx } = useData();
+export function SharedCollection({ id, itemId, materialId }) {
+  const { collections, ctx, trainings } = useData();
   const [edition,setEdition] = useState(null), [error,setError] = useState(''), [attempt,retry] = useState(0);
   // Links copied before versioned directories were introduced still resolve by publication id.
   const current = collections.find(c => c.id === id && c.published);
@@ -576,12 +534,12 @@ export function SharedCollection({ id, itemId }) {
     if (current) return;
     const controller = new AbortController();
     ctx.read('workspace/topic-shares/' + encodeURIComponent(id),controller.signal).then(row => {
-      if (!controller.signal.aborted) setEdition({ ...presentTopic(row), published:true, editionId:id });
+      if (!controller.signal.aborted) setEdition({ ...presentTopic(row,trainings,id), published:true, editionId:id });
     }).catch(e => { if (!controller.signal.aborted) {setEdition(null);setError(e.message || '分享已撤下。');} });
     return () => controller.abort();
-  },[ctx,id,current,attempt]);
+  },[ctx,id,current,attempt,trainings]);
   if (error && !current) return <ReaderProblem title="暂时打不开这份分享" text={error} retry={() => {setError('');retry(n=>n+1);}} />;
   const collection = current || edition;
   if (!collection) return <p className="page-width pending-reader" role="status">正在打开合集…</p>;
-  return <CollectionView collection={collection} sharedId={id} itemId={itemId}/>;
+  return <CollectionView collection={collection} sharedId={id} materialId={materialId} itemId={itemId}/>;
 }

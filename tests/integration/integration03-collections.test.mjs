@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { crc32 } from 'node:zlib';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
@@ -327,9 +328,10 @@ test('0020 upgrades populated directories without changing old chapter order or 
     const read = async () => (await db.prepare('SELECT * FROM topic_collection_items ORDER BY snapshot,position').all()).results;
     const before = await read();
     await migrate('0020_workspace_topics.sql');
+    await migrate('0025_workspace_topic_covers.sql');
     assert.deepEqual(await read(),before);
-    assert.deepEqual((await s.workspaceTopics(author)).map(row => [row.title,row.version,row.category]).sort(),
-        [['Draft',7,''],['Publication',6,'']]);
+    assert.deepEqual((await s.workspaceTopics(author)).map(row => [row.title,row.version,row.category,row.coverVersion]).sort(),
+        [['Draft',7,'',null],['Publication',6,'',null]]);
     assert.equal((await db.prepare('PRAGMA foreign_key_check').all()).results.length,0);
 });
 
@@ -358,4 +360,64 @@ test('team share freezes directory order, excludes hidden sources, and expires o
     await s.deleteWorkspaceTopic(author,id,publication(current),'delete');
     await denied(s.readWorkspaceShare(reader,live.id),'NOT_FOUND');
     assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM workspace_topic_shares').first()).n,0);
+});
+
+test('workspace cover edits preserve share editions and enforce member, owner, version and deletion rules', async t => {
+    const { s, db } = await fixture(t);
+    const article = await post(s, reader, 'cover-source');
+    const payload = { title:'热身', category:'训练', summary:'', items:[ref(article.id)], expectedVersion:0,
+        expectedMembershipEpoch:(await s.me(author)).membership.epoch };
+    // A valid PNG above the usual 40 KB JSON limit exercises the route-specific body allowance.
+    const imageFixture = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWNY6W680t2YAUIBACG6BI0c0mdzAAAAAElFTkSuQmCC', 'base64');
+    const chunk = Buffer.from('tEXtComment\0' + 'x'.repeat(32_000));
+    const length = Buffer.alloc(4), checksum = Buffer.alloc(4);
+    length.writeUInt32BE(chunk.length - 4);
+    checksum.writeUInt32BE(crc32(chunk));
+    const paddedPng = Buffer.concat([imageFixture.subarray(0,-12), length, chunk, checksum, imageFixture.subarray(-12)]);
+    const png = 'data:image/png;base64,' + paddedPng.toString('base64');
+    const webp = 'data:image/webp;base64,UklGRjgAAABXRUJQVlA4ICwAAACQAQCdASoCAAIAAUAmJaACdLoAA5gA/u7T3/wF090Yt/+hJ/8En/wSfuAAAA==';
+    const create = cover => api(s,author,'POST','workspace/topics',{...payload,cover},'cover-create');
+    assert.equal((await create('data:image/png;base64,QQ==')).status,415);
+    assert.equal((await create('data:image/png;base64,' + 'A'.repeat(451_000))).status,413);
+    const response = await create(png);
+    assert.equal(response.status,200);
+    const {data:{id}} = await response.json();
+    assert.deepEqual((await (await create(png)).json()).data,{id});
+    assert.equal((await create(webp)).status,409);
+    const share = await s.shareWorkspaceTopic(reader,id,{expectedPublishedVersion:1},'cover-share');
+    const cover = (p,view,target,rev) => api(s,p,'GET',`workspace/topic-covers/${view}/${target}/${rev}`);
+    const edit = (fields,expectedVersion,key) => api(s,author,'PATCH','workspace/topics/'+id,{...payload,...fields,expectedVersion},key);
+    assert.equal((await s.workspaceTopics(reader))[0].coverVersion,1);
+    const image = await cover(reader,'published',id,1);
+    assert.equal(image.status,200);
+    assert.equal(image.headers.get('content-type'),'image/png');
+    assert.match(image.headers.get('cache-control'),/no-store/);
+    assert.equal(Buffer.from(await image.arrayBuffer()).toString('base64'),png.split(',')[1]);
+    assert.equal((await cover(author,'draft',id,1)).status,200);
+    assert.equal((await cover(reader,'draft',id,1)).status,404);
+    assert.equal((await api(s,reader,'PATCH','workspace/topics/'+id,{...payload,cover:webp,expectedVersion:1},'cover-other')).status,404);
+    assert.equal((await edit({title:'新版标题'},1,'metadata')).status,200);
+    assert.equal((await s.workspaceTopics(reader))[0].coverVersion,1);
+    assert.equal((await edit({cover:webp},2,'replace')).status,200);
+    assert.equal((await cover(reader,'published',id,1)).status,404);
+    assert.equal((await cover(reader,'published',id,3)).headers.get('content-type'),'image/webp');
+    assert.equal((await s.readWorkspaceShare(reader,share.id)).coverVersion,1);
+    assert.equal((await cover(reader,'share',share.id,1)).headers.get('content-type'),'image/png');
+    assert.equal((await cover(reader,'share',share.id,3)).status,404);
+    const exported = (await s.exportOwnData(author)).topicCollections.find(row => row.id===id);
+    assert.equal(exported.draft.coverVersion,3);
+    assert.equal(exported.publication.coverVersion,3);
+    assert.equal((await edit({cover:null},3,'remove')).status,200);
+    assert.equal((await s.workspaceTopics(reader))[0].coverVersion,null);
+    assert.equal((await cover(reader,'published',id,3)).status,404);
+    assert.equal((await cover(reader,'share',share.id,1)).status,200);
+    const readerUser = (await s.me(reader)).user.id;
+    await db.prepare("UPDATE memberships SET status='paused' WHERE user_id=?").bind(readerUser).run();
+    assert.equal((await cover(reader,'share',share.id,1)).status,403);
+    await db.prepare("UPDATE memberships SET status='active' WHERE user_id=?").bind(readerUser).run();
+    const draft = await s.getTopicCollection(author,id,'draft');
+    const withdrawn = await s.withdrawTopicCollection(author,id,publication(draft),'cover-withdraw');
+    assert.equal((await cover(reader,'share',share.id,1)).status,404);
+    await s.deleteWorkspaceTopic(author,id,publication(withdrawn),'cover-delete');
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM workspace_topic_cover_revisions').first()).n,0);
 });

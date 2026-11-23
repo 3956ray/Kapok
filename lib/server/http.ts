@@ -1,3 +1,4 @@
+import { maxTopicCoverJsonBytes } from './topic-cover.ts';
 import { maxAvatarJsonBytes } from './profile-avatar.ts';
 import { learningCategoryPath, learningJsonBytes } from '../contracts/learning.ts';
 import type { Principal } from '../contracts/index';
@@ -21,7 +22,9 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     }
     const method = request.method;
     const putBytes = method === 'PUT' && /^(?:material-assets\/[^/]+|uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
-    const maxBody = method === 'PATCH' && route === 'me/profile' ? maxAvatarJsonBytes : method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
+    const topicWrite = (method === 'POST' && route === 'workspace/topics') ||
+      (method === 'PATCH' && path.length === 3 && path[0] === 'workspace' && path[1] === 'topics');
+    const maxBody = topicWrite ? maxTopicCoverJsonBytes : method === 'PATCH' && route === 'me/profile' ? maxAvatarJsonBytes : method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
     if (!['GET', 'HEAD'].includes(method)) {
       if (request.headers.get('Origin') !== new URL(request.url).origin) throw new DomainError('FORBIDDEN', '请从本站提交操作。', 403);
       if (request.headers.get('X-Kapok-Actor') !== actor) throw new DomainError('ACCOUNT_CHANGED', '登录账号已变化，请重新加载页面后再提交。', 409);
@@ -41,6 +44,10 @@ export async function dispatchApi(request: Request, path: string[], principal: P
         source = post.video?.url ?? null;
       } else throw new DomainError('NOT_FOUND','未找到封面。',404);
       return service.readVideoCover(source);
+    }
+    if (method === 'GET' && path[0] === 'workspace' && path[1] === 'topic-covers' && path.length === 5) {
+      const image = await service.readWorkspaceTopicCover(principal,path[2],path[3],path[4]);
+      return new Response(image.bytes,{headers:{...privateHeaders,'Content-Type':image.type,'X-Kapok-Actor':actor}});
     }
     if (method === 'GET' && path[0] === 'profile-avatars' && path.length === 3) {
       const image = await service.getProfileAvatar(principal,path[1],path[2]);

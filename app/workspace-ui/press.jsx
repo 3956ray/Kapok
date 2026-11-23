@@ -11,13 +11,19 @@ export function fieldPhoto(training) {
 export function teamPhoto(training) {
   return training.id === 'weak-side' ? media('reset.webp') : fieldPhoto(training);
 }
-export function MediaCover({item, fallback, ...props}) {
-  const local = fallback || fieldPhoto();
+export function MediaCover({item, fallback, collectionCover, ...props}) {
+  const unavailable = media('video-cover-unavailable.svg');
+  const isVideo = Boolean(item?.platformCover || item?.source || item?.kind === 'video');
   const youtube = item?.source?.platform === 'YouTube' && /^https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})$/.exec(item.source.url)?.[1];
-  const src = item?.photos?.[0]?.url || item?.platformCover || (youtube && 'https://i.ytimg.com/vi/'+youtube+'/hqdefault.jpg') || local;
-  return <img {...props} src={src} referrerPolicy="no-referrer" onError={e=>{
-    if (e.currentTarget.getAttribute('src') !== local) e.currentTarget.src=local;
-  }}/>;
+  const platform = item?.platformCover || (youtube && 'https://i.ytimg.com/vi/' + youtube + '/hqdefault.jpg');
+  const urls = [...new Set([collectionCover, item?.photos?.[0]?.url, platform,
+    isVideo ? unavailable : fallback, isVideo ? null : fieldPhoto()].filter(Boolean))];
+  function recover(event) {
+    const image = event.currentTarget;
+    const index = urls.indexOf(image.getAttribute('src'));
+    if (index >= 0 && index + 1 < urls.length) image.src = urls[index + 1];
+  }
+  return <img key={urls.join('|')} {...props} alt={props.alt || ''} src={urls[0]} referrerPolicy="no-referrer" onError={recover} />;
 }
 export function DateMark({ value }) {
   const [year, month, date] = localDay(value).split('-');

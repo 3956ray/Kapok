@@ -1,5 +1,5 @@
 import { TextLinks } from '../components/learning-text';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Clock3, CornerDownRight, Play, Send, X } from 'lucide-react';
 import { useNav } from './router';
 import { shortDate, uid, useData, useRoster } from './store';
@@ -7,49 +7,45 @@ import { Avatar, Modal } from './ui';
 
 import { isReferenceSecond, maxTimepoints, parseTimeLabel, referenceTimeError, timeLabel } from './timepoints.js';
 import { ReferenceTime } from './reference-time.jsx';
+import { discussionSources, readDiscussion } from './discussion-sources.js';
 
 export default function Discussion(props) {
-  const { params } = useNav();
-  const [general,setGeneral]=useState(() => params.get('thread') === 'training');
-  const multi=props.t.kind==='training' && !!props.t.selectedVideo;
-  return <div>{multi && <div className="segments" aria-label="讨论范围">
-    <button className="btn" aria-pressed={!general} onClick={()=>setGeneral(false)}>本视频讨论</button>
-    <button className="btn" aria-pressed={general} onClick={()=>setGeneral(true)}>整场训练讨论</button>
-  </div>}
-  <DiscussionThread key={general?'training':'source'} {...props} general={general && multi} mediaKey={general && multi?null:props.mediaKey}/></div>;
+  const { t } = props;
+  return <DiscussionThread key={[t.kind, t.id, t.selectedVideo?.id].join(':')} {...props}/>;
 }
-function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
+function DiscussionThread({ t, mediaKey, measure, capture, play }) {
   const { duration } = measure;
   const { db, ctx, notify } = useData();
   const people = useRoster();
-  const video=general?null:t.selectedVideo;
-  const trainingThread=t.kind==='training' && !video;
-  const readPath=trainingThread?'trainings/'+t.id+'/discussion':video?'page-read/video-discussion/'+video.id:'page-read/article-discussion/'+t.id+'?version='+t.publishedVersion;
-  const writePath=trainingThread?readPath:video?'videos/'+video.id+'/comments':'learning/posts/'+t.id+'/comments';
+  const videoId = t.selectedVideo?.id;
+  const sources = useMemo(() => discussionSources(t.kind, t.id, videoId, t.publishedVersion),
+    [t.kind, t.id, videoId, t.publishedVersion]);
   const [view,setView]=useState(null);
   const [refresh,setRefresh]=useState(0);
   const readOnly=t.kind==='training' && t.status!=='published';
   useEffect(()=>{
     const abort=new AbortController();
-    ctx.read(readPath,abort.signal).then(result=>{
-      const rows=(trainingThread?result:result.value).map(c=>{
-        const author=c.authorId ?? c.author?.id;
-        const seconds=c.referenceTimes ? JSON.parse(c.referenceTimes) : c.timestampSec!=null ? [c.timestampSec] : [];
-        return {id:c.id,version:c.version,root:c.rootId,text:c.text ?? (c.status==='deleted'?'这条评论已删除。':'评论已隐藏。'),at:c.createdAt,status:c.status,
-          author:author===ctx.account.user.id?'me':author,authorName:c.authorName ?? c.author?.discName,replyName:c.replyTargetName ?? c.replyTarget?.authorName,
-          videoRefs:seconds.length && c.status==='active' ? {media:video || c.matchesCurrentMedia ? mediaKey : null,seconds} : undefined};
-      });
-      if (!abort.signal.aborted) setView({ctx,readPath,rows});
-    }).catch(error=>{if (!abort.signal.aborted) setView({ctx,readPath,error:error.message});});
+    readDiscussion(ctx,sources,mediaKey,abort.signal).then(rows=>{
+      if (!abort.signal.aborted) setView({ctx,sources,rows});
+    }).catch(error=>{if (!abort.signal.aborted) setView({ctx,sources,error:error.message});});
     return ()=>abort.abort();
-  },[ctx,readPath,mediaKey,video,trainingThread,refresh]);
-  const current=view?.ctx===ctx && view.readPath===readPath?view:null;
+  },[ctx,sources,mediaKey,refresh]);
+  const current=view?.ctx===ctx && view.sources===sources ? view : null;
   const catalogReady=!!current,sharesError=current?.error;
   const comments=current?.rows ?? [];
   const { params } = useNav();
   const [replyId, selectReply] = useState(null);
   const reply=comments.find(c=>c.id===replyId && c.status==='active');
-  const setReply=row=>selectReply(row?.id ?? null);
+  const destination = reply?.source ?? sources[0];
+  const canReference = destination.kind !== 'training' && Boolean(mediaKey);
+  function setReply(row) {
+    selectReply(row?.id ?? null);
+    if (row?.source.kind === 'training') {
+      setReferenceDraft(null);
+      setTimeError('');
+      setInspectTime(false);
+    }
+  }
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -64,7 +60,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
   const [referenceDraft, setReferenceDraft] = useState(null);
   const [timeError, setTimeError] = useState('');
   const [inspectTime, setInspectTime] = useState(false);
-  const reference = mediaKey && referenceDraft?.media === mediaKey ? referenceDraft : null;
+  const reference = canReference && referenceDraft?.media === mediaKey ? referenceDraft : null;
   const times = reference?.seconds ?? [];
   const timeText = reference?.input ?? null;
   const hasTime = !!timeText?.trim();
@@ -141,13 +137,13 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
     if (!seconds || (!body && !seconds.length)) return;
     const root = reply ? reply.root || reply.id : null;
     const payload={text:body,...(root && {rootId:root,replyToId:reply.id}),
-      ...(seconds.length && {timestampSec:seconds[0],referenceTimes:seconds,...(!video && {mediaUrl:t.video?.url || mediaKey})})};
-    const signature=JSON.stringify(payload);
+      ...(seconds.length && {timestampSec:seconds[0],referenceTimes:seconds,...(destination.kind === 'post' && {mediaUrl:t.video?.url || mediaKey})})};
+    const signature=JSON.stringify([destination.write,payload]);
     if (pending.current?.signature!==signature) pending.current={id:uid(),signature};
     inFlight.current=true;
     setError(''); setSending(true);
     try {
-      await ctx.write(writePath,'POST',payload,pending.current.id);
+      await ctx.write(destination.write,'POST',payload,pending.current.id);
       setRefresh(n=>n+1);
       pending.current = null;
       if (mounted.current) {
@@ -172,7 +168,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
     setDeleting(true);
     setDeleteError('');
     try {
-      await ctx.write(writePath+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version});
+      await ctx.write(removing.source.write+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version});
       setRefresh(n=>n+1);
       if (mounted.current) {
         setRemoving(null);
@@ -190,7 +186,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
   }
   function entry(c) {
     const author = personFor(c.author, c.authorName);
-    const target = c.root ? personFor(c.replyTo, c.replyName).name : '';
+    const target = c.root ? c.replyName || '队友' : '';
     return (
       <div
         id={'comment-' + c.id}
@@ -334,7 +330,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play, general }) {
             close={() => { changeReference(times, null); input.current?.focus(); }} />}
           {reference && timeText === null && timeError && <p className="form-error" role="alert">{timeError}</p>}
           <div className="composer-tools">
-          {mediaKey && <button type="button" className="reference-trigger" disabled={sending}
+          {canReference && <button type="button" className="reference-trigger" disabled={sending}
             aria-expanded={timeText !== null} aria-controls={timeText !== null ? 'discussion-time-fields' : undefined}
             onClick={() => {
               if (timeText !== null) { changeReference(times, null); input.current?.focus(); }

@@ -4,6 +4,8 @@ import {
     topicDefaults, type FeaturedTopicAdmin, type FeaturedTopics, type LearningAssociation, type TopicAddOutcome,
     type TopicChoice, type TopicCollection, type TopicDraft, type TopicPolicy, type TopicReference, type TopicSource,
 } from '../contracts/topic-collections.ts';
+import { imageDataBytes } from './learning-image-validation.ts';
+import { topicCoverVersion, validateTopicCover } from './topic-cover.ts';
 import { assertGuard, DomainError, type StoredResult } from './domain.ts';
 import { bindLearningMember, learningConflict, learningMemberFence, learningPostVisible, type LearningContext, type LearningDependencies, type LearningOp } from './learning.ts';
 
@@ -285,11 +287,11 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         const { c, f } = await contextual(p);
         const { results } = await q(`${sources}
             SELECT tc.id,tcp.title,tcp.summary,tcp.category,tcp.published_at AS updated,tc.owner_id AS ownerId,
-                p.disc_name AS author,1 AS published,tcp.version AS version,'published' AS status,${projectedItems(1)}
+                p.disc_name AS author,1 AS published,tcp.version AS version,'published' AS status,${topicCoverVersion('tcp.version')} AS coverVersion,${projectedItems(1)}
             ${collectionJoin} WHERE tc.team_id=? AND ${topicVisible} AND ${f.sql}
             UNION ALL
             SELECT tc.id,tc.title,tc.summary,tc.category,tc.updated_at,tc.owner_id,p.disc_name,0,tc.version,
-                ${effectiveStatus},${projectedItems(0)}
+                ${effectiveStatus},${topicCoverVersion('tc.version')},${projectedItems(0)}
             FROM topic_collections tc LEFT JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id
             JOIN profiles p ON p.user_id=tc.owner_id
             WHERE tc.owner_id=? AND tc.team_id=? AND ${f.sql} ORDER BY updated DESC`,
@@ -322,7 +324,7 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
     async function readWorkspaceShare(p: Principal | null, id: string) {
         const { c, f } = await contextual(p);
         const row = await q(`${sources} SELECT sh.collection_id AS id,sh.title,sh.summary,sh.category,sh.published_at AS updated,
-            tc.owner_id AS ownerId,p.disc_name AS author,1 AS published,sh.version,'published' AS status,
+            tc.owner_id AS ownerId,p.disc_name AS author,1 AS published,sh.version,'published' AS status,${topicCoverVersion('sh.version')} AS coverVersion,
             (SELECT json_group_array(json(item)) FROM (SELECT ${sourceJson} AS item FROM json_each(sh.items) j
                 JOIN sources s ON s.team_id=tc.team_id AND s.kind=json_extract(j.value,'$.kind') AND s.id=json_extract(j.value,'$.id')
                 ORDER BY CAST(j.key AS INTEGER))) AS items
@@ -333,9 +335,39 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         if (!row) throw missing();
         return {...row, items:JSON.parse(row.items) as TopicSource[], isAuthor:row.ownerId===c.user.id, editionId:id};
     }
+    async function readWorkspaceTopicCover(p: Principal | null, view: string, id: string, requested: string) {
+        const { c, f } = await contextual(p);
+        if (!isId(id) || !/^[1-9]\d*$/.test(requested) || !Number.isSafeInteger(Number(requested))) throw missing();
+        let from: string;
+        let scope: string;
+        let snapshot: 'tc.version' | 'tcp.version' | 'sh.version';
+        const values = [id, c.membership.teamId];
+        if (view === 'draft') {
+            from = 'FROM topic_collections tc';
+            scope = 'tc.id=? AND tc.team_id=? AND tc.owner_id=?';
+            values.push(c.user.id);
+            snapshot = 'tc.version';
+        } else if (view === 'published') {
+            from = 'FROM topic_collections tc JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id';
+            scope = `tc.id=? AND tc.team_id=? AND ${topicVisible}`;
+            snapshot = 'tcp.version';
+        } else if (view === 'share') {
+            from = `FROM workspace_topic_shares sh JOIN topic_collections tc ON tc.id=sh.collection_id
+                JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id AND tcp.visibility_id=sh.visibility_id`;
+            scope = `sh.id=? AND tc.team_id=? AND ${topicVisible}`;
+            snapshot = 'sh.version';
+        } else throw missing();
+        const row = await q(`SELECT cover.image ${from}
+            JOIN workspace_topic_cover_revisions cover ON cover.collection_id=tc.id AND cover.version=${topicCoverVersion(snapshot)}
+            WHERE ${scope} AND cover.version=? AND ${f.sql}`, ...values, Number(requested), ...f.values).first<{image: string}>();
+        if (!row) throw missing();
+        const comma = row.image.indexOf(',');
+        return { type: row.image.slice(5, row.image.indexOf(';')), bytes: imageDataBytes(row.image.slice(comma + 1)) };
+    }
+
     async function publishWorkspaceTopic(p: Principal | null, id: string | null, input: unknown, key: string) {
         const { c, f } = await contextual(p);
-        const raw = object(input, ['title','summary','category','items','expectedVersion','expectedMembershipEpoch']);
+        const raw = object(input, ['title','summary','category','items','expectedVersion','expectedMembershipEpoch','cover']);
         const expected = version(raw.expectedVersion, id ? 1 : 0);
         const epoch = version(raw.expectedMembershipEpoch);
         if ((!id && expected !== 0) || epoch !== c.membership.epoch) throw learningConflict();
@@ -345,7 +377,10 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
             typeof category !== 'string' || category.length > 32) throw invalid();
         const items = references(raw.items, topicDefaults.maxItems);
         if (!items.length || new Set(items.map(itemKey)).size !== items.length) throw invalid();
-        const op = await operation(c.user.id, 'workspace-topic-publish', id ?? 'new', key, { expected, epoch, title, summary, category, items });
+        const cover = await validateTopicCover(raw.cover);
+        const op = await operation(c.user.id, 'workspace-topic-publish', id ?? 'new', key, {
+            expected, epoch, title, summary, category, items, ...(cover !== undefined && {cover: cover?.digest ?? null}),
+        });
         if (op.replay) return { id: op.replay.result.id! };
         const target = id ?? crypto.randomUUID();
         const next = expected + 1;
@@ -370,6 +405,10 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         } else {
             write.push(q(`INSERT INTO topic_collections(id,team_id,owner_id,title,summary,category,status,version,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,'published',?,?,?)`,target,c.membership.teamId,c.user.id,title,summary,category,next,at,at));
+        }
+        if (cover !== undefined) {
+            write.push(q('INSERT INTO workspace_topic_cover_revisions(collection_id,version,digest,image) VALUES(?,?,?,?)',
+                target, next, cover?.digest ?? null, cover?.url ?? null));
         }
         write.push(q(`INSERT INTO topic_collection_publications(collection_id,title,summary,category,version,author_epoch,visibility_id,published_at)
             VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(collection_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,
@@ -532,7 +571,7 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         orderTopicItems: async (p: Principal | null, id: string, input: unknown, key: string) => (await changeItems(p, id, input, key, 'order')).collection,
         publishTopicCollection: (p: Principal | null, id: string, input: unknown, key: string) => changeTopicPublication(p, id, input, key, true),
         withdrawTopicCollection: (p: Principal | null, id: string, input: unknown, key: string) => changeTopicPublication(p, id, input, key, false),
-        workspaceTopics, publishWorkspaceTopic, deleteWorkspaceTopic, shareWorkspaceTopic, readWorkspaceShare,
+        workspaceTopics, publishWorkspaceTopic, deleteWorkspaceTopic, shareWorkspaceTopic, readWorkspaceShare, readWorkspaceTopicCover,
         getFeaturedTopics, updateFeaturedTopics, retryLearningInclusion, attemptLearningInclusion,
     };
 }

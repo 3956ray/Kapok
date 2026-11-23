@@ -275,6 +275,14 @@ export const topicCollectionPublications = sqliteTable('topic_collection_publica
 }, t => [
     check('topic_publication_version', sql`${t.version}>0`), check('topic_publication_epoch', sql`${t.authorEpoch}>0`),
 ]);
+export const workspaceTopicCoverRevisions = sqliteTable('workspace_topic_cover_revisions', {
+    collectionId: text('collection_id').notNull().references(() => topicCollections.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(), digest: text('digest'), image: text('image'),
+}, t => [
+    primaryKey({ columns: [t.collectionId, t.version] }), check('topic_cover_version', sql`${t.version}>0`),
+    check('topic_cover_data', sql`(${t.digest} IS NULL AND ${t.image} IS NULL) OR
+        (${t.digest} IS NOT NULL AND length(${t.digest})=64 AND ${t.image} IS NOT NULL AND length(${t.image}) BETWEEN 1 AND 410000)`),
+]);
 export const topicCollectionItems = sqliteTable('topic_collection_items', {
     collectionId: text('collection_id').notNull().references(() => topicCollections.id),
     snapshot: integer('snapshot').notNull(), kind: text('kind', { enum: ['post', 'video', 'training'] }).notNull(),
