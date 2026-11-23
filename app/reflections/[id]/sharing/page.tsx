@@ -17,7 +17,7 @@ export default async function SharingPage({
         <AccessState context={context} returnTo={`/reflections/${id}/sharing`} />
     </Shell>;
     try {
-        await getService().getOwnReflection(context.user.principal, id);
+        await (await getService()).getOwnReflection(context.user.principal, id);
     } catch {
         return <Shell title="此内容暂不可用" nav={false} back="/growth">
             <p>请确认账号或返回成长。</p>

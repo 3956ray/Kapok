@@ -12,7 +12,7 @@ export async function getPageContext() {
   const user = await getChatGPTUser();
   if (!user) return { user: null, me: null, error: null };
   try {
-    const service = getService();
+    const service = await getService();
     const me = await service.getAccount(user.principal);
     return { user, me, error: null };
   }
