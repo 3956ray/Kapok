@@ -58,7 +58,9 @@ export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) 
                     const { clearUnsavedNoteImages } = await import('../workspace-ui/note-image-store.js');
                     await clearUnsavedNoteImages(actorId, localStorage, controller.signal);
                     picturesCleaned = true;
-                } catch {
+                } catch (error) {
+                    // An ended signal erases drafts in other tabs too. Keep the only recovery copy first.
+                    if (error instanceof Error && 'code' in error && error.code === 'PRESERVE_UNCONFIRMED_PICTURES') throw error;
                     // A verified sign-out still ends every protected consumer if device storage is unavailable.
                 }
             } catch (e) {

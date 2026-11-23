@@ -280,7 +280,13 @@ export async function clearUnsavedNoteImages(actorId, storage, signal) {
   }
   // These limited records survive ordinary text-draft removal and remain available to an authorized export.
   for (const entry of uncertain) {
-    storage.setItem(layoutPrefix(actorId) + 'unconfirmed:' + entry.operation, JSON.stringify(entry));
+    try {
+      storage.setItem(layoutPrefix(actorId) + 'unconfirmed:' + entry.operation, JSON.stringify(entry));
+    } catch (cause) {
+      throw Object.assign(new Error('未能保存私人配图的恢复信息，已保留本机草稿。请检查设备存储后重新退出。', { cause }), {
+        code: 'PRESERVE_UNCONFIRMED_PICTURES',
+      });
+    }
   }
   if (typeof indexedDB === 'undefined') return;
   // A selection can finish writing just before its editor unmounts, without ever appearing in a draft.

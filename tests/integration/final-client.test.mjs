@@ -726,6 +726,38 @@ test('V2 explicit signout clears only the current account drafts after confirmat
     }
 });
 
+test('signout preserves the only private photo draft across tabs when its recovery record exceeds quota', async () => {
+    const { SignOut } = await import('../../app/components/signout.tsx');
+    const { draftKey } = await import('../../lib/client/session-guard.ts');
+    const key = draftKey('A', 'bloom-notes');
+    const value = JSON.stringify({ draft: { operation: { scope: 'private', key: 'attempt',
+        body: { hasLocalPhotos: true }, layout: [{ localId: 'only-copy' }] } } });
+    const storagePrototype = Object.getPrototypeOf(localStorage);
+    const originalSet = storagePrototype.setItem;
+    const otherTab = new BroadcastChannel('kapok-session');
+    const signals = [];
+    otherTab.onmessage = event => signals.push(event.data.kind);
+    try {
+        await mount(h(SignOut, { actorId: 'A', href: '/#signed-out' }));
+        localStorage.setItem(key, value);
+        storagePrototype.setItem = function (name, data) {
+            if (name.endsWith('unconfirmed:attempt')) throw new DOMException('full', 'QuotaExceededError');
+            return originalSet.call(this, name, data);
+        };
+        window.confirm = () => true;
+        await act(async () => document.querySelector('a[href="/#signed-out"]').click());
+        assert.match(document.querySelector('[role=alert]').textContent, /已保留本机草稿/);
+        assert.equal(localStorage.getItem(key), value);
+        assert.ok(!signals.includes('ended'));
+        assert.equal(window.location.hash, '');
+    } finally {
+        otherTab.close();
+        storagePrototype.setItem = originalSet;
+        localStorage.removeItem(key);
+        await unmount();
+    }
+});
+
 test('V2 signout prompts for a reload when the bootstrap response identifies another account', async () => {
     const { SignOut } = await import('../../app/components/signout.tsx');
     const { draftKey } = await import('../../lib/client/session-guard.ts');
