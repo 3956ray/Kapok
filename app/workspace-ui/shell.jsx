@@ -109,8 +109,8 @@ function NavBody({ narrow = false, mobile = false, onClose }) {
         </div>
         <nav className="club-channels" aria-label="队伍社交平台">
           {teamChannels.map(({ name, icon, width, href }) => (
-            <Tip key={icon} label={name + '（新窗口打开）'} side={narrow ? 'right' : 'top'}>
-              <a href={href} target="_blank" rel="noopener noreferrer" aria-label={name + '（新窗口打开）'}>
+            <Tip key={icon} label={name} side={narrow ? 'right' : 'top'}>
+              <a href={href} target="_blank" rel="noopener noreferrer" aria-label={name}>
                 <img src={'/workspace-assets/media/' + icon + '.svg'} width={width} height={width} alt="" />
               </a>
             </Tip>
