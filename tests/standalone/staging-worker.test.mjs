@@ -329,6 +329,16 @@ test("real workerd retrieves the same video's official thumbnail after a redirec
   await post("join", { discName: "Synthetic", jerseyNumber: "07", intent: "register", confirmed: true });
   const draft = await post("learning/posts", { title: "Example", kind: "video", category: "基本功",
     video: { source: "youtube", url: "https://youtu.be/dQw4w9WgXcQ?t=5m" } });
+  // Writing a video schedules a background cover fetch. Wait for that write before measuring cache reads.
+  const bucket = await app.getR2Bucket("BUCKET");
+  const key = "platform-covers/v1/youtube/dQw4w9WgXcQ";
+  const deadline = Date.now() + 5000;
+  let cached = await bucket.head(key);
+  while (!cached && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    cached = await bucket.head(key);
+  }
+  assert.equal(cached?.size, jpeg.length, "the upload warmed its official thumbnail");
   for (let i = 0; i < 2; i++) {
     const cover = await app.dispatchFetch(origin + "/api/v1/video-covers/draft/" + draft.id, { headers, redirect: "manual" });
     assert.equal(cover.status, 200);
