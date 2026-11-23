@@ -768,8 +768,7 @@ function MaterialEditor({ t }) {
         source = parseVideo(resolved.url);
       }
       const picked=photos;
-      const shareToActivity = daily && (!t?.publishedVersion || t.status === 'withdrawn' || !isDailyArticle(t));
-      const input={kind,title:title.trim(),date,category:daily ? dailyArticleCategory : category,shareToActivity,summary:summary.trim(),body:body.trim(),photos:picked,source,clipFile:usingFile && clip.file || null,timepoints:timepoints || []};
+      const input={kind,title:title.trim(),date,category:daily ? dailyArticleCategory : category,shareToActivity:daily,summary:summary.trim(),body:body.trim(),photos:picked,source,clipFile:usingFile && clip.file || null,timepoints:timepoints || []};
       const signature=JSON.stringify([input,picked.map(p=>p.key),usingFile && clip.url]);
       if (attempted.current?.signature!==signature) attempted.current={signature,key:uid()};
       const attempt=attempted.current;
@@ -783,7 +782,7 @@ function MaterialEditor({ t }) {
       await ctx.refresh();
       if (ctx.signal.aborted) return;
       notify(label+(edit?'已更新':'已发布'));
-      go(returnTo ? returnTo+(daily ? '' : '?added='+encodeURIComponent(id)) : shareToActivity ? '/activity' : '/trainings/'+encodeURIComponent(id),{replace:true});
+      go(returnTo ? returnTo+(daily ? '' : '?added='+encodeURIComponent(id)) : daily && !edit ? '/activity' : '/trainings/'+encodeURIComponent(id),{replace:true});
     } catch(err) {
       if (!controller.signal.aborted && mounted.current) {
         fail('publication',err.message || '暂时无法保存，请重试。');

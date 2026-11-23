@@ -68,8 +68,18 @@ test('daily text articles publish and share atomically while archive posts retai
     assert.equal((await rows('learning_activity_events')).length, 1);
     await s.changeLearningActivity(author, daily.id, { expectedPublishedVersion: revised.publishedVersion,
         expectedMembershipEpoch: revised.membershipEpoch, expectedEventId: event.id }, 'withdraw-event', false);
-    await publish(revised, 'edit-without-resharing', false);
+    await publish(revised, 'edit-without-resharing', true);
     assert.equal((await s.getLearningActivity(author, daily.id)).event, null);
+
+    // Simulate closing the editor after the draft write and reopening it before publication.
+    const previous = await draft(s, archive.id);
+    await s.saveLearningPost(author, archive.id, { ...input, category: '随谈', collectionTargetId: 'previous-topic',
+        expectedVersion: previous.version }, 'stage-conversion');
+    const converted = await publish(await draft(s, archive.id), 'publish-reopened', true);
+    assert.ok((await s.getLearningActivity(author, archive.id)).event);
+    assert.equal(converted.collectionTargetId, null);
+    assert.deepEqual(await rows('topic_learning_associations'), []);
+
 });
 
 test('learning endpoints separate author draft and public snapshot, use versions, and permanently fence administrator hide', async t => {

@@ -2,7 +2,7 @@ import { materialDetails, materialIndexDetails, materialPhotoGuard } from './wor
 import type { LearningAssociation } from '../contracts/topic-collections';
 import type { Me, Principal } from '../contracts/index';
 import {
-    isDailyArticle, isDefaultLearningCategory, learningBounds, learningCategories, learningCategoryMax, learningDefaults, learningImageAltMax, normalizeLearningCategory, type LearningDraft, type LearningDraftOverview, type LearningImage,
+    dailyArticleCategory, isDailyArticle, isDefaultLearningCategory, learningBounds, learningCategories, learningCategoryMax, learningDefaults, learningImageAltMax, normalizeLearningCategory, type LearningDraft, type LearningDraftOverview, type LearningImage,
     type LearningImageReferenceInput,
     type LearningPolicy, type LearningPost, type LearningPostFields, type LearningPostHide, type LearningPostOverview, type LearningPostStatus,
 } from '../contracts/learning.ts';
@@ -345,6 +345,19 @@ export function createLearningService(deps: LearningDependencies & {
             if (action === 'withdraw') write.push(q(`UPDATE learning_activity_events SET revoked_at=?
                 WHERE post_id=? AND revoked_at IS NULL AND author_epoch=(SELECT author_epoch FROM learning_post_publications WHERE post_id=?)`,
                 at, id, id));
+            const daily = action === 'publish' && isDailyArticle(current);
+            const target = action === 'publish' && !daily ? current.collection_target_id : null;
+            if (r.shareToActivity) {
+                if (!daily) throw invalid();
+                // Decide from the previous publication before replacing it. Editing a daily post leaves
+                // its existing share or manual withdrawal intact, even if the draft was reopened.
+                write.push(q(`INSERT INTO learning_activity_events(id,post_id,author_epoch,shared_at)
+                    SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM learning_post_publications
+                        WHERE post_id=? AND kind='article' AND category=? AND author_epoch=? AND ?<>'withdrawn')
+                    AND NOT EXISTS (SELECT 1 FROM learning_activity_events
+                        WHERE post_id=? AND author_epoch=? AND revoked_at IS NULL)`, crypto.randomUUID(), id, c.membership.epoch, at,
+                    id, dailyArticleCategory, c.membership.epoch, current.status, id, c.membership.epoch));
+            }
             if (action === 'publish') {
                 if (current.kind === 'article' && !current.body.trim() && !await q('SELECT 1 FROM learning_draft_images WHERE post_id=? LIMIT 1',id).first()) throw new DomainError('INVALID_INPUT', '发布图文前请填写正文。');
                 const member = learningMemberFence(c);
@@ -355,10 +368,10 @@ export function createLearningService(deps: LearningDependencies & {
                 write.push(
                     assertGuard(db, op.opId, 'images', referencesReady('learning_draft_images'), [id]),
                     q(`INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,video_source,video_url,version,author_epoch,collection_target_id,published_at,workspace_details)
-                        SELECT id,kind,category,title,summary,body,video_source,video_url,?,?,collection_target_id,?,workspace_details FROM learning_posts WHERE id=?
+                        SELECT id,kind,category,title,summary,body,video_source,video_url,?,?,?,?,workspace_details FROM learning_posts WHERE id=?
                         ON CONFLICT(post_id) DO UPDATE SET kind=excluded.kind,category=excluded.category,title=excluded.title,
                             summary=excluded.summary,body=excluded.body,video_source=excluded.video_source,video_url=excluded.video_url,
-                            version=excluded.version,workspace_details=excluded.workspace_details,author_epoch=excluded.author_epoch,collection_target_id=excluded.collection_target_id,published_at=excluded.published_at`, finalVersion, c.membership.epoch, at, id),
+                            version=excluded.version,workspace_details=excluded.workspace_details,author_epoch=excluded.author_epoch,collection_target_id=excluded.collection_target_id,published_at=excluded.published_at`, finalVersion, c.membership.epoch, target, at, id),
                     q('DELETE FROM learning_publication_images WHERE post_id=?', id),
                     q(`INSERT INTO learning_publication_images(post_id,image_id,position,alt,decorative)
                         SELECT post_id,image_id,position,alt,decorative FROM learning_draft_images WHERE post_id=?`, id),
@@ -366,16 +379,9 @@ export function createLearningService(deps: LearningDependencies & {
 
                 );
             }
-            if (r.shareToActivity) {
-                if (!isDailyArticle(current)) throw invalid();
-                write.push(q(`INSERT INTO learning_activity_events(id,post_id,author_epoch,shared_at)
-                    SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM learning_activity_events
-                    WHERE post_id=? AND author_epoch=? AND revoked_at IS NULL)`, crypto.randomUUID(), id, c.membership.epoch, at, id, c.membership.epoch));
-            }
-            const target = action === 'publish' ? current.collection_target_id : null;
             if (target) write.push(q("INSERT INTO topic_learning_associations(post_id,published_version,status) VALUES(?,?,'pending')", id, finalVersion));
             write.push(
-                q('UPDATE learning_posts SET status=?,version=?,updated_at=? WHERE id=?', status, finalVersion, at, id),
+                q('UPDATE learning_posts SET status=?,version=?,updated_at=?,collection_target_id=CASE WHEN ? THEN NULL ELSE collection_target_id END WHERE id=?', status, finalVersion, at, Number(daily), id),
                 ...(target ? [assertGuard(db, op.opId, 'association', `EXISTS(SELECT 1 FROM topic_learning_associations ta
                     JOIN learning_post_publications lpub ON lpub.post_id=ta.post_id AND lpub.version=ta.published_version
                     WHERE ta.post_id=? AND ta.published_version=? AND ta.status='pending' AND lpub.collection_target_id=?)`, [id, finalVersion, target])] : []),
