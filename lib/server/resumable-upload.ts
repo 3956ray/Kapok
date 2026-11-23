@@ -37,9 +37,9 @@ export function createResumableUploads({ db, bucket, clock, activeMember, operat
         catch (error) { if (error instanceof DomainError) throw error; throw conflict(); }
     }
     async function reserve(c: Context, op: Op, bytes: number, statements: D1PreparedStatement[], result: StoredResult = {}) {
-        const used = await q("SELECT coalesce(sum(max(bytes,reserved_bytes)),0) AS n FROM uploads WHERE team_id=? AND status NOT IN ('cancelled','rejected')", c.membership.teamId).first<{ n: number }>();
+        const used = await q("SELECT coalesce(sum(bytes),0) AS n FROM material_storage_usage WHERE team_id=?", c.membership.teamId).first<{ n: number }>();
         if ((used?.n ?? 0) + bytes > policy.teamBytes) throw new DomainError('UPLOAD_LIMIT', '队伍可用容量不足。上传还需要临时空间保存和组装，请先检查未完成上传的清理状态。', 413);
-        return commit(c, op, [assertGuard(db, op.opId, 'physical-quota', "(SELECT coalesce(sum(max(bytes,reserved_bytes)),0) FROM uploads WHERE team_id=? AND status NOT IN ('cancelled','rejected'))+?<=?", [c.membership.teamId, bytes, policy.teamBytes]), ...statements], result);
+        return commit(c, op, [assertGuard(db, op.opId, 'physical-quota', "(SELECT coalesce(sum(bytes),0) FROM material_storage_usage WHERE team_id=?)+?<=?", [c.membership.teamId, bytes, policy.teamBytes]), ...statements], result);
     }
     const slotSQL = "(SELECT count(*) FROM (SELECT 1 FROM upload_attempts a JOIN uploads u ON u.id=a.upload_id WHERE u.team_id=? AND a.active=1 AND a.state!='deleted' LIMIT 2))<2";
     function slot(c: Context, op: Op) { return assertGuard(db, op.opId, 'active-attempt-slot', slotSQL, [c.membership.teamId]); }

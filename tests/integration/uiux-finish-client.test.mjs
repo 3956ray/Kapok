@@ -153,7 +153,7 @@ test('UIUX Bilibili copy progress and rejection do not retain earlier success', 
     } finally { await unmount(); }
 });
 test('UIUX video and reflection reading select their owning primary nav with aria-current', async () => {
-    for (const [path, expected] of [['/videos/v', '/trainings'], ['/reflections/r', '/growth'], ['/trainings/t', '/trainings'], ['/growth', '/growth'], ['/me/data', '/me'], ['/members', '/'], ['/members/u', '/'], ['/activity', '/'], ['/announcements/a', '/'], ['/', '/']]) {
+    for (const [path, expected] of [['/videos/v', '/trainings'], ['/reflections/r', '/growth'], ['/trainings/t', '/trainings'], ['/growth', '/growth'], ['/me/data', '/me'], ['/members', '/home'], ['/members/u', '/home'], ['/activity', '/home'], ['/announcements/a', '/home'], ['/', '/home']]) {
         setup(); globalThis.testPathname = path;
         try {
             await mount(h(Navigation));

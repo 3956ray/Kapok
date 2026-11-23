@@ -10,6 +10,8 @@ import { createTrainingService } from './training.ts';
 import { createTopicCollections } from './topic-collections.ts';
 import { createLearningActivity } from './learning-activity.ts';
 import { createLearningDiscussion } from './learning-discussion.ts';
+import { createTrainingDiscussions } from './training-discussions.ts';
+import { createWorkspaceAssets } from './workspace-assets.ts';
 import { createLearningService } from './learning.ts';
 import { LEGACY_SITES_ISSUER } from '../contracts/index.ts';
 import { accessMembershipFence, actorKey, identityFor, identityTuple, sha256 } from './identity.ts';
@@ -54,7 +56,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   function accountStatement(current: Principal) {
     // The unique identity tuple already selects the user; a separate identityFor
     // lookup adds a remote D1 round trip without strengthening this join.
-    return statement(`SELECT u.id, u.status, p.disc_name, p.jersey_number, p.bio, p.version AS profile_version,
+    return statement(`SELECT u.id, u.status, p.*, p.version AS profile_version,
       m.id AS member_id, m.team_id, m.role, m.status AS member_status, m.epoch, m.version AS member_version,
       t.name AS team_name, t.description AS team_description
       FROM users u JOIN auth_identities a ON a.user_id = u.id AND a.provider=? AND a.issuer=? AND a.subject=?
@@ -66,7 +68,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
     if (row.status !== 'active') return { user: { id: String(row.id), status: 'deleted' }, profile: null, membership: null, team: null };
     return {
       user: { id: String(row.id), status: row.status as 'active' | 'deleted' },
-      profile: row.disc_name === null ? null : { discName: String(row.disc_name), jerseyNumber: String(row.jersey_number), bio: String(row.bio ?? ''), version: Number(row.profile_version) },
+      profile: row.disc_name === null ? null : { discName: String(row.disc_name), jerseyNumber: String(row.jersey_number), bio: String(row.bio ?? ''), ...(row.position ? { position: String(row.position) } : {}), version: Number(row.profile_version) },
       membership: row.member_id === null ? null : { id: String(row.member_id), teamId: String(row.team_id), role: row.role as 'admin' | 'coach' | 'member', status: row.member_status as 'active' | 'paused' | 'left', epoch: Number(row.epoch), version: Number(row.member_version) },
       team: row.member_status === 'active' ? { id: String(row.team_id), name: String(row.team_name), description: String(row.team_description) } : null,
     };
@@ -300,8 +302,9 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   }
   async function updateProfile(principal: Principal | null, input: unknown, key: string): Promise<WriteResult> {
     const current = authenticated(principal);
-    const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'expectedVersion']);
-    const details = { ...profile(raw), bio: raw.bio === undefined ? undefined : raw.bio };
+    const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'position', 'expectedVersion']);
+    if (raw.position !== undefined && !['', '接盘手', '持盘手', '防守组'].includes(String(raw.position))) throw new DomainError('INVALID_INPUT', '请选择有效的场上位置。');
+    const details = { ...profile(raw), ...(raw.position === undefined ? {} : { position: raw.position }), bio: raw.bio === undefined ? undefined : raw.bio };
     if (details.bio !== undefined && (typeof details.bio !== 'string' || details.bio.trim().length > 160)) throw new DomainError('INVALID_INPUT', '简介最多160字。');
     if (!Number.isSafeInteger(raw.expectedVersion) || Number(raw.expectedVersion) < 1) throw new DomainError('INVALID_INPUT', '请重新加载资料后再保存。');
     const context = await businessAccount(current);
@@ -316,6 +319,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
           : identityGuard(op.opId, context.user.id, current),
         assertGuard(db, op.opId, 'version', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, raw.expectedVersion]),
         statement('UPDATE profiles SET disc_name=?,jersey_number=?,bio=COALESCE(?,bio),version=version+1 WHERE user_id=? AND version=?', details.discName, details.jerseyNumber, typeof details.bio === 'string' ? details.bio.trim() : null, context.user.id, raw.expectedVersion),
+        ...(typeof raw.position === 'string' ? [statement('UPDATE profiles SET position=? WHERE user_id=?', raw.position, context.user.id)] : []),
         assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, Number(raw.expectedVersion) + 1]),
       ], { userId: context.user.id });
       return { operationId: committed.operationId, me: await me(current) };
@@ -353,6 +357,8 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
     ...topics,
     ...createLearningActivity({ db, clock, activeMember, operation }),
     ...createLearningDiscussion({ db, clock, activeMember, operation }),
+    ...createTrainingDiscussions({ db,clock,activeMember,operation }),
+    ...createWorkspaceAssets({ db,bucket,clock,activeMember,operation,mediaPolicy }),
     ...createLearningService({ db, bucket, clock, learningPolicy, activeMember, operation, attemptLearningInclusion }),
     ...createTrainingService({ db, bucket, clock, mediaPolicy, activeMember, me: businessAccount, operation, getReflection: reflections.getReflection }) };
 }

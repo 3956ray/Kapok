@@ -2,19 +2,15 @@ import { redirect } from 'next/navigation';
 import { authMode, chatGPTSignInPath } from '../chatgpt-auth';
 import { authContinuationPath } from '../../lib/server/auth-entry';
 import { safeReturnTo } from '../../lib/server/domain';
-import { EnvironmentNote, Shell } from '../components/shell';
+import { AuthLayout } from '../components/auth-entry';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Login({ searchParams }: { searchParams: Promise<{ returnTo?: string }> }) {
   const returnTo = safeReturnTo((await searchParams).returnTo);
   if (authMode() === 'access') redirect(authContinuationPath('login', returnTo));
-  return <Shell title="欢迎回到木棉" nav={false} back="/">
-    <EnvironmentNote />
-    <section className="panel access-panel">
-      <h2>继续你的训练记录</h2>
-      <p>使用 ChatGPT 登录后，继续访问有权限的队伍内容。</p>
-      <a href={chatGPTSignInPath(returnTo)} target="_top" className="button">使用 ChatGPT 登录</a>
-    </section>
-  </Shell>;
+  return <AuthLayout title="登录工作区">
+    <p>使用 ChatGPT 登录，继续访问你的队伍和训练记录。</p>
+    <a href={chatGPTSignInPath(returnTo)} target="_top" className="kapok-auth-primary">使用 ChatGPT 登录 →</a>
+  </AuthLayout>;
 }

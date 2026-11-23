@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../components/workspace-entry';
 import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../components/shell';
 import Link from 'next/link';
 import { ReflectionIcon } from '../components/reflection-icon';
@@ -12,6 +13,7 @@ export default async function Growth({ searchParams }: { searchParams?: Promise<
         return <Shell title="成长记录" surface="index">
             <AccessState context={context} returnTo="/growth" />
         </Shell>;
+    if (context.user && isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/growth' + (initialFilter === 'all' ? '' : '?filter=' + filter)} />;
     const write = <Link href="/reflections/new" className="button secondary growth-compose" aria-label="写复盘" title="写复盘"><ReflectionIcon size={18} aria-hidden="true" /><span>写复盘</span></Link>;
     return <Shell title="成长记录" surface="index" description="回看复盘、收藏和私人备注。" headingAside={write} canCompose={isMember(context.me)}>
         <LocalDrafts key={context.user.userId} actorId={context.user.userId} />

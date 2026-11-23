@@ -245,7 +245,8 @@ test('a held export snapshot rechecks source revocation, owner leave and account
     await leavePause.ready;
     await s.leaveTeam(author, expected(await membership(author)), 'leave');
     leavePause.release();
-    assert.equal((await beforeLeave).collections[0].sourceAvailable, false);
+    await denied(beforeLeave, 'FORBIDDEN');
+    assert.equal((await s.exportOwnData(author)).collections[0].sourceAvailable, false);
     const disablePause = pausedBatch();
     const beforeDisable = disablePause.delayed.exportOwnData(author);
     await disablePause.ready;

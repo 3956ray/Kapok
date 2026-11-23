@@ -7,7 +7,7 @@ export type JoinInput = ProfileInput & { returnTo?: string; intent: 'register'; 
 export type ProfileUpdate = ProfileInput & { expectedVersion: number };
 export type Me = {
   user: { id: string; status: 'active' | 'deleted' } | null;
-  profile: (ProfileInput & { bio?: string; version: number }) | null;
+  profile: (ProfileInput & { bio?: string; position?: string; version: number }) | null;
   membership: { id: string; teamId: string; role: 'admin' | 'coach' | 'member'; status: 'active' | 'paused' | 'left'; epoch: number; version: number } | null;
   team: { id: string; name: string; description: string } | null;
 };

@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../../components/workspace-entry';
 import Link from 'next/link';
 import { Shell, EnvironmentNote, AccessState, getPageContext, isMember } from '../../components/shell';
 import { TrainingWatch } from '../../components/training-watch';
@@ -19,6 +20,7 @@ export default async function Page({ params, searchParams }: {
     const path = '/trainings/' + encodeURIComponent(id);
     const context = await getPageContext();
     const member = isMember(context.me);
+    if (context.user && member && !memberView) return <WorkspaceEntry actorId={context.user.userId} path={path + (selectedVideoId ? '?video=' + selectedVideoId : '')} />;
     return <Shell title="训练观看" surface="video" back={memberView ? '/admin/trainings/' + encodeURIComponent(id) : '/trainings'} canCompose={member && !memberView}>
         {context.user && member ? memberView && context.me?.membership?.role !== 'admin' ?
             <section className="video-content notice error" role="alert">

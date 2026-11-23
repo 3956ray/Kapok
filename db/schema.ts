@@ -10,6 +10,7 @@ export const authIdentities = sqliteTable('auth_identities', {
   id: text('id').primaryKey(), provider: text('provider').notNull(), issuer: text('issuer').notNull(), subject: text('subject').notNull(), userId: text('user_id').notNull().references(() => users.id),
 }, t => [uniqueIndex('identity_subject').on(t.provider, t.issuer, t.subject), uniqueIndex('identity_user').on(t.userId, t.provider, t.issuer), check('identity_provider', sql`${t.provider} IN ('site','access')`), check('identity_issuer', sql`length(${t.issuer})>0`), check('identity_subject_nonempty', sql`length(${t.subject})>0`)]);
 export const profiles = sqliteTable('profiles', {
+  position: text('position').notNull().default(''),
   userId: text('user_id').primaryKey().references(() => users.id), bio: text('bio').notNull().default(''), discName: text('disc_name').notNull(), jerseyNumber: text('jersey_number').notNull(), version: integer('version').notNull().default(1),
 }, t => [check('profile_disc_name', sql`length(${t.discName}) BETWEEN 1 AND 20`), check('profile_jersey', sql`length(${t.jerseyNumber}) BETWEEN 1 AND 4`), check('profile_version', sql`${t.version}>0`)]);
 export const teams = sqliteTable('teams', {
@@ -36,6 +37,8 @@ export const bootstraps = sqliteTable('bootstraps', {
 }, t => [uniqueIndex('bootstrap_team').on(t.teamId), uniqueIndex('bootstrap_operation').on(t.opId), check('bootstrap_slot', sql`${t.id}='site'`)]);
 
 export const trainings = sqliteTable('trainings', {
+    publisherId: text('publisher_id').references(() => users.id),
+    workspaceDetails: text('workspace_details').notNull().default('{}'),
     id: text('id').primaryKey(), teamId: text('team_id').notNull().references(() => teams.id), title: text('title').notNull(), date: text('date').notNull(), description: text('description').notNull(), status: text('status', {
         enum: ['draft', 'published', 'archived', 'hidden', 'deleted']
     }).notNull(), version: integer('version').notNull().default(1), updatedAt: text('updated_at').notNull(), createdAt: text('created_at').notNull(),
@@ -64,6 +67,7 @@ export const videos = sqliteTable('videos', {
     publisherId: text('publisher_id').references(() => users.id),
 }, t => [check('video_source', sql `${t.source} IN ('bilibili','youtube','upload')`), check('video_status', sql `${t.status} IN ('active','hidden','deleted')`), index('video_training_order').on(t.trainingId, t.position, t.id)]);
 export const videoComments = sqliteTable('video_comments', {
+    referenceTimes: text('reference_times'),
     id: text('id').primaryKey(), videoId: text('video_id').notNull().references(() => videos.id), teamId: text('team_id').notNull().references(() => teams.id), authorId: text('author_id').notNull().references(() => users.id), rootId: text('root_id').references((): AnySQLiteColumn => videoComments.id), text: text('text').notNull(), timestampSec: integer('timestamp_sec'), status: text('status', {
         enum: ['active', 'hidden', 'deleted']
     }).notNull().default('active'), version: integer('version').notNull().default(1), createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(),
@@ -71,9 +75,9 @@ export const videoComments = sqliteTable('video_comments', {
 }, t => [check('comment_status', sql `${t.status} IN ('active','hidden','deleted')`), index('comment_video').on(t.videoId, t.createdAt, t.id)]);
 export const collections = sqliteTable('collections', {
     id: text('id').primaryKey(), ownerId: text('owner_id').notNull().references(() => users.id), sourceKind: text('source_kind', {
-        enum: ['video', 'comment', 'reflection', 'learning_post', 'topic_collection']
+        enum: ['training', 'video', 'comment', 'reflection', 'learning_post', 'topic_collection']
     }).notNull(), sourceId: text('source_id').notNull(), timestampSec: integer('timestamp_sec'), privateNote: text('private_note').notNull().default(''), version: integer('version').notNull().default(1), createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(),
-}, t => [uniqueIndex('collection_owner_source').on(t.ownerId, t.sourceKind, t.sourceId), check('collection_kind', sql `${t.sourceKind} IN ('video','comment','reflection','learning_post','topic_collection')`)]);
+}, t => [uniqueIndex('collection_owner_source').on(t.ownerId, t.sourceKind, t.sourceId), check('collection_kind', sql `${t.sourceKind} IN ('training','video','comment','reflection','learning_post','topic_collection')`)]);
 export const commentReports = sqliteTable('comment_reports', {
     id: text('id').primaryKey(), commentId: text('comment_id').notNull().references(() => videoComments.id), actorId: text('actor_id').notNull().references(() => users.id), reason: text('reason').notNull(), createdAt: text('created_at').notNull()
 });
@@ -88,6 +92,7 @@ export const reflections = sqliteTable('reflections', {
     title: text('title').notNull().default(''),
     text: text('text').notNull(),
     date: text('date').notNull(),
+    category: text('category'),
     trainingId: text('training_id').references(() => trainings.id),
     videoId: text('video_id').references(() => videos.id),
     sourceKind: text('source_kind', { enum: ['learning_post', 'topic_collection'] }),
@@ -183,17 +188,18 @@ function learningContentColumns() {
         kind: text('kind', { enum: ['article', 'video'] }).notNull(),
         category: text('category').notNull(),
         title: text('title').notNull(), summary: text('summary').notNull(), body: text('body').notNull(),
-        videoSource: text('video_source', { enum: ['youtube', 'bilibili'] }), videoUrl: text('video_url'),
+        videoSource: text('video_source', { enum: ['youtube', 'bilibili','upload'] }), videoUrl: text('video_url'),
     };
 }
 function learningContentChecks(name: string, t: { kind: AnySQLiteColumn; videoSource: AnySQLiteColumn; videoUrl: AnySQLiteColumn }) {
     return [
         check(name + '_kind', sql`${t.kind} IN ('article','video')`),
         check(name + '_video', sql`(${t.kind}='article' AND ${t.videoSource} IS NULL AND ${t.videoUrl} IS NULL)
-            OR (${t.kind}='video' AND ${t.videoSource} IS NOT NULL AND ${t.videoSource} IN ('youtube','bilibili') AND ${t.videoUrl} IS NOT NULL)`),
+            OR (${t.kind}='video' AND ${t.videoSource} IS NOT NULL AND ${t.videoSource} IN ('youtube','bilibili','upload') AND ${t.videoUrl} IS NOT NULL)`),
     ];
 }
 export const learningPosts = sqliteTable('learning_posts', {
+    workspaceDetails: text('workspace_details').notNull().default('{}'),
     id: text('id').primaryKey().notNull(), teamId: text('team_id').notNull().references(() => teams.id),
     ownerId: text('owner_id').notNull().references(() => users.id), ...learningContentColumns(),
     collectionTargetId: text('collection_target_id'),
@@ -205,6 +211,7 @@ export const learningPosts = sqliteTable('learning_posts', {
     check('learning_post_version', sql`${t.version} > 0`), index('learning_posts_owner').on(t.teamId, t.ownerId, t.updatedAt, t.id),
 ]);
 export const learningPostPublications = sqliteTable('learning_post_publications', {
+    workspaceDetails: text('workspace_details').notNull().default('{}'),
     postId: text('post_id').primaryKey().notNull().references(() => learningPosts.id), ...learningContentColumns(),
     version: integer('version').notNull(), authorEpoch: integer('author_epoch').notNull(),
     collectionTargetId: text('collection_target_id'), publishedAt: text('published_at').notNull(),
@@ -244,7 +251,7 @@ export const learningPublicationImages = learningImageReferences('learning_publi
 
 export const topicCollections = sqliteTable('topic_collections', {
     id: text('id').primaryKey().notNull(), teamId: text('team_id').notNull().references(() => teams.id),
-    ownerId: text('owner_id').notNull().references(() => users.id), title: text('title').notNull(), summary: text('summary').notNull(),
+    ownerId: text('owner_id').notNull().references(() => users.id), title: text('title').notNull(), summary: text('summary').notNull(), category: text('category').notNull().default(''),
     status: text('status', { enum: ['draft', 'published', 'withdrawn'] }).notNull().default('draft'),
     version: integer('version').notNull().default(1), createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(),
 }, t => [
@@ -254,20 +261,27 @@ export const topicCollections = sqliteTable('topic_collections', {
 ]);
 export const topicCollectionPublications = sqliteTable('topic_collection_publications', {
     collectionId: text('collection_id').primaryKey().notNull().references(() => topicCollections.id),
-    title: text('title').notNull(), summary: text('summary').notNull(), version: integer('version').notNull(),
+    title: text('title').notNull(), summary: text('summary').notNull(), category: text('category').notNull().default(''), version: integer('version').notNull(),
     authorEpoch: integer('author_epoch').notNull(), visibilityId: text('visibility_id').notNull(), publishedAt: text('published_at').notNull(),
 }, t => [
     check('topic_publication_version', sql`${t.version}>0`), check('topic_publication_epoch', sql`${t.authorEpoch}>0`),
 ]);
 export const topicCollectionItems = sqliteTable('topic_collection_items', {
     collectionId: text('collection_id').notNull().references(() => topicCollections.id),
-    snapshot: integer('snapshot').notNull(), kind: text('kind', { enum: ['post', 'video'] }).notNull(),
+    snapshot: integer('snapshot').notNull(), kind: text('kind', { enum: ['post', 'video', 'training'] }).notNull(),
     sourceId: text('source_id').notNull(), position: integer('position').notNull(),
 }, t => [
     primaryKey({ columns: [t.collectionId, t.snapshot, t.kind, t.sourceId] }), unique().on(t.collectionId, t.snapshot, t.position),
-    check('topic_item_snapshot', sql`${t.snapshot} IN (0,1)`), check('topic_item_kind', sql`${t.kind} IN ('post','video')`),
+    check('topic_item_snapshot', sql`${t.snapshot} IN (0,1)`), check('topic_item_kind', sql`${t.kind} IN ('post','video','training')`),
     check('topic_item_position', sql`${t.position}>=0`),
 ]);
+export const workspaceTopicShares = sqliteTable('workspace_topic_shares', {
+    id: text('id').primaryKey().notNull(),
+    collectionId: text('collection_id').notNull().references(() => topicCollections.id, {onDelete:'cascade'}),
+    version: integer('version').notNull(), visibilityId: text('visibility_id').notNull(),
+    title: text('title').notNull(), summary: text('summary').notNull(), category: text('category').notNull(),
+    publishedAt: text('published_at').notNull(), items: text('items').notNull(),
+}, t => [unique().on(t.collectionId,t.version),check('workspace_topic_items_json',sql`json_valid(${t.items})`)]);
 export const topicFeatured = sqliteTable('topic_featured', {
     teamId: text('team_id').primaryKey().notNull().references(() => teams.id),
     version: integer('version').notNull(), choices: text('choices', { mode: 'json' }).notNull(),
@@ -285,6 +299,7 @@ export const topicLearningAssociations = sqliteTable('topic_learning_association
 ]);
 
 export const learningComments = sqliteTable('learning_comments', {
+    referenceTimes: text('reference_times'),
     id: text('id').primaryKey(),
     postId: text('post_id').notNull().references(() => learningPosts.id),
     teamId: text('team_id').notNull().references(() => teams.id),
@@ -329,3 +344,17 @@ export const learningActivityEvents = sqliteTable('learning_activity_events', {
     uniqueIndex('learning_activity_current').on(t.postId, t.authorEpoch).where(sql`${t.revokedAt} IS NULL`),
     index('learning_activity_post').on(t.postId, t.authorEpoch, t.sequence),
 ]);
+
+export const materialAssets = sqliteTable('material_assets', {
+    id:text('id').primaryKey(), teamId:text('team_id').notNull().references(()=>teams.id),
+    ownerId:text('owner_id').notNull().references(()=>users.id), parentKind:text('parent_kind',{enum:['training','post']}).notNull(),
+    parentId:text('parent_id').notNull(), mime:text('mime').notNull(), bytes:integer('bytes').notNull(), digest:text('digest').notNull(),
+    ready:integer('ready').default(0).notNull(), createdAt:text('created_at').notNull(),
+}, t=>[index('material_assets_parent').on(t.parentKind,t.parentId),index('material_assets_team').on(t.teamId)]);
+
+export const trainingDiscussions = sqliteTable('training_discussions', {
+    id:text('id').primaryKey(),trainingId:text('training_id').notNull().references(()=>trainings.id),authorId:text('author_id').notNull().references(()=>users.id),
+    rootId:text('root_id').references((): AnySQLiteColumn=>trainingDiscussions.id),replyToId:text('reply_to_id').references((): AnySQLiteColumn=>trainingDiscussions.id),
+    body:text('body').notNull(),status:text('status',{enum:['active','deleted']}).default('active').notNull(),
+    version:integer('version').default(1).notNull(),createdAt:text('created_at').notNull(),
+}, t=>[index('training_discussions_order').on(t.trainingId,t.createdAt,t.id)]);

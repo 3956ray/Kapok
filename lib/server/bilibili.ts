@@ -74,3 +74,35 @@ export async function resolveBilibiliShare(input: unknown, request: typeof fetch
     } finally { clearTimeout(timer); }
     throw new DomainError('UPSTREAM_UNAVAILABLE', '暂未确认这条B站短链接对应的视频，请保留输入重试，或使用完整视频地址。', 503, true);
 }
+
+export async function readBilibiliDuration(value: string, request: typeof fetch = fetch): Promise<number> {
+    const video = new URL(canonicalVideo(value));
+    const list = new URL('https://api.bilibili.com/x/player/pagelist');
+    list.searchParams.set('bvid', video.pathname.split('/')[2]);
+    const page = Number(video.searchParams.get('p') ?? 1);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6500);
+    try {
+        const response = await request(list, { redirect: 'error', signal: controller.signal });
+        const reader = response.body?.getReader();
+        if (!response.ok || !reader) throw Error();
+        const decoder = new TextDecoder();
+        let bytes = 0, text = '';
+        try {
+            while (true) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                bytes += chunk.value.byteLength;
+                if (bytes > 512000) throw Error();
+                text += decoder.decode(chunk.value, { stream: true });
+            }
+        } finally { await reader.cancel().catch(() => {}); }
+        const body = JSON.parse(text + decoder.decode());
+        const duration = body.code === 0 && Array.isArray(body.data)
+            && body.data.find((row: {page: number}) => row?.page === page)?.duration;
+        if (!Number.isSafeInteger(duration) || duration <= 0) throw Error();
+        return duration;
+    } catch {
+        throw new DomainError('UPSTREAM_UNAVAILABLE', '暂时无法读取此分 P 的片长。', 503, true);
+    } finally { clearTimeout(timer); }
+}

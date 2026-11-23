@@ -31,7 +31,7 @@ export function isDefaultLearningCategory(name: string): boolean {
 export type LearningImageType = typeof learningImageTypes[number];
 export type LearningPostKind = 'article' | 'video';
 export type LearningPostStatus = 'draft' | 'published' | 'withdrawn' | 'hidden';
-export type LearningVideo = { source: 'youtube' | 'bilibili'; url: string };
+export type LearningVideo = { source: 'youtube' | 'bilibili' | 'upload'; url: string };
 export type LearningAuthor = { id: string; discName: string; jerseyNumber: string };
 export type LearningImage = {
     id: string; mimeType: LearningImageType; width: number; height: number; bytes: number; href: string; alt: string; decorative: boolean;

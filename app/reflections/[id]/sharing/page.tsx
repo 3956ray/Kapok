@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../../../components/workspace-entry';
 import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../../../components/shell';
 import { ReflectionSharing } from '../../../components/reflections';
 import { getService } from '../../../../lib/server/runtime';
@@ -23,6 +24,7 @@ export default async function SharingPage({
             <p>请确认账号或返回成长。</p>
         </Shell>;
     }
+    if (isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/notes/' + encodeURIComponent(id) + '/sharing'} />;
     return <Shell title="分享与发布" back={`/reflections/${id}`} canCompose={isMember(context.me)}>
         <ReflectionSharing key={context.user.userId + ':' + id} actorId={context.user.userId} id={id} />
     </Shell>;

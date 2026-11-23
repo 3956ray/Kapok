@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../../components/workspace-entry';
 import { Shell, getPageContext, AccessState, isMember } from '../../components/shell';
 import { MemberDirectory } from '../../components/community';
 export const dynamic = 'force-dynamic';
@@ -12,6 +13,7 @@ export default async function MemberProfile({
     const {
         id
     } = await params;
+    if (context.user && isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/members?person=' + encodeURIComponent(id)} />;
     return <Shell title="队内档案" back="/members" surface="index" eyebrow="队伍成员" canCompose={isMember(context.me)}>
         {context.user && isMember(context.me) ? <MemberDirectory key={context.user.userId + ':' + id} actorId={context.user.userId} id={id} /> : <AccessState context={context} returnTo={`/members/${id}`} />}
     </Shell>;

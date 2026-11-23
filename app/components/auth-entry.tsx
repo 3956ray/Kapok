@@ -1,22 +1,17 @@
-import { authEntryPath, authStyles } from '../../lib/server/auth-entry';
+import { authEntryPath, authStyles, authMast, authCover } from '../../lib/server/auth-entry';
 import { AuthDraftActor } from './auth-draft-actor';
 
-export function AuthLayout({ title, children, verifiedActorId }: { title: string; children: React.ReactNode; verifiedActorId?: string }) {
+export function AuthLayout({ title, children, verifiedActorId, register = false }: { title: string; children: React.ReactNode; verifiedActorId?: string; register?: boolean }) {
   return <div className="kapok-auth">
     {verifiedActorId && <AuthDraftActor actorId={verifiedActorId} />}
-    <style>{authStyles}</style>
-    <header className="kapok-auth-brand">
-      {/* This is a document navigation to the standalone Worker entry. */}
-      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-      <a href="/" className="kapok-auth-wordmark">Kapok<span aria-hidden="true">•</span></a>
-      <div className="kapok-auth-brand-copy"><p className="kapok-auth-label">Kapok Bloom</p><p className="kapok-auth-brand-title">每次上场，<br />都有新的可能。</p><p>属于一支队伍。<br />也属于每一个认真成长的你。</p></div>
-      <div className="kapok-auth-court" aria-hidden="true" />
-      <p className="kapok-auth-brand-foot">训练 · 连接 · 成长</p>
-    </header>
-    <main id="main-content" className="kapok-auth-main">
-      <p className="kapok-auth-label">Kapok Bloom</p>
-      <h1>{title}</h1>
-      {children}
+    <style>{authStyles(false)}</style>
+    <div dangerouslySetInnerHTML={{ __html: authMast }} />
+    <main id="main-content" tabIndex={-1} className="access-spread">
+      <section className="access-form-panel" aria-labelledby="access-title"><div className="access-entry">
+        <h1 id="access-title">{title}</h1>
+        {children}
+      </div></section>
+      <div style={{display:'contents'}} dangerouslySetInnerHTML={{ __html: authCover(register, false) }} />
     </main>
   </div>;
 }

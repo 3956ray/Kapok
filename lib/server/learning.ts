@@ -1,3 +1,4 @@
+import { materialDetails, materialIndexDetails, materialPhotoGuard } from './workspace-material-details.ts';
 import type { LearningAssociation } from '../contracts/topic-collections';
 import type { Me, Principal } from '../contracts/index';
 import {
@@ -28,7 +29,7 @@ export const learningMissing = () => new DomainError('NOT_FOUND', '资料不可�
 export const learningConflict = () => new DomainError('VERSION_CONFLICT', '资料或权限已变化，请重新加载后重试。', 409);
 const locked = () => new DomainError('READ_ONLY', '资料已被管理员隐藏。', 409);
 const invalid = () => new DomainError('INVALID_INPUT', '请检查学习资料填写内容。');
-type ContentRow = Omit<LearningPostFields, 'video' | 'body'> & { video_source: 'youtube' | 'bilibili' | null; video_url: string | null };
+type ContentRow = Omit<LearningPostFields, 'video' | 'body'> & { video_source: 'youtube' | 'bilibili' | 'upload' | null; video_url: string | null };
 type DraftRow = {
     id: string; kind: LearningPostFields['kind']; category: LearningPostFields['category']; title: string; summary: string;
     status: LearningPostStatus; version: number; collection_target_id: string | null;
@@ -108,9 +109,9 @@ function imageProjection(table: LearningReferenceTable) {
 function videoDto(row: ContentRow): LearningPostFields['video'] {
     return row.video_source && row.video_url ? { source: row.video_source, url: row.video_url } : null;
 }
-function contentSummary(row: Omit<ContentRow, 'video_source' | 'video_url'>) {
+function contentSummary(row: { workspaceDetails?: string } & Omit<ContentRow, 'video_source' | 'video_url'>) {
     return {
-        kind: row.kind, category: row.category, title: row.title, summary: row.summary,
+        kind: row.kind, category: row.category, title: row.title, summary: row.summary, workspaceDetails: row.workspaceDetails,
     };
 }
 function images(row: { id: string; images: string }, draft: boolean): LearningImage[] {
@@ -137,9 +138,9 @@ export function createLearningService(deps: LearningDependencies & {
     const policy = limits(learningPolicy);
     const q = (sql: string, ...values: unknown[]) => db.prepare(sql).bind(...values);
     const publicSelect = (detail: boolean) => `SELECT lpub.kind,lpub.category,lpub.title,lpub.summary,lpub.video_source,lpub.video_url,
-        lpub.version,lpub.published_at,${detail ? 'lpub.body,' : ''} lp.id,lp.owner_id,p.disc_name,p.jersey_number,${imageProjection('learning_publication_images')}
+        ${detail?'lpub.workspace_details':materialIndexDetails('lpub.workspace_details')} AS workspaceDetails,lpub.version,lpub.published_at,${detail ? 'lpub.body,' : ''} lp.id,lp.owner_id,p.disc_name,p.jersey_number,${imageProjection('learning_publication_images')}
         FROM learning_post_publications lpub JOIN learning_posts lp ON lp.id=lpub.post_id JOIN profiles p ON p.user_id=lp.owner_id`;
-    const draftSelect = (detail: boolean) => `SELECT lp.id,lp.kind,lp.category,lp.title,lp.summary,lp.version,lp.updated_at,
+    const draftSelect = (detail: boolean) => `SELECT lp.id,lp.kind,lp.category,lp.title,lp.summary,${detail?'lp.workspace_details':materialIndexDetails('lp.workspace_details')} AS workspaceDetails,lp.version,lp.updated_at,
         ${detail ? `lp.body,lp.video_source,lp.video_url,lp.collection_target_id,lpub.collection_target_id AS published_target,
             CASE WHEN ${learningPostVisible} THEN (SELECT status FROM topic_learning_associations
                 WHERE post_id=lp.id AND published_version=lpub.version) END AS association_status,` : ''}
@@ -242,7 +243,7 @@ export function createLearningService(deps: LearningDependencies & {
 
     async function saveLearningPost(p: Principal | null, id: string | null, input: unknown, key: string): Promise<LearningDraft> {
         const c = await bindLearningMember(activeMember, p);
-        const r = learningObject(input, ['kind', 'category', 'title', 'summary', 'body', 'video', 'collectionTargetId', 'images', ...(id ? ['expectedVersion'] : [])]);
+        const r = learningObject(input, ['kind', 'category', 'title', 'summary', 'body', 'video', 'collectionTargetId', 'images', 'workspaceDetails', ...(id ? ['expectedVersion'] : [])]);
         const kind = r.kind === 'article' || r.kind === 'video' ? r.kind : null;
         const category = normalizeLearningCategory(r.category);
         if (!kind || !category || (r.collectionTargetId != null && !isId(r.collectionTargetId))) throw invalid();
@@ -261,15 +262,17 @@ export function createLearningService(deps: LearningDependencies & {
         if (kind === 'article' && r.video != null) throw invalid();
         if (kind === 'video') {
             const v = learningObject(r.video, ['source', 'url']);
-            if ((v.source !== 'bilibili' && v.source !== 'youtube') || typeof v.url !== 'string' || !v.url.trim() || v.url.length > 2000) throw invalid();
+            if ((v.source !== 'bilibili' && v.source !== 'youtube' && v.source !== 'upload') || typeof v.url !== 'string' || !v.url.trim() || v.url.length > 2000) throw invalid();
             video = { source: v.source, url: v.url };
+            if (video.source === 'upload' && (!id || !/^\/api\/v1\/material-assets\/[a-f0-9-]{36}$/.test(video.url))) throw invalid();
             if (video.source === 'youtube') {
                 const parsed = parseYouTubeSource(video.url);
                 if (!parsed) throw invalid();
                 video.url = parsed.url;
             }
         }
-        const normalized = { kind, category, title, summary, body, video, images: refs, collectionTargetId: r.collectionTargetId, expectedVersion };
+        const details = materialDetails(r.workspaceDetails);
+        const normalized = { ...(details === undefined ? {} : { workspaceDetails: details }), kind, category, title, summary, body, video, images: refs, collectionTargetId: r.collectionTargetId, expectedVersion };
         if (id) await ownedRow(c, id);
         const op = await operation(c.user.id, 'learning-save', id ?? 'new', key, normalized, video?.source === 'bilibili'
             ? async () => {
@@ -308,6 +311,11 @@ export function createLearningService(deps: LearningDependencies & {
                 target, c.membership.teamId, c.user.id, kind, category, title, summary, body, video?.source ?? null,
                 video?.url ?? null, r.collectionTargetId ?? null, at, at));
         }
+        write.push(...materialPhotoGuard(db,op.opId,'post',target,c.membership.teamId,details));
+        if (video?.source==='upload') write.push(assertGuard(db,op.opId,'workspace-clip',
+            "EXISTS(SELECT 1 FROM material_assets WHERE id=? AND parent_kind='post' AND parent_id=? AND team_id=? AND ready=1 AND mime LIKE 'video/%')",
+            [video.url.split('/').at(-1),target,c.membership.teamId]));
+        if (details !== undefined) write.push(q('UPDATE learning_posts SET workspace_details=? WHERE id=?', details, target));
         write.push(ownedGuard(op, c, target, (expectedVersion ?? 0) + 1, 'post-written'), learningMemberGuard(db, op, c, 'after'));
         return getDraft(c, await commitLearning(op, write, target));
     }
@@ -336,7 +344,7 @@ export function createLearningService(deps: LearningDependencies & {
                 WHERE post_id=? AND revoked_at IS NULL AND author_epoch=(SELECT author_epoch FROM learning_post_publications WHERE post_id=?)`,
                 at, id, id));
             if (action === 'publish') {
-                if (current.kind === 'article' && !current.body.trim()) throw new DomainError('INVALID_INPUT', '发布图文前请填写正文。');
+                if (current.kind === 'article' && !current.body.trim() && !await q('SELECT 1 FROM learning_draft_images WHERE post_id=? LIMIT 1',id).first()) throw new DomainError('INVALID_INPUT', '发布图文前请填写正文。');
                 const member = learningMemberFence(c);
                 if (await q(`SELECT 1 FROM learning_draft_images WHERE post_id=? AND decorative=0 AND alt='' AND ${member.sql} LIMIT 1`,
                     id, ...member.values).first()) {
@@ -344,11 +352,11 @@ export function createLearningService(deps: LearningDependencies & {
                 }
                 write.push(
                     assertGuard(db, op.opId, 'images', referencesReady('learning_draft_images'), [id]),
-                    q(`INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,video_source,video_url,version,author_epoch,collection_target_id,published_at)
-                        SELECT id,kind,category,title,summary,body,video_source,video_url,?,?,collection_target_id,? FROM learning_posts WHERE id=?
+                    q(`INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,video_source,video_url,version,author_epoch,collection_target_id,published_at,workspace_details)
+                        SELECT id,kind,category,title,summary,body,video_source,video_url,?,?,collection_target_id,?,workspace_details FROM learning_posts WHERE id=?
                         ON CONFLICT(post_id) DO UPDATE SET kind=excluded.kind,category=excluded.category,title=excluded.title,
                             summary=excluded.summary,body=excluded.body,video_source=excluded.video_source,video_url=excluded.video_url,
-                            version=excluded.version,author_epoch=excluded.author_epoch,collection_target_id=excluded.collection_target_id,published_at=excluded.published_at`, finalVersion, c.membership.epoch, at, id),
+                            version=excluded.version,workspace_details=excluded.workspace_details,author_epoch=excluded.author_epoch,collection_target_id=excluded.collection_target_id,published_at=excluded.published_at`, finalVersion, c.membership.epoch, at, id),
                     q('DELETE FROM learning_publication_images WHERE post_id=?', id),
                     q(`INSERT INTO learning_publication_images(post_id,image_id,position,alt,decorative)
                         SELECT post_id,image_id,position,alt,decorative FROM learning_draft_images WHERE post_id=?`, id),

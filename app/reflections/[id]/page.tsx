@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../../components/workspace-entry';
 import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../../components/shell';
 import { ReflectionRead } from '../../components/reflections';
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,7 @@ export default async function ReflectionPage({
     const {
         saved
     } = await searchParams;
+    if (context.user && isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/notes/' + encodeURIComponent(id)} />;
     return <Shell title="复盘阅读" back="/growth" canCompose={isMember(context.me)}>
         {context.user && canReadPersonal(context.user, context.me) ? <ReflectionRead
             key={context.user.userId + ':' + id}

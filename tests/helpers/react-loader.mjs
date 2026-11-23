@@ -9,14 +9,14 @@ registerHooks({
         if (specifier === 'next/link' || specifier === 'next/navigation') return { url: new URL('./next-stubs.mjs', import.meta.url).href, shortCircuit: true };
         if (specifier.startsWith('.') && context.parentURL) {
             const url = new URL(specifier, context.parentURL);
-            for (const suffix of ['', '.tsx', '.ts', '/index.ts']) {
-                if (existsSync(fileURLToPath(url) + suffix) && /\.(?:tsx|ts)$/.test(url.pathname + suffix)) return { url: url.href + suffix, shortCircuit: true };
+            for (const suffix of ['', '.tsx', '.ts', '.jsx', '.js', '/index.ts']) {
+                if (existsSync(fileURLToPath(url) + suffix) && /\.(?:tsx?|jsx?)$/.test(url.pathname + suffix)) return { url: url.href + suffix, shortCircuit: true };
             }
         }
         return next(specifier, context);
     },
     load(url, context, next) {
-        if (/\.(?:tsx|ts)$/.test(new URL(url).pathname)) {
+        if (/\.(?:tsx?|jsx)$/.test(new URL(url).pathname)) {
             return { format: 'module', source: ts.transpileModule(readFileSync(new URL(url), 'utf8'), {
                 fileName: fileURLToPath(url),
                 compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 }

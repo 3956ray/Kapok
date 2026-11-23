@@ -3,8 +3,8 @@ import type { Me, Principal } from '../contracts/index';
 import type { Announcement, ActivityItem, ActivityPage, PublicMember, PublicProfile, Reflection, ReflectionAuthor, ReflectionReader } from '../contracts/reflections';
 import { assertGuard, DomainError } from './domain.ts';
 import type { StoredResult } from './domain';
-import { learningActivitySelect } from './learning-activity.ts';
-import { bindLearningMember, learningMemberFence } from './learning.ts';
+import { learningActivitySelect, learningActivityVisible } from './learning-activity.ts';
+import { bindLearningMember, learningMemberFence, learningPostVisible } from './learning.ts';
 import { accessMembershipFence } from './identity.ts';
 import { isLearningSourceRef, type LearningSourceKind } from '../contracts/reflections.ts';
 import { learningSourceGuard, parseLearningLink, privateOwnerFence, privateSourceWrite, publishedLearningLink } from './learning-sources.ts';
@@ -29,6 +29,7 @@ type Dependencies = {
 type Row = {
     id: string;
     owner_id: string;
+    category?: string | null;
     team_id: string;
     title: string;
     text: string;
@@ -150,6 +151,7 @@ export function createReflectionService({
             id: r.id,
             title: r.title,
             text: r.text,
+            ...(r.category ? { category: r.category } : {}),
             date: r.date,
             updatedAt: r.updated_at,
             author: {
@@ -349,10 +351,15 @@ export function createReflectionService({
                 'sourceRef',
                 'expectedVersion',
                 'expectedSharingVersion',
-                'expectedGeneration'
+                'expectedGeneration',
+                'category'
             ]
         );
         const title = text(raw.title ?? '', 60, true);
+        const category = typeof raw.category === 'string' ? raw.category.normalize('NFKC').trim() : undefined;
+        if (raw.category !== undefined && (!category || Array.from(category).length > 20)) {
+            throw new DomainError('INVALID_INPUT', '复盘类别需为 1–20 个字。');
+        }
         const body = text(raw.text, 5000);
         const date = text(raw.date, 10);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date + 'T00:00:00Z')) || new Date(date + 'T00:00:00Z').toISOString().slice(0, 10) !== date) {
@@ -367,6 +374,7 @@ export function createReflectionService({
         const normalized = {
             title,
             text: body,
+            ...(category ? { category } : {}),
             date,
             trainingId: raw.trainingId ?? null,
             videoId: raw.videoId ?? null,
@@ -381,7 +389,11 @@ export function createReflectionService({
         const ref = raw.sourceRef === undefined && !a.training ? old?.sourceRef ?? null : explicitRef;
         const sourceGuards = ref && (ref.kind !== old?.sourceRef?.kind || ref.id !== old.sourceRef.id)
             ? [learningSourceGuard(db, op.opId, ref.kind, ref.id, c.user.id)] : [];
-        const commitSave = (statements: D1PreparedStatement[], id: string) => privateSourceWrite(() => op.commit(statements, { id }));
+        const commitSave = (statements: D1PreparedStatement[], id: string) => {
+            if (category) statements.push(q('UPDATE reflections SET category=? WHERE id=? AND owner_id=? AND last_committed_op_id=?',
+                category, id, c.user.id, op.opId));
+            return privateSourceWrite(() => op.commit(statements, { id }));
+        };
         if (!id) {
             if (!c.membership) throw new DomainError('FORBIDDEN', '请先完成队伍建档。', 403);
             const committed = await commitSave(
@@ -638,11 +650,11 @@ export function createReflectionService({
     async function listMembers(p: Principal | null): Promise<PublicMember[]> {
         const c = await activeMember(p);
         return (await q(
-            `SELECT u.id,p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio,m.role FROM memberships m
+            `SELECT u.id,p.*,p.disc_name AS discName,p.jersey_number AS jerseyNumber,m.role FROM memberships m
                         JOIN users u ON u.id=m.user_id JOIN profiles p ON p.user_id=u.id
                         WHERE m.team_id=? AND m.status='active' AND u.status='active' ORDER BY p.disc_name,u.id`,
             c.membership.teamId
-        ).all<PublicMember>()).results;
+        ).all<PublicMember>()).results.map(({ id, discName, jerseyNumber, role, bio, position }) => ({ id, discName, jerseyNumber, role, bio, ...(position ? { position } : {}) }));
     }
     async function getMemberProfile(p: Principal | null, id: string): Promise<PublicProfile> {
         const c = await activeMember(p);
@@ -750,6 +762,50 @@ export function createReflectionService({
             deleted: true
         } : getAnnouncement(p, committed.id!);
     }
+    async function workspaceDispatch(principal: Principal | null, cursor: string | null) {
+        const c = await bindLearningMember(activeMember, principal);
+        const member = learningMemberFence(c);
+        let boundary = ['', ''];
+        if (cursor) {
+            try {
+                const decoded = JSON.parse(atob(cursor));
+                if (!Array.isArray(decoded) || decoded.length !== 2 || decoded.some(v => typeof v !== 'string' || v.length > 160)) throw Error();
+                boundary = decoded;
+            } catch { throw new DomainError('INVALID_INPUT', '动态分页位置无效。'); }
+        }
+        // D1 limits a compound SELECT to five terms. Materialize reflections and both training discussion sources separately.
+        const { results } = await q(`WITH first_sources AS MATERIALIZED (
+            SELECT 'n:'||r.id AS key,'reflection' AS kind,r.id AS source,r.title,substr(r.text,1,160) AS snippet,
+                p.disc_name AS who,r.published_at AS date,NULL AS video,NULL AS comment FROM reflections r
+                JOIN profiles p ON p.user_id=r.owner_id WHERE r.team_id=? AND r.published_at IS NOT NULL AND ${reflectionShared}
+            UNION ALL SELECT 'c:'||vc.id,'discussion',v.training_id,t.title,substr(vc.text,1,160),p.disc_name,vc.created_at,v.id,vc.id
+                FROM video_comments vc JOIN videos v ON vc.video_id=v.id AND v.team_id=vc.team_id
+                JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id JOIN profiles p ON p.user_id=vc.author_id
+                WHERE vc.team_id=? AND vc.status='active' AND v.status='active' AND t.status IN ('published','archived')
+            UNION ALL SELECT 'tc:'||d.id,'discussion',t.id,t.title,substr(d.body,1,160),p.disc_name,d.created_at,NULL,d.id
+                FROM training_discussions d JOIN trainings t ON t.id=d.training_id JOIN profiles p ON p.user_id=d.author_id
+                WHERE t.team_id=? AND t.status IN ('published','archived') AND d.status='active'
+            ) SELECT * FROM (SELECT * FROM first_sources
+            UNION ALL SELECT 'v:'||v.id,'training_video',t.id,v.title,'',coalesce(p.disc_name,'队内训练'),e.published_at,v.id,NULL
+                FROM video_events e JOIN videos v ON v.id=e.video_id JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
+                LEFT JOIN profiles p ON p.user_id=v.publisher_id WHERE v.team_id=? AND v.status='active' AND t.status='published'
+            UNION ALL SELECT 'lc:'||lc.id,'discussion',lp.id,lpub.title,substr(lc.text,1,160),p.disc_name,lc.created_at,NULL,lc.id
+                FROM learning_comments lc JOIN learning_posts lp ON lp.id=lc.post_id AND lp.team_id=lc.team_id
+                JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lc.author_id
+                WHERE lc.team_id=? AND lc.status='active' AND ${learningPostVisible}
+            UNION ALL SELECT 'la:'||la.id,lpub.kind,lp.id,lpub.title,'',p.disc_name,la.shared_at,NULL,NULL
+                FROM learning_activity_events la JOIN learning_posts lp ON lp.id=la.post_id
+                JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lp.owner_id
+                WHERE lp.team_id=? AND ${learningActivityVisible}
+            UNION ALL SELECT 'a:'||a.id,'announcement',a.id,a.title,'','队伍公告',a.published_at,NULL,NULL
+                FROM announcements a WHERE a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
+            ) WHERE ${member.sql} AND (?='' OR date<? OR (date=? AND key<?)) ORDER BY date DESC,key DESC LIMIT 101`,
+            c.membership.teamId,c.user.id,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,...member.values,
+            boundary[0],boundary[0],boundary[0],boundary[1]).all<{ key:string;date:string }>();
+        const items=results.slice(0,100);
+        const last=items.at(-1);
+        return {items,next:results.length>100 && last ? btoa(JSON.stringify([last.date,last.key])) : null};
+    }
     async function listActivity(p: Principal | null, cursor: string | null = null, limit = 20): Promise<ActivityPage> {
         const c = await bindLearningMember(activeMember, p);
         const member = learningMemberFence(c);
@@ -817,7 +873,7 @@ export function createReflectionService({
         restoreReflection,
         listMembers,
         getMemberProfile,
-        listActivity,
+        listActivity, workspaceDispatch,
         listAnnouncements,
         getAnnouncement,
         saveAnnouncement

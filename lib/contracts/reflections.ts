@@ -20,6 +20,7 @@ export type ReflectionLink = {
     href: string;
 } | null;
 export type ReflectionReader = {
+    category?: string;
     id: string;
     title: string;
     text: string;
@@ -61,6 +62,7 @@ export type ActivityPage = {
     nextCursor: string | null;
 };
 export type PublicMember = {
+    position?: string;
     bio?: string;
     id: string;
     discName: string;

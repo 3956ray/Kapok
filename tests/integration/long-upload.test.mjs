@@ -194,10 +194,28 @@ test('HEAD-confirmed terminal completion can be cleaned before its old response 
 });
 test('incremental 0004 preserves v5 ready media and existing rows, while legacy pending is explicitly distinguishable',async t=>{
  const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("test")}}',compatibilityDate:'2026-05-22',d1Databases:['DB'],r2Buckets:['BUCKET']});t.after(()=>mf.dispose());const db=await mf.getD1Database('DB'),bucket=await mf.getR2Bucket('BUCKET');
- for(const file of ['0000_identity.sql', '0011_profile_bio.sql','0001_training.sql','0002_upload_cleanup.sql','0006_identity_namespace.sql', '0007_email_bound_invites.sql'])for(const sql of(await readFile(new URL('../../drizzle/'+file,import.meta.url),'utf8')).split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
- const s=createService({db,bucket,bootstrapSiteUserId:owner.subject});await s.bootstrap(owner,{discName:'旧版合成管理员',jerseyNumber:'01'},'boot');const me=await s.me(owner);await bucket.put('legacy-ready',original);
- for(const [id,status]of[['legacy-ready','ready'],['legacy-pending','pending']])await db.prepare('INSERT INTO uploads(id,team_id,owner_id,bytes,status,object_key,mime,duration_sec,created_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,me.membership.teamId,me.user.id,original.length,status,status==='ready'?'legacy-ready':null,status==='ready'?'video/mp4':null,status==='ready'?3:null,'2026-10-16').run();
- for(const file of ['0004_resumable_uploads.sql','0010_training_publication.sql'])for(const sql of(await readFile(new URL('../../drizzle/'+file,import.meta.url),'utf8')).split(/;|--> statement-breakpoint/).map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+ const directory = new URL('../../drizzle/', import.meta.url);
+ const files = (await readdir(directory)).filter(name => name.endsWith('.sql')).sort();
+ async function migrate(file) {
+  const sql = await readFile(new URL(file,directory),'utf8');
+  await db.batch(sql.split('--> statement-breakpoint').map(s=>s.trim()).filter(Boolean).map(s=>db.prepare(s)));
+ }
+ for (const file of files.filter(name=>name<'0004')) await migrate(file);
+ const at = '2026-10-16';
+ await db.batch([
+  db.prepare("INSERT INTO users(id,created_at) VALUES('old-owner',?)").bind(at),
+  db.prepare("INSERT INTO auth_identities(id,provider,subject,user_id) VALUES('old-site','site',?,'old-owner')").bind(owner.subject),
+  db.prepare("INSERT INTO teams(id,singleton,name,description,created_at) VALUES('kapok',1,'旧版队伍','',?)").bind(at),
+  db.prepare("INSERT INTO memberships(id,team_id,user_id,role,status,epoch,joined_at) VALUES('old-admin','kapok','old-owner','admin','active',1,?)").bind(at),
+  db.prepare("INSERT INTO profiles(user_id,disc_name,jersey_number) VALUES('old-owner','旧版合成管理员','01')"),
+ ]);
+ await bucket.put('legacy-ready',original);
+ for(const [id,status] of [['legacy-ready','ready'],['legacy-pending','pending']]) {
+  await db.prepare("INSERT INTO uploads(id,team_id,owner_id,bytes,status,object_key,mime,duration_sec,created_at) VALUES(?,'kapok','old-owner',?,?,?,?,?,?)")
+   .bind(id,original.length,status,status==='ready'?'legacy-ready':null,status==='ready'?'video/mp4':null,status==='ready'?3:null,at).run();
+ }
+ for (const file of files.filter(name=>name>='0004')) await migrate(file);
+ const s=createService({db,bucket,bootstrapSiteUserId:owner.subject});
  const rows=(await db.prepare('SELECT id,protocol_version,reserved_bytes FROM uploads ORDER BY id').all()).results;assert.equal(rows.length,2);assert.ok(rows.every(r=>r.protocol_version===1&&r.reserved_bytes===original.length));
  const tr=await s.saveTraining(owner,null,{title:'旧版训练',date:'2026-10-17',description:'',status:'published'},'training');const v=await s.addVideo(owner,tr.id,{title:'旧版视频',source:'upload',uploadId:'legacy-ready',position:0},'video');const r=await s.getMedia(owner,v.id,'bytes=0-15');assert.equal(r.status,206);assert.equal((await r.arrayBuffer()).byteLength,16);
  assert.equal((await s.getUpload(owner,'legacy-pending')).protocol,1);assert.equal((await s.getUpload(owner,'legacy-ready')).status,'ready');

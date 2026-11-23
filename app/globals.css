@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "../vendor/shadcn-tailwind-4.13.0.css";
+@scope (html:not(:has([data-bloom-workspace]))) {
 :root {
   --background:#f4f5f2; --surface:#fffefa; --text:#21382d; --muted:#535e54;
   --primary:#245b42; --on-primary:#fffefa; --selected:#e3ebdf;
@@ -1037,3 +1038,7 @@ main a.topic-featured-card:hover { background:var(--selected); }
 .workspace-nav a:has(.navigation-pending),.bottom-nav a:has(.navigation-pending) { background:var(--selected); color:var(--primary); }
 @keyframes navigation-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .navigation-pending { animation:none; } }
+
+}
+
+html:has([data-bloom-workspace]) > body > .skip-link { display: none; }

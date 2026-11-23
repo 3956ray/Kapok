@@ -6,13 +6,13 @@ import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useSt
 import { CalendarDays, ChevronRight, LockKeyhole, Pencil, UsersRound } from 'lucide-react';
 import type { Training, Video, CollectionReflectionSeed } from '../../lib/contracts/training';
 import type { BootstrapStatus } from '../../lib/contracts';
-import { isLearningSourceId, isLearningSourceKind, isLearningSourceRef, learningReflectionHref,
+import {
     type LearningSourceKind, type Reflection, type ReflectionAuthor } from '../../lib/contracts/reflections';
 import { transferNavigationSource } from '../../lib/client/navigation-state';
 import { api, ApiError, createRequestKey } from '../../lib/client/api';
-import { prepareDraftRequest, reconcileDraft, revision } from '../../lib/client/reflection-draft';
+import { prepareDraftRequest, reconcileDraft, revision, readLocalDraft, listDeviceDrafts } from '../../lib/client/reflection-draft';
 import type { Draft } from '../../lib/client/reflection-draft';
-import { draftKey, draftPrefix } from '../../lib/client/session-guard';
+import { draftKey } from '../../lib/client/session-guard';
 import { ReflectionBookmark } from './collections';
 import { DateGroup, RecordRow } from './presentation';
 import { SecureStatus, supportsPageReads, useSecureResource } from './secure-resource';
@@ -24,30 +24,6 @@ const versions = (r: ReflectionAuthor) => ({
 });
 const errorMessage = (e: unknown) => e instanceof Error ? e.message : '未能保存，请保留内容重试。';
 type RecoveredSeedDraft = { localDraft: Draft };
-function readLocalDraft(storageKey: string): Draft | null {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return null;
-    const local = JSON.parse(raw) as Draft;
-    const validId = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
-    const validFields = (value: { title?: unknown; text?: unknown; date?: unknown } | null) => value &&
-        typeof value.title === 'string' && value.title.length <= 60 && typeof value.text === 'string' && value.text.length <= 5000 &&
-        typeof value.date === 'string' && (value.date === '' || /^\d{4}-\d{2}-\d{2}$/.test(value.date));
-    const validSource = (value: Pick<Draft, 'sourceRef'> & { trainingId?: string | null; videoId?: string | null }) =>
-        value.sourceRef === undefined || value.sourceRef === null || (isLearningSourceRef(value.sourceRef) && !value.trainingId && !value.videoId);
-    const validVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 1;
-    if (!local || local.schema !== 1 || !validFields(local) || typeof local.updatedAt !== 'string' || !validSource(local) ||
-        !(local.trainingId === '' || validId(local.trainingId)) || !(local.videoId === '' || validId(local.videoId))) return null;
-    if (local.cloud !== null && (!local.cloud || !validId(local.cloud.id) || !validVersion(local.cloud.version) ||
-        !validVersion(local.cloud.sharingVersion) || !validVersion(local.cloud.generation))) return null;
-    if (local.pending !== null) {
-        const pending = local.pending;
-        if (!pending || typeof pending.key !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(pending.key) ||
-            pending.targetId !== (local.cloud?.id ?? null) || !validFields(pending.body) || !validSource(pending.body) ||
-            !(pending.body.trainingId === null || validId(pending.body.trainingId)) || !(pending.body.videoId === null || validId(pending.body.videoId))) return null;
-        if (local.cloud && (pending.body.expectedVersion !== local.cloud.version || pending.body.expectedSharingVersion !== local.cloud.sharingVersion || pending.body.expectedGeneration !== local.cloud.generation)) return null;
-    }
-    return local;
-}
 export const scopeLabel = (r: Pick<ReflectionAuthor, 'scope'> & Partial<Pick<ReflectionAuthor, 'published'>>) => r.scope === 'private' ? '仅自己' : r.published ? '全队可读 · 已发布到动态' : '全队可读 · 未发布';
 export function ReflectionEditor({
     actorId,
@@ -663,27 +639,8 @@ export function LocalDrafts({
             let mounted = true;
             queueMicrotask(() => {
                 if (!mounted) return;
-                const prefix = draftPrefix + encodeURIComponent(actorId) + ':';
-                const found = [];
-                try {
-                    for (let i = 0; i < localStorage.length; i++) {
-                        const key = localStorage.key(i);
-                        if (!key?.startsWith(prefix)) continue;
-                        const draft = JSON.parse(localStorage.getItem(key) ?? '{}') as Draft;
-                        if (!draft.text?.trim()) continue;
-                        const id = decodeURIComponent(key.slice(prefix.length));
-                        const [kind, sourceId] = id.split(':');
-                        const href = id === 'new' ? '/reflections/new' : kind === 'collection' && isLearningSourceId(sourceId)
-                            ? `/reflections/new?collection=${encodeURIComponent(sourceId)}`
-                            : isLearningSourceKind(kind) && isLearningSourceId(sourceId)
-                                ? learningReflectionHref(kind, sourceId) : `/reflections/${encodeURIComponent(id)}/edit`;
-                        found.push({
-                            href,
-                            updatedAt: draft.updatedAt
-                        });
-                    }
-                    setItems(found);
-                } catch {/* Drafts are optional; no server empty state is inferred. */ }
+                try { setItems(listDeviceDrafts(localStorage, actorId)); }
+                catch { /* Storage is optional. */ }
             });
             return () => {
                 mounted = false;

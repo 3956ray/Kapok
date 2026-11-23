@@ -38,6 +38,10 @@ const migrations = [
   "0016_learning_private_sources.sql",
   "0017_learning_activity.sql",
   "0018_learning_categories.sql",
+  "0019_workspace_growth.sql",
+  "0020_workspace_topics.sql",
+  "0021_workspace_materials.sql",
+  "0022_workspace_profile_position.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
@@ -161,6 +165,17 @@ test("real workerd serves exact public documents and rejects anonymous SSR, RSC 
       await assertDenied(await dispatch(route, { method: "POST", headers }));
       await assertDenied(await dispatch(route + "?_rsc=test", { headers: { ...headers, RSC: "1" } }));
     }
+  }
+  for (const [route, file, mime] of [
+    ["/login?art=cover", "media/sky.webp", "image/webp"],
+    ["/register?art=cover", "media/sideline-team.webp", "image/webp"],
+    ["/login?art=serif", "type/field-song.woff2", "font/woff2"],
+  ]) {
+    const asset = await dispatch(route);
+    assert.equal(asset.status, 200, route);
+    assert.equal(asset.headers.get("content-type"), mime);
+    assert.deepEqual(Buffer.from(await asset.arrayBuffer()), readFileSync(path.join(assetsDir, "workspace-assets", file)));
+    await assertDenied(await dispatch("/workspace-assets/" + file));
   }
   const cookie = { Cookie: "CF_Authorization=" + token };
   for (const [path, headers] of [["/", cookie], ["/?_rsc=opaque", { ...cookie, RSC: "1" }]]) {

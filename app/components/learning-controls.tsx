@@ -88,6 +88,7 @@ export function LearningMedia({ video, title, player, watch = false }: { video: 
         setLoaded(false);
         setError(false);
     }), [account]);
+    if (video.source === 'upload') return <video controls playsInline preload="metadata" src={video.url} aria-label={title} />;
     const embed = video.source === 'bilibili' ? bilibiliPlayerUrl(video.url) : null;
     const waitingIdentity = watch ? <WatchMediaIdentity source={video.source} title={title} /> : undefined;
     if (video.source === 'youtube') return parseYouTubeSource(video.url)

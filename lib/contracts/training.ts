@@ -44,7 +44,7 @@ export type Comment = {
 };
 export type Collection = {
     id: string;
-    sourceKind: 'video' | 'comment' | 'reflection' | LearningSourceKind;
+    sourceKind: 'training' | 'video' | 'comment' | 'reflection' | LearningSourceKind;
     sourceId: string;
     timestampSec: number | null;
     privateNote: string;

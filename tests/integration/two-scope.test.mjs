@@ -16,8 +16,12 @@ async function fixture(t) {
     const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("test")}}', compatibilityDate: '2026-05-22', d1Databases: ['DB'] });
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
-    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(x => x.endsWith('.sql') && (x < '0005' || ['0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql', '0011_profile_bio.sql'].includes(x))).sort()) {
-        for (const statement of split(await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8'))) await db.prepare(statement).run();
+    // The held-request tests run the current Worker on both sides of the 0005 fence.
+    // Install its other schema dependencies before injecting the legacy grants.
+    const directory = new URL('../../drizzle/', import.meta.url);
+    for (const file of (await readdir(directory)).filter(name => name.endsWith('.sql') && name !== '0005_two_scope_reflections.sql').sort()) {
+        const sql = await readFile(new URL(file, directory), 'utf8');
+        await db.batch(split(sql).map(statement => db.prepare(statement)));
     }
     const options = { db, bootstrapSiteUserId: admin.subject, clock: () => new Date('2026-10-18T01:00:00.000Z') };
     const s = createService(options);
@@ -39,7 +43,6 @@ async function fixture(t) {
             VALUES(?,?,?,?,?,?,7,11,3,'coach',?,?,?,?,'old-held-op',?,?,?)`).bind(id, a.user.id, a.membership.teamId, body.title, body.text, body.date,
             c.user.id, c.membership.epoch, a.membership.epoch, deleted ? 'closed' : 'open', deleted ? '2026-10-18T00:00:00.000Z' : null,
             '2026-10-18T00:00:00.000Z', '2026-10-18T00:00:00.000Z').run();
-        return s.getOwnReflection(author, id).catch(() => null);
     };
     const paused = () => {
         let release, entered;

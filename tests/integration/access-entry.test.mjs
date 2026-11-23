@@ -8,6 +8,7 @@ import { runWithAccessIdentity, scopedPrincipal } from '../../lib/server/request
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === 'virtual:kapok-program-assets') return { url: 'data:text/javascript,export const programAssets=new Set()', shortCircuit: true };
     if (specifier === 'vinext/server/fetch-handler') {
       return { url: 'data:text/javascript,export default {fetch: (...args) => globalThis.handleAuthEntryTest(...args)}', shortCircuit: true };
     }
@@ -48,7 +49,9 @@ test('standalone public documents are independent of identity and of Vinext rend
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
     const html = await response.text();
     assert.match(html, intent === 'register' ? /验证邮箱并继续注册/ : /前往邮箱验证/);
-    assert.match(html, /class="kapok-auth-court" aria-hidden="true"/);
+    assert.ok(html.includes('src="/' + intent + '?art=cover"'));
+    assert.ok(html.includes(intent === 'login' ? '登录工作区' : '注册队员账户'));
+    assert.match(html, /摄影署名/);
     assert.equal(html.includes('固定队伍 · 无需邀请码'), intent === 'register');
     const style = html.match(/<style>([\s\S]+?)<\/style>/)[1];
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(style));
@@ -65,6 +68,47 @@ test('standalone public documents are independent of identity and of Vinext rend
     assert.match(html, /intent=login&amp;returnTo=%2F"/);
     assert.doesNotMatch(html, /attacker\.test|next=external/);
   }
+});
+
+test('email verification retains an owner draft continuation only on reflection editors', async () => {
+  const { safeReturnTo } = await import('../../lib/server/return-to.ts');
+  for (const url of ['/reflections/new?resumeDraft=1','/reflections/old/edit?resumeDraft=1',
+    '/reflections/new?sourceKind=topic_collection&sourceId=source&resumeDraft=1'])
+    assert.equal(safeReturnTo(url),url);
+  for (const url of ['/growth?resumeDraft=1','/reflections/old?resumeDraft=1','/reflections/new?resumeDraft=2',
+    '/reflections/new?resumeDraft=1&resumeDraft=1']) assert.equal(safeReturnTo(url),'/');
+});
+
+test('public cover and font requests select fixed brand assets without identity', async () => {
+  const seen = [];
+  let mime = 'image/webp';
+  const assetEnv = { ...env, ASSETS: { fetch(req) {
+    seen.push([new URL(req.url).pathname, req.method]);
+    assert.equal([...req.headers].length, 0);
+    return new Response(req.method === 'HEAD' ? null : 'asset bytes', {
+      headers: { 'Content-Type': mime, 'Set-Cookie': 'internal=discard' },
+    });
+  } } };
+  const asset = (path, method = 'GET') => worker.fetch(new Request(origin + path, {
+    method, headers: { Cookie: 'private=cookie', ...spoofed },
+  }), assetEnv, {});
+  const login = await asset('/login?art=cover');
+  assert.equal(await login.text(), 'asset bytes');
+  assert.equal(login.headers.get('content-type'), 'image/webp');
+  assert.equal(login.headers.get('set-cookie'), null);
+  assert.equal(await (await asset('/register?art=cover', 'HEAD')).text(), '');
+  mime = 'text/html';
+  assert.equal((await asset('/login?art=cover')).status, 403);
+  mime = 'font/woff2';
+  assert.equal((await asset('/login?art=serif')).headers.get('content-type'), mime);
+  assert.deepEqual(seen, [
+    ['/workspace-assets/media/sky.webp', 'GET'], ['/workspace-assets/media/sideline-team.webp', 'HEAD'],
+    ['/workspace-assets/media/sky.webp', 'GET'], ['/workspace-assets/type/field-song.woff2', 'GET'],
+  ]);
+  assert.ok((await asset('/login?art=../../private')).headers.get('content-type').startsWith('text/html'));
+  assert.equal((await asset('/workspace-assets/media/sky.webp')).status, 403);
+  assert.equal((await asset('/login?art=cover&_rsc=1')).status, 403);
+  assert.equal(seen.length, 4);
 });
 
 test('unsigned variants, framework requests, private resources and wrong hosts fail closed', async () => {

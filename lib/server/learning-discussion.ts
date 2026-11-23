@@ -1,3 +1,4 @@
+import { referenceTimes } from './workspace-material-details.ts';
 import type { Principal } from '../contracts/index';
 import {
     learningCommentReasonLimit, learningCommentTextLimit, type LearningComment, type LearningCommentStatus,
@@ -50,7 +51,7 @@ export function createLearningDiscussion({ db, clock, activeMember, operation }:
             lc.author_id AS authorId,author.disc_name AS authorName,author.jersey_number AS jerseyNumber,
             recipient.disc_name AS replyAuthorName,
             CASE WHEN lc.status='active' THEN lc.text END AS text,
-            CASE WHEN lc.status='active' THEN lc.timestamp_sec END AS timestampSec,
+            CASE WHEN lc.status='active' THEN lc.reference_times END AS referenceTimes, CASE WHEN lc.status='active' THEN lc.timestamp_sec END AS timestampSec,
             CASE WHEN lc.status='active' AND lpub.kind='video' AND lc.media_url=lpub.video_url THEN lc.media_url END AS mediaUrl,
             lc.status,lc.version,lc.created_at AS createdAt,lc.edited
             FROM learning_posts lp JOIN learning_post_publications lpub ON lpub.post_id=lp.id
@@ -101,12 +102,13 @@ export function createLearningDiscussion({ db, clock, activeMember, operation }:
         const c = await bindLearningMember(activeMember, p);
         const post = await source(c, postId);
         const raw = learningObject(input, id
-            ? ['text', 'timestampSec', 'mediaUrl', 'expectedVersion', 'action']
-            : ['text', 'timestampSec', 'mediaUrl', 'rootId', 'replyToId']);
+            ? ['text', 'referenceTimes', 'timestampSec', 'mediaUrl', 'expectedVersion', 'action']
+            : ['text', 'referenceTimes', 'timestampSec', 'mediaUrl', 'rootId', 'replyToId']);
         if (raw.action !== undefined && raw.action !== 'save' && raw.action !== 'delete') throw invalid('请检查讨论操作。');
         const deleting = raw.action === 'delete';
         if (deleting && (raw.text !== undefined || raw.timestampSec !== undefined || raw.mediaUrl !== undefined)) throw invalid('请检查删除内容。');
-        const bodyText = deleting ? '' : text(raw.text, learningCommentTextLimit);
+        const times = referenceTimes(raw.referenceTimes,raw.timestampSec);
+        const bodyText = deleting || (times && raw.text === '') ? '' : text(raw.text, learningCommentTextLimit);
         const expected = id ? expectedVersion(raw.expectedVersion) : null;
         const claimedRoot = raw.rootId == null ? null : text(raw.rootId, 80);
         const replyToId = raw.replyToId == null ? claimedRoot : text(raw.replyToId, 80);
@@ -116,7 +118,7 @@ export function createLearningDiscussion({ db, clock, activeMember, operation }:
         const mediaUrl = timestampSec !== null ? text(raw.mediaUrl, 2048) : null;
         if (timestampSec === null && raw.mediaUrl != null) throw invalid('请先填写视频时刻。');
         const op = await operation(c.user.id, 'learning-comment', id ? postId + '/' + id : postId, key,
-            { bodyText, timestampSec, mediaUrl, claimedRoot, replyToId, deleting, expected });
+            { bodyText, ...(times ? {times} : {}), timestampSec, mediaUrl, claimedRoot, replyToId, deleting, expected });
         if (op.replay) return receipt(c, postId, op.replay.result);
         if (timestampSec !== null && post.kind !== 'video') throw invalid('图文讨论不能附视频时刻。');
         if (timestampSec !== null && mediaUrl !== post.video_url) throw learningConflict();
@@ -136,8 +138,8 @@ export function createLearningDiscussion({ db, clock, activeMember, operation }:
                 assertGuard(db, op.opId, 'comment-version', `EXISTS(SELECT 1 FROM learning_comments
                     WHERE id=? AND post_id=? AND team_id=? AND author_id=? AND version=? AND status=?)`,
                 [id, postId, team, c.user.id, expected, current.status]),
-                q(`UPDATE learning_comments SET text=?,timestamp_sec=?,media_url=?,status=?,edited=1,version=version+1,updated_at=? WHERE id=?`,
-                    bodyText, timestampSec, mediaUrl, deleting ? 'deleted' : 'active', now, id),
+                q(`UPDATE learning_comments SET text=?,timestamp_sec=?,reference_times=?,media_url=?,status=?,edited=1,version=version+1,updated_at=? WHERE id=?`,
+                    bodyText, timestampSec, times ?? null, mediaUrl, deleting ? 'deleted' : 'active', now, id),
             );
         } else {
             let rootId = null;
@@ -148,8 +150,8 @@ export function createLearningDiscussion({ db, clock, activeMember, operation }:
                 writes.push(assertGuard(db, op.opId, 'reply-target', `EXISTS(SELECT 1 ${validTarget} AND root.id=?)`,
                     [replyToId, postId, team, rootId]));
             }
-            writes.push(q(`INSERT INTO learning_comments(id,post_id,team_id,author_id,root_id,reply_to_id,text,timestamp_sec,media_url,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)`, commentId, postId, team, c.user.id, rootId, replyToId, bodyText, timestampSec, mediaUrl, now, now));
+            writes.push(q(`INSERT INTO learning_comments(id,post_id,team_id,author_id,root_id,reply_to_id,text,timestamp_sec,reference_times,media_url,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, commentId, postId, team, c.user.id, rootId, replyToId, bodyText, timestampSec, times ?? null, mediaUrl, now, now));
         }
         return receipt(c, postId, await commit(op, c, postId, post.version, writes, commentId));
     }

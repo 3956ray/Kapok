@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from '../components/workspace-entry';
 import { Shell, EnvironmentNote, AccessState, getPageContext, canReadPersonal, isMember } from '../components/shell';
 import { MyScreen } from '../components/legacy-screens';
 import { chatGPTSignOutPath } from '../chatgpt-auth';
@@ -5,6 +6,7 @@ import { SignOut } from '../components/signout';
 export const dynamic = 'force-dynamic';
 export default async function Page() {
     const context = await getPageContext();
+    if (context.user && isMember(context.me)) return <WorkspaceEntry actorId={context.user.userId} path={'/account'} />;
     return <Shell title="我的账户" surface="index" description="管理队内资料，查看自己的记录与创作。" canCompose={isMember(context.me)}>
         <div className="account-page">
             <EnvironmentNote />

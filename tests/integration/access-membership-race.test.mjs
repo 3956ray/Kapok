@@ -102,11 +102,13 @@ for (const event of ['paused', 'rejoin', 'rebind']) {
     });
 }
 
-test('Sites retains private write and export access while membership is paused', async t => {
+test('Sites pauses a stale in-flight write and retains private access in the current paused session', async t => {
     const f = await fixture(t);
     const race = raceAtBatch(f, 'paused');
-    await race.service.saveReflection(principals.author, null, syntheticContent, 'sites-private');
+    await assert.rejects(race.service.saveReflection(principals.author, null, syntheticContent, 'sites-private'), pausedOrConflict);
     assert.equal(race.intercepted(), true);
+    assert.equal((await rows(f, 'reflections')).length, 0);
+    await f.service.saveReflection(principals.author, null, syntheticContent, 'sites-private');
     assert.equal((await f.service.exportOwnData(principals.author)).reflections.length, 1);
 });
 
@@ -146,6 +148,6 @@ test('Access collections query reads no private notes if revoked after precheck'
     const video = await f.service.addVideo(principals.admin, training.id, { title: '合成视频', source: 'bilibili', url: 'BV1xx411c7mD', position: 0 }, 'video');
     await f.service.saveCollection(access, null, { sourceKind: 'video', sourceId: video.id, privateNote: 'synthetic note' }, 'original-note');
     const race = revokeAtRead(f, 'SELECT id,source_kind AS sourceKind,source_id AS sourceId');
-    assert.deepEqual(await race.service.listCollections(access), []);
+    await assert.rejects(race.service.listCollections(access), e => e.code === 'NOT_FOUND');
     assert.equal(race.intercepted(), true);
 });

@@ -30,14 +30,8 @@ async function fixture(t, before0012 = false) {
     });
     t.after(() => runtime.dispose());
     const db = await runtime.getD1Database('DB');
-    for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql') && file < '0012').sort()) {
-        await migrate(db, file);
-    }
-    if (!before0012) {
-        await migrate(db, migration);
-        await migrate(db, '0013_learning_posts.sql');
-        await migrate(db, '0017_learning_activity.sql');
-    }
+    const files = (await readdir(directory)).filter(file => file.endsWith('.sql')).sort();
+    for (const file of files.filter(file => !before0012 || file < migration)) await migrate(db, file);
     const make = () => createService({ db, accessInitialAdminEmail: admin.verifiedEmail });
     const s = make();
     await s.join(admin, { intent: 'register', confirmed: true, discName: '合成管理员', jerseyNumber: '07' }, 'join');
@@ -155,45 +149,75 @@ test('final permission guard rolls back training, video, event and operation and
 test('0012 preserves a populated parent graph, exact and canonical receipts, FK enforcement and event behavior', async t => {
     const { db, s, make, rows } = await fixture(t, true);
     const bili = { title: '旧B站视频', url: 'B站分享 https://bilibili.com/video/BV1xx411c7mD?p=2&tracking=1' };
-    const legacy = await s.publishTraining(admin, { ...training, video: bili }, 'legacy-publish');
-    const empty = await s.publishTraining(admin, training, 'legacy-empty');
-    const root = await s.saveComment(member, legacy.video.id, null, { text: '旧讨论', timestampSec: 0 }, 'root');
-    await s.saveComment(admin, legacy.video.id, null, { text: '旧回复', replyToId: root.id }, 'reply');
-    await s.saveCollection(member, null, { sourceKind: 'comment', sourceId: root.id, privateNote: '旧私人备注' }, 'collection');
-    await s.saveReflection(member, null, { title: '旧复盘', text: '旧私人复盘', date: training.date, trainingId: legacy.training.id, videoId: legacy.video.id }, 'reflection');
-    await s.moderateComment(admin, root.id, { action: 'report', reason: '合成报告' }, 'report');
     const at = '2026-11-01T00:00:00.000Z';
     const { user, membership } = await s.me(admin);
+    const reader = (await s.me(member)).user.id;
+    const canonical = 'https://www.bilibili.com/video/BV1xx411c7mD/?p=2';
+    const trainingId = 'legacy-training', videoId = 'legacy-video', addedId = 'legacy-added-video', emptyId = 'legacy-empty-training';
+    const digest = async value => Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))).toString('hex');
+    const oldTraining = db.prepare(`INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,'published',?,?)`);
+    const oldVideoInsert = db.prepare(`INSERT INTO videos(id,training_id,team_id,title,source,url,position,created_at,updated_at,publisher_id)
+        VALUES(?,?,?,?,'bilibili',?,?,?,?,?)`);
+    const receipt = db.prepare(`INSERT INTO operations(id,actor_id,kind,target_id,key,input_hash,status,result_json,created_at)
+        VALUES(?,?,?,?,?,?,'done',?,?)`);
+    const publicationInput = { ...training, video: { title: bili.title, url: canonical } };
+    const emptyInput = { ...training, video: null };
+    const addition = { title: '追加旧视频', source: 'bilibili', url: canonical, uploadId: null, position: 4 };
+    await db.batch([
+        ...[trainingId, emptyId].map(id => oldTraining.bind(id, membership.teamId, training.title, training.date, training.description, at, at)),
+        oldVideoInsert.bind(videoId, trainingId, membership.teamId, bili.title, canonical, 0, at, at, user.id),
+        oldVideoInsert.bind(addedId, trainingId, membership.teamId, addition.title, canonical, 4, at, at, user.id),
+        db.prepare(`INSERT INTO video_comments(id,video_id,team_id,author_id,text,timestamp_sec,created_at,updated_at)
+            VALUES('legacy-root',?,?,?,'旧讨论',0,?,?)`).bind(videoId, membership.teamId, reader, at, at),
+        db.prepare(`INSERT INTO video_comments(id,video_id,team_id,author_id,text,root_id,reply_to_id,created_at,updated_at)
+            VALUES('legacy-reply',?,?,?,'旧回复','legacy-root','legacy-root',?,?)`).bind(videoId, membership.teamId, user.id, at, at),
+        db.prepare(`INSERT INTO collections(id,owner_id,source_kind,source_id,timestamp_sec,private_note,created_at,updated_at)
+            VALUES('legacy-bookmark',?,'comment','legacy-root',0,'旧私人备注',?,?)`).bind(reader, at, at),
+        db.prepare(`INSERT INTO reflections(id,owner_id,team_id,title,text,date,training_id,video_id,created_at,updated_at)
+            VALUES('legacy-reflection',?,?,'旧复盘','旧私人复盘',?,?,?,?,?)`).bind(reader, membership.teamId, training.date, trainingId, videoId, at, at),
+        db.prepare("INSERT INTO comment_reports VALUES('legacy-report','legacy-root',?,'合成报告',?)").bind(user.id, at),
+        receipt.bind('publish-op', user.id, 'training-publish', membership.teamId, 'legacy-publish', await digest(publicationInput),
+            JSON.stringify({id:trainingId, videoId, requestHash:await digest({...training,video:bili})}), at),
+        receipt.bind('empty-op', user.id, 'training-publish', membership.teamId, 'legacy-empty', await digest(emptyInput),
+            JSON.stringify({id:emptyId, requestHash:await digest(emptyInput)}), at),
+        receipt.bind('add-op', user.id, 'video-add', trainingId, 'legacy-add', await digest(addition), JSON.stringify({id:addedId}), at),
+    ]);
     await db.prepare("INSERT INTO uploads(id,team_id,owner_id,bytes,status,duration_sec,created_at) VALUES(?,?,?,?,?,?,?)")
         .bind('fixture-upload', membership.teamId, user.id, 100, 'ready', 30, at).run();
     await db.prepare(`INSERT INTO videos(id,training_id,team_id,title,source,upload_id,position,status,version,created_at,updated_at,publisher_id)
         VALUES(?,?,?,?,'upload',?,7,'hidden',4,?,?,?)`)
-        .bind('fixture-upload-video', legacy.training.id, membership.teamId, '旧私有视频', 'fixture-upload', at, at, user.id).run();
-    const oldAdd = await s.addVideo(admin, legacy.training.id, { ...bili, title: '追加旧视频', source: 'bilibili', position: 4 }, 'legacy-add');
+        .bind('fixture-upload-video', trainingId, membership.teamId, '旧私有视频', 'fixture-upload', at, at, user.id).run();
     const tables = ['profiles', 'trainings', 'uploads', 'videos', 'video_events', 'video_comments', 'comment_reports', 'collections', 'reflections', 'operations'];
     const before = await Promise.all(tables.map(table => rows(table)));
     const oldPublication = before.at(-1).find(row => row.kind === 'training-publish' && row.key === 'legacy-publish');
-    const digest = async value => Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))).toString('hex');
-    assert.equal(oldPublication.input_hash, await digest({ ...training, video: { title: bili.title, url: legacy.video.url } }));
+    assert.equal(oldPublication.input_hash, await digest(publicationInput));
     assert.equal(JSON.parse(oldPublication.result_json).requestHash, await digest({ ...training, video: bili }));
     await migrate(db, migration);
     assert.deepEqual(await Promise.all(tables.map(table => rows(table))), before);
     assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results, []);
     assert.deepEqual((await db.prepare("PRAGMA index_list('videos')").all()).results.map(row => row.name).sort(),
         ['sqlite_autoindex_videos_1', 'video_training_order', 'videos_upload_id_unique']);
-    await assert.rejects(db.prepare("DELETE FROM videos WHERE id=?").bind(legacy.video.id).run(), /FOREIGN KEY/);
+    await assert.rejects(db.prepare("DELETE FROM videos WHERE id=?").bind(videoId).run(), /FOREIGN KEY/);
+    for (const file of (await readdir(directory)).filter(name => name.endsWith('.sql') && name > migration).sort()) await migrate(db,file);
     const fresh = make();
     assert.equal((await fresh.me(admin)).profile.jerseyNumber, '07');
-    assert.deepEqual(await fresh.publishTraining(admin, { ...training, video: bili }, 'legacy-publish'), legacy);
-    assert.deepEqual(await fresh.publishTraining(admin, { ...training, status: 'published', video: { ...bili, url: legacy.video.url } }, 'legacy-publish'), legacy);
-    assert.deepEqual(await fresh.publishTraining(admin, { ...training, status: 'published' }, 'legacy-empty'), empty);
-    assert.deepEqual(await fresh.addVideo(admin, legacy.training.id, { ...bili, title: '追加旧视频', source: 'bilibili', position: 4 }, 'legacy-add'), oldAdd);
-    assert.deepEqual(await fresh.listComments(member, legacy.video.id), await s.listComments(member, legacy.video.id));
+    const legacy = await fresh.publishTraining(admin, { ...training, video: bili }, 'legacy-publish');
+    assert.equal(legacy.training.id, trainingId);
+    assert.equal(legacy.video.id, videoId);
+    assert.equal(legacy.video.url, canonical);
+    assert.deepEqual(await fresh.publishTraining(admin, { ...training, status: 'published', video: { ...bili, url: canonical } }, 'legacy-publish'), legacy);
+    const empty = await fresh.publishTraining(admin, { ...training, status: 'published' }, 'legacy-empty');
+    assert.equal(empty.training.id, emptyId);
+    assert.equal(empty.video, null);
+    const oldAdd = await fresh.addVideo(admin, trainingId, { ...bili, title: addition.title, source: 'bilibili', position: 4 }, 'legacy-add');
+    assert.deepEqual(oldAdd, await fresh.getVideo(admin,addedId));
+    const comments = await fresh.listComments(member, videoId);
+    assert.equal(comments.find(c => c.id === 'legacy-reply').replyToId,'legacy-root');
+    assert.equal(comments.find(c => c.id === 'legacy-root').timestampSec,0);
     assert.equal((await fresh.listCollections(member))[0].timestampSec, 0);
     const next = await fresh.addVideo(admin, legacy.training.id, { ...youtube, source: 'youtube', position: 9 }, 'new');
     assert.equal((await rows('video_events')).length, 3);
-    await migrate(db, '0013_learning_posts.sql');
-    await migrate(db, '0017_learning_activity.sql');
     assert.ok((await fresh.listActivity(member)).items.some(item => item.id === 'video:' + next.id));
     const oldVideo = (await fresh.getTraining(admin, legacy.training.id)).videos.find(video => video.id === 'fixture-upload-video');
     await denied(fresh.getVideo(member, oldVideo.id), 'NOT_FOUND');

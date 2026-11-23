@@ -91,6 +91,14 @@ export function applySessionSignal(
 export function cleanupActorDrafts(actorId: string, getStorage: () => Storage) {
     try {
         clearActorDrafts(getStorage(), actorId);
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+            const tab = window.sessionStorage;
+            const prefixes = ['topic-draft','topic-pick','ui'].map(kind => 'kapok:' + kind + ':' + actorId + ':');
+            for (let index = tab.length - 1; index >= 0; index--) {
+                const key = tab.key(index);
+                if (key && prefixes.some(prefix => key.startsWith(prefix))) tab.removeItem(key);
+            }
+        }
         return true;
     } catch {
         return false;

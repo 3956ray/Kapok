@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export default async function Register({ searchParams }: { searchParams: Promise<{ returnTo?: string }> }) {
   const returnTo = safeReturnTo((await searchParams).returnTo);
   if (authMode() === 'access') redirect(authContinuationPath('register', returnTo));
-  return <AuthLayout title="当前入口暂不提供注册">
+  return <AuthLayout register title="当前入口暂不提供注册">
     <p>请使用已有队员账号登录。</p>
     <a className="kapok-auth-primary" href={'/login?returnTo=' + encodeURIComponent(returnTo)}>前往登录</a>
   </AuthLayout>;

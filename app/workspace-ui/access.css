@@ -1,0 +1,223 @@
+.access-page {
+  width: min(100%, 1680px);
+  min-height: 100svh;
+  margin-inline: auto;
+  padding: 0 clamp(24px, 4.6vw, 78px);
+  display: flex;
+  flex-direction: column;
+}
+.access-mast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 78px;
+  border-bottom: 1px solid var(--line);
+}
+.access-mast .flower-mark { color: var(--red); }
+.access-return,
+.access-credit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 44px;
+  font-size: 13px;
+}
+.access-return { color: var(--muted); }
+.access-return:hover { color: var(--red); }
+.access-main { flex: 1; display: flex; flex-direction: column; }
+.access-spread {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: clamp(26px, 4.2vw, 74px);
+  padding-block: 24px clamp(24px, 3vw, 49px);
+}
+.access-form-panel {
+  view-transition-name: kapok-page;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  padding-block: 36px;
+}
+.access-entry { width: min(100%, 380px); }
+.access-entry h1 {
+  font: 600 clamp(38px, 3.6vw, 56px)/1.18 var(--serif);
+  letter-spacing: -0.042em;
+  text-wrap: balance;
+}
+.access-intro,
+.access-switch { color: var(--muted); font-size: 14px; line-height: 1.7; }
+.access-intro { margin-top: 12px; }
+.access-form {
+  display: grid;
+  gap: 19px;
+  margin-top: 35px;
+}
+.access-field label {
+  display: block;
+  width: fit-content;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.access-field input {
+  display: block;
+  width: 100%;
+  min-height: 49px;
+  padding: 10px 13px;
+  border: 1px solid #b5b9ac;
+  border-radius: 3px;
+  background: var(--sheet);
+  font: 400 16px/1.5 var(--sans);
+  transition: border-color 140ms, background 140ms;
+}
+.access-field input::placeholder { color: #687268; }
+.access-field input:focus { border-color: var(--green); outline: 2px solid var(--green); outline-offset: 2px; }
+.access-field input[aria-invalid='true'] { border-color: var(--red); }
+.access-password {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 47px;
+  align-items: center;
+  background: var(--sheet);
+  border: 1px solid #b5b9ac;
+  border-radius: 3px;
+}
+.access-password:has(input[aria-invalid='true']) { border-color: var(--red); }
+.access-password input {
+  min-width: 0;
+  min-height: 47px;
+  border: 0;
+  padding-inline-end: 0;
+  background: transparent;
+}
+.access-password input:focus { outline-offset: -2px; }
+.access-password button {
+  justify-self: center;
+  display: grid;
+  place-content: center;
+  width: 44px;
+  height: 44px;
+  color: var(--muted);
+}
+.access-password button:hover { color: var(--green); }
+.access-submit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  min-height: 50px;
+  padding: 12px 17px;
+  border-radius: 3px;
+  background: var(--green);
+  color: var(--white);
+  font-weight: 650;
+  transition: transform 120ms var(--ease), background 120ms;
+}
+.access-submit svg { transition: transform 160ms var(--ease); }
+@media (hover: hover) {
+  .access-submit:hover { background: #234a3e; }
+  .access-submit:hover svg { transform: translateX(3px); }
+}
+.access-submit:active { transform: translateY(1px); }
+.access-switch { margin-top: 18px; }
+.access-switch a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-inline: 4px;
+  color: var(--green);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.access-error {
+  display: block;
+  color: var(--red);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.access-field .access-error { margin-top: 5px; }
+.access-cover {
+  isolation: isolate;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 490px;
+  overflow: hidden;
+  background: #244437;
+}
+.access-photo {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 53% 43%;
+  mix-blend-mode: luminosity;
+  opacity: 0.88;
+}
+.access-cover.joining .access-photo { object-position: 44% 50%; }
+.access-cover::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: '';
+  background: linear-gradient(0deg, #0a231bd9, #112e2026 32%, transparent 57%);
+}
+.access-signature {
+  margin: 0 0 clamp(22px, 2.4vw, 40px) clamp(22px, 2.4vw, 40px);
+  color: #fff8e4;
+  font: 600 clamp(60px, 6.7vw, 112px)/0.95 var(--num);
+  letter-spacing: -0.035em;
+}
+.access-signature i { font-weight: inherit; }
+.access-credit {
+  position: absolute;
+  bottom: 12px;
+  right: 13px;
+  padding-inline: 9px;
+  color: var(--white);
+  text-shadow: 0 1px 4px #000;
+}
+.access-credit:hover { text-decoration: underline; }
+@media (prefers-reduced-motion: no-preference) {
+  .access-entry { animation: route-enter 210ms var(--ease) both; }
+  .access-photo { animation: access-arrive 430ms var(--ease) both; }
+  @keyframes access-arrive {
+    from { opacity: 0.4; transform: scale(1.025); }
+    to { opacity: 0.88; transform: scale(1); }
+  }
+}
+@media (max-width: 860px) and (min-width: 651px) {
+  .access-spread { grid-template-columns: 1fr 0.9fr; gap: 28px; }
+  .access-cover { min-height: 465px; }
+  .access-signature { font-size: 55px; }
+}
+@media (max-width: 650px) {
+  .access-page { padding: 0 clamp(17px, 5vw, 26px) 20px; }
+  .access-mast { min-height: 60px; }
+  .access-mast .brand b { font-size: 26px; }
+  .access-spread {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding-block: 14px 0;
+  }
+  .access-cover { order: -1; min-height: 0; height: clamp(96px, 18svh, 150px); }
+  .access-photo { object-position: 50% 32%; }
+  .access-cover.joining .access-photo { object-position: 50% 42%; }
+  .access-signature { margin: 0 0 12px 14px; font-size: 38px; }
+  .access-credit { bottom: 0; right: 0; font-size: 12px; }
+  .access-form-panel { padding-block: 26px 0; }
+  .access-entry { width: min(100%, 435px); }
+  .access-entry h1 { font-size: clamp(33px, 8vw, 39px); }
+  .access-intro { margin-top: 8px; }
+  .access-form { margin-top: 22px; gap: 15px; }
+  .access-switch { margin-top: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .access-page *, .access-page *::after { transition: none; }
+}

@@ -284,7 +284,7 @@ export function CollectionCard({ actorId, item, compact = false }: { actorId: st
         } finally { setBusy(false); }
     }
     const sourceLabel = { video: '视频收藏', comment: '讨论收藏', reflection: '队友复盘收藏',
-        learning_post: '学习资料收藏', topic_collection: '专题合集收藏' }[item.sourceKind];
+        training: '训练收藏', learning_post: '学习资料收藏', topic_collection: '专题合集收藏' }[item.sourceKind];
     const hasSavedNote = Boolean(item.privateNote.trim());
     const actions = <div className="collection-card-actions" role="group" aria-label="收藏操作">
         <button ref={editButton} className="secondary collection-card-action" type="button" aria-label="编辑私人备注" title="编辑私人备注"

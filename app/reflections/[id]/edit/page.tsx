@@ -1,10 +1,12 @@
+import { WorkspaceEntry } from '../../../components/workspace-entry';
 import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../../../components/shell';
 import { ReflectionEditor } from '../../../components/reflections';
 import { getService } from '../../../../lib/server/runtime';
 export const dynamic = 'force-dynamic';
 export default async function EditReflection({
-    params
+    params, searchParams
 }: {
+    searchParams?: Promise<{ resumeDraft?: string }>;
     params: Promise<{
         id: string;
     }>;
@@ -13,9 +15,11 @@ export default async function EditReflection({
     const {
         id
     } = await params;
+    const resume = (await searchParams)?.resumeDraft === '1';
     if (!context.user || !canReadPersonal(context.user, context.me)) return <Shell title="编辑复盘" nav={false} back="/growth">
-        <AccessState context={context} returnTo={`/reflections/${id}/edit`} />
+        <AccessState context={context} returnTo={`/reflections/${id}/edit${resume ? "?resumeDraft=1" : ""}`} />
     </Shell>;
+    if (context.user && isMember(context.me) && !resume) return <WorkspaceEntry actorId={context.user.userId} path={'/notes/' + encodeURIComponent(id) + '/edit'} />;
     try {
         await getService().getOwnReflection(context.user.principal, id);
     } catch {

@@ -15,18 +15,18 @@ export default async function Continue({ searchParams }: { searchParams: Promise
   const intent = params.intent;
   const context = await getPageContext();
   if (context.user?.principal.provider !== 'access') redirect(authEntryPath(intent, returnTo));
-  if (context.error || !context.me) return <AuthLayout verifiedActorId={context.user.userId} title="暂时无法确认账号">
+  if (context.error || !context.me) return <AuthLayout register={intent === 'register'} verifiedActorId={context.user.userId} title="暂时无法确认账号">
     <p role="alert">暂时未能加载账号，请稍后重试。</p>
     <a className="kapok-auth-primary" href={authContinuationPath(intent, returnTo)}>重新确认</a>
     <a className="kapok-auth-secondary" href={authEntryPath(intent, returnTo)}>返回入口</a>
   </AuthLayout>;
   const switchEmail = <SignOut actorId={context.user.userId} href={chatGPTSignOutPath()} switchEmail />;
   const state = authAccountState(context.me);
-  if (state === 'restricted') return <AuthLayout verifiedActorId={context.user.userId} title="账号暂不可用"><RestrictedAccount returnTo={returnTo} />{switchEmail}</AuthLayout>;
+  if (state === 'restricted') return <AuthLayout register={intent === 'register'} verifiedActorId={context.user.userId} title="账号暂不可用"><RestrictedAccount returnTo={returnTo} />{switchEmail}</AuthLayout>;
   if (state === 'registered') {
     const destination = authDestination(context.me, returnTo);
     if (intent === 'login') redirect(destination === '/' ? '/home' : destination);
-    return <AuthLayout verifiedActorId={context.user.userId} title="你已经是 Kapok 成员">
+    return <AuthLayout register verifiedActorId={context.user.userId} title="你已经是 Kapok 成员">
       <p>你可以使用当前资料直接进入应用。</p>
       <a className="kapok-auth-primary" href={destination === '/' ? '/home' : destination}>进入应用 →</a>
       {switchEmail}

@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from './workspace-entry';
 import Link from 'next/link';
 import { AccessState, getPageContext, isMember, Shell } from './shell';
 import { TopicEditing, TopicReading } from './topic-collections';
@@ -12,6 +13,7 @@ export async function TopicPage({ view, id }: { view: keyof typeof labels; id?: 
     const validId = id && /^[a-zA-Z0-9_-]{1,80}$/.test(id) && id !== 'new';
     const path = validId ? topicPath(id) : topicsTab;
     const returnTo = view === 'featured' ? manageFeatured : view === 'new' ? newTopic : view === 'edit' && validId ? path + '/edit' : path;
+    if (context.user && member && view !== 'featured' && (view === 'new' || validId)) return <WorkspaceEntry actorId={context.user.userId} path={view === 'new' ? '/collections/new' : '/collections/' + encodeURIComponent(id!) + (view === 'edit' ? '/edit' : '')} />;
     return <Shell title={labels[view]} surface="index" back={view === 'edit' ? '/learn/mine' : topicsTab} canCompose={!!member}>
         {!context.user || !member ? <AccessState context={context} returnTo={returnTo} />
             : view === 'featured' ? context.me?.membership?.role === 'admin' ? <ManageFeaturedTopics actorId={context.user.userId} />

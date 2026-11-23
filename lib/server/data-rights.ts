@@ -65,19 +65,20 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 WHERE ir.post_id=lp.id AND li.status='ready' ORDER BY ir.position))`;
         const learningContent = (alias: 'lp' | 'lpub', publication: boolean) =>
             `'kind',${alias}.kind,'category',${alias}.category,'title',${alias}.title,'summary',${alias}.summary,'body',${alias}.body,
-            'version',${alias}.version,'collectionTargetId',${alias}.collection_target_id,
+            'workspaceDetails',json(${alias}.workspace_details),'version',${alias}.version,'collectionTargetId',${alias}.collection_target_id,
             'video',CASE WHEN ${alias}.video_source IS NOT NULL THEN json_object('source',${alias}.video_source,'url',${alias}.video_url) END,
             'images',json(${imageRefs(publication ? 'learning_publication_images' : 'learning_draft_images')})`;
         const topicItems = (snapshot: 0 | 1) => `(SELECT json_group_array(json(entry)) FROM (
             SELECT json_object('kind',ti.kind,'id',ti.source_id,'position',ti.position,'sourceAvailable',${bool(`${teamSource('tc.team_id')} AND (
                 (ti.kind='post' AND EXISTS(SELECT 1 FROM learning_posts lp JOIN learning_post_publications lpub ON lpub.post_id=lp.id
                     WHERE lp.id=ti.source_id AND lp.team_id=tc.team_id AND ${learningPostVisible}))
+                OR (ti.kind='training' AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=ti.source_id AND t.team_id=tc.team_id AND t.status IN ('published','archived')))
                 OR (ti.kind='video' AND EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id
                     WHERE v.id=ti.source_id AND v.team_id=tc.team_id AND ${topicVideoVisible})))`)}) AS entry
             FROM topic_collection_items ti WHERE ti.collection_id=tc.id AND ti.snapshot=${snapshot} ORDER BY ti.position))`;
         const result = await db.batch([
             owned('SELECT p.disc_name AS discName,p.jersey_number AS jerseyNumber,p.bio FROM profiles p JOIN owner o ON o.id=p.user_id'),
-            owned(`SELECT r.id,r.title,r.text,r.date,r.training_id AS trainingId,r.video_id AS videoId,
+            owned(`SELECT r.id,r.title,r.text,r.category,r.date,r.training_id AS trainingId,r.video_id AS videoId,
                 r.source_kind AS sourceKind,r.source_id AS sourceId,r.deleted_at AS deletedAt,r.created_at AS createdAt,r.updated_at AS updatedAt,
                 CASE WHEN ${publishedLearningLink('r.source_kind', 'r.source_id', 'o.id')} IS NOT NULL
                     OR (r.training_id IS NOT NULL AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=r.training_id
@@ -86,7 +87,9 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 FROM reflections r JOIN owner o ON o.id=r.owner_id ORDER BY r.date DESC,r.id DESC`),
             owned(`SELECT c.id,c.source_kind AS sourceKind,c.source_id AS sourceId,c.timestamp_sec AS timestampSec,
                 c.private_note AS privateNote,c.created_at AS createdAt,c.updated_at AS updatedAt,
-                CASE WHEN (c.source_kind='video' AND ${videoSource('c.source_id')})
+                CASE WHEN (c.source_kind='training' AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=c.source_id
+                    AND t.status IN ('published','archived') AND ${teamSource('t.team_id')}))
+                    OR (c.source_kind='video' AND ${videoSource('c.source_id')})
                     OR (c.source_kind='comment' AND EXISTS(SELECT 1 FROM video_comments vc WHERE vc.id=c.source_id
                         AND vc.status='active' AND ${videoSource('vc.video_id')}))
                     OR (c.source_kind='reflection' AND EXISTS(SELECT 1 FROM reflections r WHERE r.id=c.source_id
@@ -95,7 +98,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                     THEN 1 ELSE 0 END AS sourceAvailable
                 FROM collections c JOIN owner o ON o.id=c.owner_id ORDER BY c.created_at DESC,c.id DESC`),
             owned(`SELECT c.id,c.video_id AS videoId,c.root_id AS rootId,CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,
-                c.timestamp_sec AS timestampSec,c.status,c.created_at AS createdAt,c.updated_at AS updatedAt,
+                CASE WHEN c.status='active' THEN c.timestamp_sec END AS timestampSec,CASE WHEN c.status='active' THEN c.reference_times END AS refTimes,c.status,c.created_at AS createdAt,c.updated_at AS updatedAt,
                 CASE WHEN c.status='active' AND ${videoSource('c.video_id')} THEN 1 ELSE 0 END AS sourceAvailable
                 FROM video_comments c JOIN owner o ON o.id=c.author_id ORDER BY c.created_at,c.id`),
             owned(`SELECT lp.id,lp.status,lp.created_at AS createdAt,lp.updated_at AS updatedAt,
@@ -105,8 +108,8 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 FROM learning_posts lp JOIN owner o ON o.id=lp.owner_id
                 LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY lp.created_at,lp.id`),
             owned(`SELECT tc.id,tc.status,tc.created_at AS createdAt,tc.updated_at AS updatedAt,
-                json_object('title',tc.title,'summary',tc.summary,'version',tc.version,'items',json(${topicItems(0)})) AS draft,
-                CASE WHEN tcp.collection_id IS NOT NULL THEN json_object('title',tcp.title,'summary',tcp.summary,'version',tcp.version,
+                json_object('title',tc.title,'summary',tc.summary,'category',tc.category,'version',tc.version,'items',json(${topicItems(0)})) AS draft,
+                CASE WHEN tcp.collection_id IS NOT NULL THEN json_object('title',tcp.title,'summary',tcp.summary,'category',tcp.category,'version',tcp.version,
                     'publishedAt',tcp.published_at,'available',${bool(`${teamSource('tc.team_id')} AND ${topicVisible}`)},'items',json(${topicItems(1)})) END AS publication
                 FROM topic_collections tc JOIN owner o ON o.id=tc.owner_id
                 LEFT JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id ORDER BY tc.created_at,tc.id`),
@@ -115,7 +118,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 WHERE li.status='ready' ORDER BY li.created_at,li.id`),
             owned(`SELECT c.id,c.post_id AS postId,c.root_id AS rootId,c.reply_to_id AS replyToId,
                 CASE WHEN c.status='active' THEN c.text END AS text,
-                CASE WHEN c.status='active' THEN c.timestamp_sec END AS timestampSec,
+                CASE WHEN c.status='active' THEN c.timestamp_sec END AS timestampSec,CASE WHEN c.status='active' THEN c.reference_times END AS refTimes,
                 c.status,c.created_at AS createdAt,c.updated_at AS updatedAt,
                 CASE WHEN c.status='active' AND ${teamSource('lp.team_id')} AND ${learningPostVisible} THEN 1 ELSE 0 END AS sourceAvailable
                 FROM learning_comments c JOIN owner o ON o.id=c.author_id
@@ -125,12 +128,22 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 CASE WHEN ${learningActivityVisible} THEN 1 ELSE 0 END AS active
                 FROM learning_activity_events la JOIN learning_posts lp ON lp.id=la.post_id JOIN owner o ON o.id=lp.owner_id
                 LEFT JOIN learning_post_publications lpub ON lpub.post_id=lp.id ORDER BY la.shared_at,la.id`),
+            owned(`SELECT a.id AS id,a.parent_kind AS parentKind,a.parent_id AS parentId,a.mime AS mimeType,a.bytes,a.created_at AS createdAt
+                FROM material_assets a JOIN owner o ON o.id=a.owner_id WHERE a.ready=1
+                UNION ALL SELECT u.id,'training',v.training_id,u.mime,u.bytes,u.created_at
+                FROM uploads u JOIN owner o ON o.id=u.owner_id JOIN videos v ON v.upload_id=u.id
+                WHERE u.status='ready' AND v.status!='deleted' AND NOT EXISTS(SELECT 1 FROM material_assets a WHERE a.id=u.id)
+                ORDER BY 6,1`),
+            owned(`SELECT d.id,d.training_id AS trainingId,d.root_id AS rootId,d.reply_to_id AS replyToId,
+                CASE WHEN d.status='active' THEN d.body END AS text,d.status,d.created_at AS createdAt
+                FROM training_discussions d JOIN owner o ON o.id=d.author_id ORDER BY d.created_at,d.id`),
         ]);
         const profile = result[0].results[0] as PersonalExport['profile'] | undefined;
         if (!profile) throw new DomainError('FORBIDDEN', '账号状态已变化，请重新确认。', 403);
         const availability = <T>(rows: unknown[]) => rows.map(row => {
             const item = row as T & { sourceAvailable: number };
-            return { ...item, sourceAvailable: !!item.sourceAvailable };
+            const {refTimes,...rest}=item as T & {refTimes?:string;sourceAvailable:number};
+            return {...rest,sourceAvailable:!!item.sourceAvailable,...(refTimes && {referenceTimes:JSON.parse(refTimes)})} as T;
         });
         const revisions = <T>(rows: unknown[]) => rows.map(row => {
             const { draft, publication, ...fields } = row as { draft: string; publication: string | null };
@@ -139,6 +152,8 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
         await requirePrivateOwner(db, access);
         return {
             format: 'kapok-personal-v1',
+            materialAssets:result[9].results as PersonalExport['materialAssets'],
+            trainingDiscussions:result[10].results as PersonalExport['trainingDiscussions'],
             generatedAt: clock().toISOString(),
             profile,
             reflections: availability<PersonalExport['reflections'][number]>(result[1].results),

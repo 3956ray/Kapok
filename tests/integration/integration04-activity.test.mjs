@@ -20,7 +20,8 @@ test('learning activity cycles use current published content and never revive af
         const sql = await readFile(new URL(file, directory), 'utf8');
         await db.batch(sql.split('--> statement-breakpoint').map(s => s.trim()).filter(Boolean).map(s => db.prepare(s)));
     }
-    for (const file of (await readdir(directory)).filter(name => name.endsWith('.sql') && name < '0017').sort()) await migrate(file);
+    const migrations = (await readdir(directory)).filter(name => name.endsWith('.sql')).sort();
+    for (const file of migrations.filter(name => name < '0017')) await migrate(file);
     let time = Date.parse('2026-11-15T05:00:00Z');
     const make = (database = db) => createService({ db: database, accessInitialAdminEmail: admin.verifiedEmail, clock: () => new Date(time) });
     const advance = () => { time += 60_000; };
@@ -28,8 +29,17 @@ test('learning activity cycles use current published content and never revive af
     const profile = { intent: 'register', confirmed: true, discName: '合成成员', jerseyNumber: '01' };
     for (const p of [admin, author, reader]) await s.join(p, profile, 'join');
     const fields = { kind: 'article', category: '战术', title: '首次发布', body: '首版公开正文' };
-    const draft = await s.saveLearningPost(author, null, fields, 'post');
-    let post = await s.publishLearningPost(author, draft.id, publication(draft), 'publish');
+    const owner = await s.me(author);
+    const postId = crypto.randomUUID();
+    const createdAt = new Date(time).toISOString();
+    await db.batch([
+        db.prepare(`INSERT INTO learning_posts(id,team_id,owner_id,kind,category,title,summary,body,status,version,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,'',?,'published',2,?,?)`)
+            .bind(postId, owner.membership.teamId, owner.user.id, fields.kind, fields.category, fields.title, fields.body, createdAt, createdAt),
+        db.prepare(`INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,version,author_epoch,published_at)
+            VALUES(?,?,?,?,'',?,2,?,?)`)
+            .bind(postId, fields.kind, fields.category, fields.title, fields.body, owner.membership.epoch, createdAt),
+    ]);
     const origin = 'https://kapok.test';
     async function api(path, p = author, method = 'GET', input, key, service = s) {
         const url = new URL('/api/v1/' + path, origin);
@@ -37,7 +47,8 @@ test('learning activity cycles use current published content and never revive af
             'Idempotency-Key': key ?? '', 'Content-Type': 'application/json' }, body: input && JSON.stringify(input) }),
         url.pathname.slice('/api/v1/'.length).split('/'), p, service);
     }
-    await migrate('0017_learning_activity.sql');
+    for (const file of migrations.filter(name => name >= '0017')) await migrate(file);
+    let post = await s.getLearningPost(author, postId, 'draft');
     const path = 'learning/posts/' + post.id + '/activity';
     const request = (id = null) => ({
         expectedPublishedVersion: post.publishedVersion, expectedMembershipEpoch: post.membershipEpoch, expectedEventId: id,

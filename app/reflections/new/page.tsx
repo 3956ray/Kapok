@@ -1,12 +1,14 @@
+import { WorkspaceEntry } from '../../components/workspace-entry';
 import { Shell, getPageContext, AccessState, canReadPersonal, isMember } from '../../components/shell';
 import { safeReturnTo } from '../../../lib/server/domain';
-import { isLearningSourceId, isLearningSourceKind, learningReflectionHref } from '../../../lib/contracts/reflections';
+import { isLearningSourceId, isLearningSourceKind } from '../../../lib/contracts/reflections';
 import { ReflectionEditor } from '../../components/reflections';
 export const dynamic = 'force-dynamic';
 export default async function NewReflection({
     searchParams
 }: {
     searchParams: Promise<{
+        resumeDraft?: string;
         collection?: string;
         training?: string;
         video?: string;
@@ -24,9 +26,12 @@ export default async function NewReflection({
     const trainingId = query.collection !== undefined ? undefined : validId(query.training);
     const videoId = query.collection !== undefined ? undefined : validId(query.video);
     const params = new URLSearchParams(collectionId ? { collection: collectionId } : { ...(trainingId ? { training: trainingId } : {}), ...(videoId ? { video: videoId } : {}) });
+    if (source) { params.set('sourceKind', source.kind); params.set('sourceId', source.id); }
+    if (query.resumeDraft === '1') params.set('resumeDraft', '1');
     if (!context.user || !canReadPersonal(context.user, context.me) || !context.me?.profile) return <Shell title="写复盘" back="/growth" nav={false}>
-        <AccessState context={context} returnTo={safeReturnTo(source ? learningReflectionHref(source.kind, source.id) : '/reflections/new' + (params.size ? '?' + params.toString() : ''))} />
+        <AccessState context={context} returnTo={safeReturnTo('/reflections/new' + (params.size ? '?' + params.toString() : ''))} />
     </Shell>;
+    if (context.user && isMember(context.me) && query.resumeDraft !== '1') return <WorkspaceEntry actorId={context.user.userId} path={'/notes/new' + (params.size ? '?' + params : '')} />;
     return <Shell title="写复盘" back="/growth" canCompose={isMember(context.me)}>
         <ReflectionEditor
             key={`${context.user.userId}:${collectionId ?? (source ? source.kind + ':' + source.id : 'new')}`}

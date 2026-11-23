@@ -26,7 +26,7 @@ async function fixture(t, legacy = false) {
     const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("test")}}', compatibilityDate: '2026-05-22', d1Databases: ['DB'] });
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
-    for (const file of (await readdir(migrationDir)).filter(x => x.endsWith('.sql') && (!legacy || x < '0010' || x === '0011_profile_bio.sql')).sort()) await migrate(db, file);
+    for (const file of (await readdir(migrationDir)).filter(x => x.endsWith('.sql') && (!legacy || x < '0010')).sort()) await migrate(db, file);
     const make = (database = db) => createService({ db: database, accessInitialAdminEmail: admin.verifiedEmail });
     const s = make();
     const profile = { intent: 'register', confirmed: true };
@@ -234,12 +234,10 @@ test('additive migration leaves old videos unattributed and old root-only replie
     await db.prepare("INSERT INTO videos(id,training_id,team_id,title,source,url,position,created_at,updated_at) VALUES('historic-video','historic-training',?,'旧视频','bilibili',?,0,?,?)").bind(teamId, canonicalUrl, t0, t0).run();
     await db.prepare("INSERT INTO video_comments(id,video_id,team_id,author_id,text,created_at,updated_at) VALUES('old-root','historic-video',?,?,'旧根',?,?)").bind(teamId, player.user.id, t0, t0).run();
     await db.prepare("INSERT INTO video_comments(id,video_id,team_id,author_id,root_id,text,created_at,updated_at) VALUES('old-reply','historic-video',?,?,'old-root','旧回复',?,?)").bind(teamId, owner.user.id, t0, t0).run();
-    await migrate(db, '0010_training_publication.sql');
+    for (const file of (await readdir(migrationDir)).filter(name => name.endsWith('.sql') && name >= '0010').sort()) await migrate(db, file);
     const historic = await s.getVideo(member, 'historic-video');
     assert.equal(historic.publisherId, null);
     assert.equal(historic.publisherName, null);
-    await migrate(db, '0013_learning_posts.sql');
-    await migrate(db, '0017_learning_activity.sql');
     const oldActivity = (await s.listActivity(member)).items.find(row => row.id === 'video:historic-video');
     assert.equal(oldActivity.publisherId, null);
     assert.equal(oldActivity.publisherName, null);

@@ -1,3 +1,4 @@
+import { materialDetails, materialIndexDetails, materialPhotoGuard, referenceTimes } from './workspace-material-details.ts';
 import { resolveBilibiliShare } from './bilibili.ts';
 import { parseYouTubeSource } from '../video-source.ts';
 import type { Me, Principal } from '../contracts/index';
@@ -53,7 +54,8 @@ function trainingFields(r: Record<string, unknown>) {
     const midnight = new Date(date + 'T00:00:00Z');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(midnight.getTime()) || midnight.toISOString().slice(0, 10) !== date)
         throw new DomainError('INVALID_INPUT', '请检查日期与训练状态。');
-    return { title, date, description };
+    const workspaceDetails = materialDetails(r.workspaceDetails);
+    return { title, date, description, ...(workspaceDetails === undefined ? {} : { workspaceDetails }) };
 }
 function version(v: unknown) {
     if(!Number.isSafeInteger(v) || Number(v) < 1)
@@ -72,7 +74,11 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     const resumable = createResumableUploads({ db, bucket, clock, activeMember, operation, mediaPolicy });
     const now = () => clock().toISOString();
     const missing = () => new DomainError('NOT_FOUND', '内容不可用或当前无权查看。', 404);
-    const trainingSelect = 'SELECT id,title,date,description,status,version,updated_at AS updatedAt FROM trainings';
+    const selectTraining = (detail:boolean) => `SELECT id,title,date,description,status,version,${detail?'workspace_details':materialIndexDetails('workspace_details')} AS workspaceDetails,updated_at AS updatedAt,
+        publisher_id AS publisherId,(SELECT p.disc_name FROM profiles p JOIN users pu ON pu.id=p.user_id
+        WHERE p.user_id=trainings.publisher_id AND pu.status='active') AS publisherName FROM trainings`;
+    const trainingSelect = selectTraining(true);
+    const trainingIndex = selectTraining(false);
     const videoSelect = `SELECT v.id,v.training_id AS trainingId,v.title,v.source,v.url,v.position,v.status,v.version,
         u.duration_sec AS durationSec,v.publisher_id AS publisherId,
         (SELECT p.disc_name FROM profiles p JOIN users pu ON pu.id=p.user_id
@@ -81,8 +87,8 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     function insertTraining(c: Context, id: string, fields: ReturnType<typeof trainingFields>, status: string) {
         const at = now();
         return q(
-            'INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-            id, c.membership.teamId, fields.title, fields.date, fields.description, status, at, at
+            'INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at,workspace_details,publisher_id) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            id, c.membership.teamId, fields.title, fields.date, fields.description, status, at, at, fields.workspaceDetails ?? '{}', c.user.id
         );
     }
     function insertVideo(c: Context, id: string, trainingId: string, video: Pick<Video, 'title' | 'source' | 'url' | 'position'>, uploadId: string | null) {
@@ -146,11 +152,11 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const c = await activeMember(p);
         if (featured) {
             return (await q(
-                `${trainingSelect} WHERE team_id=? AND status='published' ORDER BY date DESC,id DESC LIMIT 1`, c.membership.teamId
+                `${trainingIndex} WHERE team_id=? AND status='published' ORDER BY date DESC,id DESC LIMIT 1`, c.membership.teamId
             ).all<Training>()).results;
         }
         return (await q(
-            `${trainingSelect} WHERE team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : "AND status IN ('published','archived')"} ORDER BY date DESC,id DESC`,
+            `${trainingIndex} WHERE team_id=? ${c.membership.role === 'admin' ? "AND status!='deleted'" : "AND status IN ('published','archived')"} ORDER BY date DESC,id DESC`,
             c.membership.teamId
         ).all<Training>()).results;
     }
@@ -178,19 +184,34 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     }
     async function saveTraining(p: Principal | null, id: string | null, input: unknown, key: string) {
         const c = await activeMember(p, true);
-        const r = object(input, ['title', 'date', 'description', 'status', 'expectedVersion']);
-        const { title, date, description } = trainingFields(r);
+        const r = object(input, ['title', 'date', 'description', 'status', 'expectedVersion', 'workspaceDetails','appendVideo']);
+        const fields = trainingFields(r);
+        const { title, date, description } = fields;
         const status = text(r.status, 12);
         if(!['draft', 'published', 'archived', 'hidden', 'deleted'].includes(status))
             throw new DomainError('INVALID_INPUT', '请检查日期与训练状态。');
         const expected = id ? version(r.expectedVersion) : null;
-        const op = await operation(c.user.id, 'training', id ?? c.membership.teamId, key, { title, date, description, status, expected });
+        let added: {id:string;source:Video['source'];url:string|null;uploadId:string|null;title:string;position:number}|null=null;
+        if (r.appendVideo!==undefined) {
+            const entry=object(r.appendVideo,['id','source','url','uploadId','title','position']);
+            if (!id || !['published','draft','archived'].includes(status) || typeof entry.id!=='string' ||
+                !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(entry.id) ||
+                !Number.isSafeInteger(entry.position) || Number(entry.position)<0) throw new DomainError('INVALID_INPUT','请检查训练视频。');
+            if (entry.source!=='upload' && entry.source!=='youtube' && entry.source!=='bilibili') throw new DomainError('INVALID_INPUT','不支持该视频来源。');
+            const url=entry.source==='upload' ? null : entry.source==='bilibili' ? await resolveBilibiliShare(entry.url) :
+                parseYouTubeSource(text(entry.url,2000))?.url;
+            if (entry.source!=='upload' && !url) throw new DomainError('INVALID_INPUT','请检查视频地址。');
+            added={id:entry.id,source:entry.source,url:url??null,title:text(entry.title,80),position:Number(entry.position),
+                uploadId:entry.source==='upload'?text(entry.uploadId,80):null};
+        }
+        const op = await operation(c.user.id, 'training', id ?? c.membership.teamId, key, { ...fields, status, expected,...(added && {appendVideo:added}) });
         let target = op.replay?.result.id ?? id ?? crypto.randomUUID();
         if(!op.replay) {
             const committed = await commit(
                 op,
                 c,
                 id ? [
+                    ...materialPhotoGuard(db,op.opId,'training',id,c.membership.teamId,fields.workspaceDetails),
                     assertGuard(
                         db,
                         op.opId,
@@ -199,19 +220,24 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                         [id, c.membership.teamId, expected]
                     ),
                     q(
-                        'UPDATE trainings SET title=?,date=?,description=?,status=?,version=version+1,updated_at=? WHERE id=? AND team_id=? AND version=?',
+                        'UPDATE trainings SET title=?,date=?,description=?,workspace_details=coalesce(?,workspace_details),status=?,version=version+1,updated_at=? WHERE id=? AND team_id=? AND version=?',
                         title,
                         date,
                         description,
+                        fields.workspaceDetails ?? null,
                         status,
                         now(),
                         id,
                         c.membership.teamId,
                         expected
                     ),
-                    assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM trainings WHERE id=? AND version=?)', [id, expected! + 1])
+                    assertGuard(db, op.opId, 'updated', 'EXISTS(SELECT 1 FROM trainings WHERE id=? AND version=?)', [id, expected! + 1]),
+                    ...(added?.uploadId ? [assertGuard(db,op.opId,'ready-upload',`EXISTS(SELECT 1 FROM uploads WHERE id=? AND owner_id=? AND team_id=?
+                        AND status='ready' AND transfer_active=0 AND cleanup_state='none')`,[added.uploadId,c.user.id,c.membership.teamId])] : []),
+                    ...(added ? [insertVideo(c,added.id,id,added,added.uploadId)] : [])
                 ] : [
-                    insertTraining(c, target, { title, date, description }, status)
+                    ...materialPhotoGuard(db,op.opId,'training',target,c.membership.teamId,fields.workspaceDetails),
+                    insertTraining(c, target, fields, status)
                 ],
                 { id: target },
                 true
@@ -277,7 +303,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     async function publishTraining(p: Principal | null, input: unknown, key: string, precondition?: unknown): Promise<TrainingPublication> {
         const c = await activeMember(p, true);
         const approved = await importBinding(p, c, precondition, null);
-        const raw = object(input, ['title', 'date', 'description', 'status', 'video']);
+        const raw = object(input, ['title', 'date', 'description', 'status', 'video', 'workspaceDetails']);
         const fields = trainingFields(raw);
         const status = raw.status === undefined ? 'published' : raw.status;
         if(status !== 'draft' && status !== 'published')
@@ -302,7 +328,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             const id = crypto.randomUUID();
             const { video } = await prepare();
             const importUrl = youtube ? null : video?.url ?? null;
-            const statements = [...importMappingGuard(op, c, approved, fields.date, importUrl), insertTraining(c, id, fields, status)];
+            const statements = [...materialPhotoGuard(db,op.opId,'training',id,c.membership.teamId,fields.workspaceDetails), ...importMappingGuard(op, c, approved, fields.date, importUrl), insertTraining(c, id, fields, status)];
             const videoId = video ? crypto.randomUUID() : undefined;
             if(video && videoId) {
                 statements.push(
@@ -413,7 +439,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         return (await q(
             `SELECT c.id,c.video_id AS videoId,c.root_id AS rootId,c.reply_to_id AS replyToId,
                 c.author_id AS authorId,p.disc_name AS authorName,p.jersey_number AS authorJerseyNumber,rp.disc_name AS replyTargetName,
-                CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,c.timestamp_sec AS timestampSec,c.status,c.version,
+                CASE WHEN c.status='active' THEN c.text ELSE NULL END AS text,CASE WHEN c.status='active' THEN c.timestamp_sec END AS timestampSec, CASE WHEN c.status='active' THEN c.reference_times END AS referenceTimes,c.status,c.version,
                 c.created_at AS createdAt,CASE WHEN c.updated_at!=c.created_at THEN 1 ELSE 0 END AS edited
             FROM video_comments c JOIN profiles p ON p.user_id=c.author_id
             LEFT JOIN video_comments target ON target.id=COALESCE(c.reply_to_id,c.root_id)
@@ -431,11 +457,12 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     async function saveComment(p: Principal | null, videoId: string, id: string | null, input: unknown, key: string) {
         const c = await activeMember(p);
         const v = await getVideo(p, videoId);
-        const r = object(input, ['text', 'timestampSec', 'rootId', 'expectedVersion', 'action', ...(id ? [] : ['replyToId'])]);
+        const r = object(input, ['text', 'timestampSec', 'referenceTimes', 'rootId', 'expectedVersion', 'action', ...(id ? [] : ['replyToId'])]);
         if(v.training.status !== 'published')
             throw new DomainError('READ_ONLY', '此训练暂不接受新讨论或修改。', 409);
         const action = r.action === 'delete' ? 'delete' : 'save';
-        const bodyText = action === 'delete' ? '' : text(r.text, 2000);
+        const times = referenceTimes(r.referenceTimes,r.timestampSec,v.durationSec);
+        const bodyText = action === 'delete' ? '' : text(r.text, 2000, !!times);
         const timestampSec = seconds(r.timestampSec, v.durationSec);
         let rootId = r.rootId == null ? null : text(r.rootId, 80);
         const directId = r.replyToId == null ? null : text(r.replyToId, 80);
@@ -457,7 +484,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             rootId = root.id;
         }
         // Keep root-only callers compatible with receipts written before direct replies.
-        const op = await operation(c.user.id, 'comment', id ?? videoId, key, { bodyText, timestampSec, rootId, expected, action, ...(directId ? { replyToId: directId } : {}) });
+        const op = await operation(c.user.id, 'comment', id ?? videoId, key, { bodyText, timestampSec, rootId, expected, action, ...(times ? {times} : {}), ...(directId ? { replyToId: directId } : {}) });
         let target = op.replay?.result.id ?? id ?? crypto.randomUUID();
         if(!op.replay) {
             const guards = [
@@ -494,9 +521,10 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                         [id, videoId, c.user.id, expected]
                     ),
                     q(
-                        `UPDATE video_comments SET text=?,timestamp_sec=?,status=CASE WHEN ?='delete' THEN 'deleted' ELSE status END,version=version+1,updated_at=? WHERE id=? AND author_id=? AND version=?`,
+                        `UPDATE video_comments SET text=?,timestamp_sec=?,reference_times=?,status=CASE WHEN ?='delete' THEN 'deleted' ELSE status END,version=version+1,updated_at=? WHERE id=? AND author_id=? AND version=?`,
                         bodyText,
                         timestampSec,
+                        times ?? null,
                         action,
                         now(),
                         id,
@@ -507,7 +535,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                 );
             else
                 guards.push(q(
-                    'INSERT INTO video_comments(id,video_id,team_id,author_id,root_id,reply_to_id,text,timestamp_sec,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                    'INSERT INTO video_comments(id,video_id,team_id,author_id,root_id,reply_to_id,text,timestamp_sec,reference_times,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                     target,
                     videoId,
                     c.membership.teamId,
@@ -516,6 +544,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     replyToId,
                     bodyText,
                     timestampSec,
+                    times ?? null,
                     now(),
                     now()
                 ));
@@ -601,6 +630,11 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
     }
     async function resolveSource(p: Principal | null, kind: string, id: string, timestampSec: number | null = null) {
         try {
+            if (kind === 'training') {
+                const training = await getTraining(p, id);
+                return ['published', 'archived'].includes(training.status)
+                    ? { title: training.title, href: '/trainings/' + training.id } : null;
+            }
             if (kind === 'reflection') {
                 const r = await getReflection(p, id);
                 return { title: r.title || '训练复盘', href: '/reflections/' + r.id, text: r.text };
@@ -647,6 +681,10 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         const shared = reflectionShared.replace('ru.id=?', 'ru.id=viewer.id');
         const links = await q(`WITH viewer(id) AS (SELECT ? WHERE ${access.predicate})
             SELECT c.id,c.version,CASE c.source_kind
+              WHEN 'training' THEN (SELECT json_object('title',t.title,'href','/trainings/'||t.id)
+                FROM trainings t JOIN memberships vm ON vm.team_id=t.team_id AND vm.user_id=viewer.id
+                JOIN users vu ON vu.id=vm.user_id WHERE t.id=c.source_id AND t.status IN ('published','archived')
+                AND vm.status='active' AND vu.status='active')
               WHEN 'video' THEN (SELECT json_object('title',v.title,'href','/videos/'||v.id||${timeHref})
                 FROM videos v JOIN trainings t ON t.id=v.training_id WHERE v.id=c.source_id AND ${videoGuard})
               WHEN 'comment' THEN (SELECT json_object('title',v.title,'href','/videos/'||v.id||${timeHref}||'#comment-'||vc.id,'text',vc.text)
@@ -697,7 +735,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         let videoId: string | null = null;
         try {
             let sourceVideo: string | null = null;
-            let sourceTraining: string | null = null;
+            let sourceTraining: string | null = row.source_kind === 'training' ? row.source_id : null;
             if (row.source_kind === 'video') sourceVideo = row.source_id;
             else if (row.source_kind === 'comment') {
                 const comment = await q("SELECT video_id FROM video_comments WHERE id=? AND status='active'", row.source_id).first<{ video_id: string }>();
@@ -771,8 +809,10 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
             if (!isLearningSourceKind(r.sourceKind)) await activeMember(p);
             if (isLearningSourceKind(r.sourceKind) && (!isLearningSourceId(r.sourceId) || r.timestampSec != null || r.action !== undefined))
                 throw new DomainError('INVALID_INPUT', '请选择有效的学习来源。');
-            if(!isLearningSourceKind(r.sourceKind) && !['video', 'comment', 'reflection'].includes(String(r.sourceKind)))
+            if(!isLearningSourceKind(r.sourceKind) && !['training', 'video', 'comment', 'reflection'].includes(String(r.sourceKind)))
                 throw new DomainError('INVALID_INPUT', '请选择收藏来源。');
+            if (r.sourceKind === 'training' && r.timestampSec != null)
+                throw new DomainError('INVALID_INPUT', '整场训练收藏无需指定时间点。');
             if (r.sourceKind === 'reflection' && (await getReflection(p, String(r.sourceId))).isAuthor)
                 throw new DomainError('INVALID_INPUT', '本人复盘已自动加入成长，无需再次收藏。');
             if(!isLearningSourceKind(r.sourceKind) && !await resolveSource(p, String(r.sourceKind), String(r.sourceId)))
@@ -836,7 +876,11 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                     if (member.user.id !== owner) throw missing();
                     guards.push(memberGuard(op, member));
                 }
-                if(kind === 'video')
+                if (kind === 'training')
+                    guards.push(assertGuard(db, op.opId, 'source',
+                        "EXISTS(SELECT 1 FROM trainings WHERE id=? AND team_id=? AND status IN ('published','archived'))",
+                        [source, c.membership?.teamId ?? null]));
+                else if(kind === 'video')
                     guards.push(assertGuard(
                         db,
                         op.opId,
@@ -906,7 +950,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
         let id = op.replay?.result.id ?? crypto.randomUUID();
         if(!op.replay) {
             const used = await q(
-                "SELECT coalesce(sum(max(bytes,reserved_bytes)),0) AS n FROM uploads WHERE team_id=? AND status NOT IN ('rejected','cancelled')",
+                "SELECT coalesce(sum(bytes),0) AS n FROM material_storage_usage WHERE team_id=?",
                 c.membership.teamId
             ).first<{
                 n: number;
@@ -921,7 +965,7 @@ export function createTrainingService({ db, bucket, clock, mediaPolicy, activeMe
                         db,
                         op.opId,
                         'quota',
-                        "(SELECT coalesce(sum(max(bytes,reserved_bytes)),0) FROM uploads WHERE team_id=? AND status NOT IN ('rejected','cancelled'))+?<=?",
+                        "(SELECT coalesce(sum(bytes),0) FROM material_storage_usage WHERE team_id=?)+?<=?",
                         [c.membership.teamId, r.bytes, MEDIA_TEAM_BYTES]
                     ),
                     q(

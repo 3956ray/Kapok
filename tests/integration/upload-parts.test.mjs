@@ -1,7 +1,7 @@
 import { sitesPrincipal, actorKey } from '../helpers/identity-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { Miniflare } from 'miniflare';
 import { createService } from '../../lib/server/domain.ts';
 import { dispatchApi } from '../../lib/server/http.ts';
@@ -16,9 +16,10 @@ async function fixture(t) {
     t.after(() => mf.dispose());
     const db = await mf.getD1Database('DB');
     const bucket = await mf.getR2Bucket('BUCKET');
-    for (const file of ['0000_identity.sql', '0011_profile_bio.sql', '0001_training.sql', '0002_upload_cleanup.sql', '0004_resumable_uploads.sql', '0006_identity_namespace.sql', '0007_email_bound_invites.sql', '0010_training_publication.sql']) {
-        const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
-        for (const sql of migration.split(/;|--> statement-breakpoint/).map(s => s.trim()).filter(Boolean)) await db.prepare(sql).run();
+    const directory = new URL('../../drizzle/', import.meta.url);
+    for (const file of (await readdir(directory)).filter(name => name.endsWith('.sql')).sort()) {
+        const sql = await readFile(new URL(file, directory), 'utf8');
+        await db.batch(sql.split('--> statement-breakpoint').map(s => s.trim()).filter(Boolean).map(s => db.prepare(s)));
     }
     const s = createService({ db, bucket, bootstrapSiteUserId: owner.subject });
     await s.bootstrap(owner, { discName: '合成管理员', jerseyNumber: '01' }, 'boot');

@@ -31,7 +31,6 @@ async function fixture(t, stopAt) {
     if (stopAt && file >= stopAt) break;
     await migrate(file);
   }
-  if (stopAt && stopAt <= '0011_profile_bio.sql') await migrate('0011_profile_bio.sql');
   const make = (binding = db, config = ' OWNER@example.test ') => createService({ db: binding, accessInitialAdminEmail: config });
   const service = make();
   const count = async table => (await db.prepare('SELECT count(*) AS n FROM ' + table).first()).n;
@@ -41,7 +40,7 @@ async function fixture(t, stopAt) {
     const response = await dispatchApi(new Request(url + '/api/v1/' + route, init), route.split('/'), p, selected);
     return { status: response.status, headers: response.headers, ...(await response.json()) };
   }
-  return { db, make, service, count, request, migrate };
+  return { db, make, service, count, request, migrate, files };
 }
 
 function interrupt(db, onBatch, after = false) {
@@ -180,7 +179,10 @@ test('existing team, membership and private reflection survive 0008 and 0009 and
     f.db.prepare("INSERT INTO profiles(user_id,disc_name,jersey_number) VALUES (?,'原资料','09')").bind(ownerId),
     f.db.prepare("INSERT INTO memberships(id,team_id,user_id,role,status,epoch,joined_at) VALUES ('existing-member','preserved-team',?,'admin','active',2,'time')").bind(ownerId),
   ]);
-  const draft = await f.service.saveReflection(admin, null, { title: '本人标题', text: '既有私人正文', date: '2026-11-07' }, 'draft');
+  // Seed the pre-upgrade format without calling today's writer on an older D1 schema.
+  const draft = { id: 'original-reflection' };
+  await f.db.prepare(`INSERT INTO reflections (id,owner_id,team_id,title,text,date,created_at,updated_at)
+    VALUES (?,?,'preserved-team','本人标题','既有私人正文','2026-11-07','time','time')`).bind(draft.id, ownerId).run();
   await f.migrate('0008_fixed_team_onboarding.sql');
   const before = (await f.request(admin, 'me')).data;
   assert.equal(before.team.name, 'KPark');
@@ -198,6 +200,7 @@ test('existing team, membership and private reflection survive 0008 and 0009 and
   assert.equal(account.team.name, 'Kapok');
   assert.equal(account.team.description, 'existing description');
   assert.equal(account.profile.discName, '原资料');
+  for (const file of f.files.filter(name => name > '0009_kapok_team_name.sql')) await f.migrate(file);
   const fresh = (await f.request(principal('other-admin-mailbox', admin.verifiedEmail), 'join', profile)).data.me;
   assert.equal(fresh.membership.role, 'member');
   assert.equal((await f.request(member, 'join', profile)).status, 200);

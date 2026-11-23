@@ -1,3 +1,4 @@
+import { WorkspaceEntry } from './workspace-entry';
 import { AccessState, getPageContext, isMember, Shell } from './shell';
 import { LearningBrowse, LearningMine, LearningReading } from './learning-posts';
 import { LearningEditing } from './learning-editor';
@@ -9,6 +10,7 @@ export async function LearningPage({ view, id, tab }: { view: keyof typeof label
     const postPath = id && /^[a-zA-Z0-9_-]{1,80}$/.test(id) ? `/learn/posts/${id}` : '/learn';
     const back = view === 'index' ? undefined : view === 'edit' ? '/learn/mine' : '/learn';
     const returnTo = view === 'index' && tab ? '/learn?tab=' + tab : view === 'mine' ? '/learn/mine' : view === 'new' ? '/learn/posts/new' : view === 'edit' && id ? postPath + '/edit' : postPath;
+    if (context.user && member && (view === 'index' || view === 'mine' || view === 'new' || postPath !== '/learn')) return <WorkspaceEntry actorId={context.user.userId} path={view === 'index' ? (tab === 'collections' ? '/collections' : '/trainings') : view === 'mine' ? '/account/published' : view === 'new' ? '/trainings/new?kind=article' : '/trainings/' + encodeURIComponent(id!) + (view === 'edit' ? '/edit' : '')} />;
     return <Shell title={labels[view]} surface={view === 'read' ? 'video' : 'index'} back={back} canCompose={!!member}
         description={view === 'index' ? '浏览队友分享的资料与合集。' : undefined}>
         {!context.user || !member ? <AccessState context={context} returnTo={returnTo} />

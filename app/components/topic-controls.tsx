@@ -10,7 +10,7 @@ import { useAccountSession } from './secure-resource';
 export const topicsEndpoint = 'learning/collections';
 export const topicKey = (item: TopicReference) => item.kind + ':' + item.id;
 export const topicRef = ({ kind, id }: TopicReference) => ({ kind, id });
-export const sourcePath = (item: TopicSource) => (item.kind === 'post' ? '/learn/posts/' : '/videos/') + item.id;
+export const sourcePath = (item: TopicSource) => (item.kind === 'post' ? '/learn/posts/' : item.kind === 'training' ? '/trainings/' : '/videos/') + item.id;
 export const topicStatus = { draft: '私人草稿', published: '已发布', withdrawn: '已撤回' };
 
 type WriteInput = Omit<LearningMutation, 'key'>;
@@ -107,7 +107,7 @@ export function TopicDialog({ title, label, disabled, icon, children }: {
 
 export function TopicSourceLabel({ item }: { item: TopicSource }) {
     return <span className="learning-row-text"><strong>{item.title}</strong>
-        <small>{[item.mediaKind === 'article' ? '图文' : '视频', item.category, item.author?.discName].filter(Boolean).join(' · ')}</small>
+        <small>{[item.mediaKind === 'article' ? '图文' : item.mediaKind === 'training' ? '训练' : '视频', item.category, item.author?.discName].filter(Boolean).join(' · ')}</small>
         {item.summary && <span>{item.summary}</span>}
     </span>;
 }

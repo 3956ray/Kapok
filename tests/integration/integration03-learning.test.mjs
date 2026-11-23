@@ -292,16 +292,23 @@ test('bucket failures before and after put, concurrent completion and cleanup pr
 
 test('0013 adds learning without changing populated 0012 training, collection and reflection rows', async t => {
     const { db, s, rows, migrate } = await fixture(t, { before0013: true });
-    const training = await s.publishTraining(admin, { title: '旧训练', date: '2026-11-15', description: '', video: { title: '旧视频', url: 'https://youtu.be/dQw4w9WgXcQ' } }, 'legacy');
-    await s.saveCollection(author, null, { sourceKind: 'video', sourceId: training.video.id, privateNote: '原备注' }, 'legacy');
-    await s.saveReflection(author, null, { text: '原复盘', date: '2026-11-15', videoId: training.video.id, trainingId: training.training.id }, 'legacy');
+    const actor = await s.me(author);
+    const team = actor.membership.teamId, owner = actor.user.id;
+    await db.batch([
+        db.prepare("INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at) VALUES('t',?,'旧训练','2026-11-15','','published','2026-11-15','2026-11-15')").bind(team),
+        db.prepare("INSERT INTO videos(id,training_id,team_id,title,source,url,position,created_at,updated_at) VALUES('v','t',?,'旧视频','youtube','https://youtu.be/dQw4w9WgXcQ',0,'2026-11-15','2026-11-15')").bind(team),
+        db.prepare("INSERT INTO collections(id,owner_id,source_kind,source_id,private_note,created_at,updated_at) VALUES('c',?,'video','v','原备注','2026-11-15','2026-11-15')").bind(owner),
+        db.prepare("INSERT INTO reflections(id,owner_id,team_id,text,date,training_id,video_id,created_at,updated_at) VALUES('r',?,?,'原复盘','2026-11-15','t','v','2026-11-15','2026-11-15')").bind(owner,team),
+        db.prepare("INSERT INTO operations(id,actor_id,kind,target_id,key,input_hash,status,result_json,created_at) VALUES('create',?,'training-publish',?,'legacy','hash','done',json_object('id','t'),'2026-11-15')").bind(owner,team),
+    ]);
     const tables = ['trainings', 'videos', 'collections', 'reflections', 'operations'];
     const snapshot = await Promise.all(tables.map(table => rows(table)));
     await migrate('0013_learning_posts.sql');
     assert.deepEqual(await Promise.all(tables.map(table => rows(table))), snapshot);
+    for (const file of (await readdir(directory)).filter(name=>name.endsWith('.sql') && name>'0013_learning_posts.sql').sort()) await migrate(file);
+    assert.equal((await s.getTraining(author, 't')).publisherId, owner);
     assert.equal((await s.listCollections(author))[0].privateNote, '原备注');
     assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results, []);
-    await migrate('0014_topic_collections.sql');
     const incomplete = await s.saveLearningPost(author, null, { ...input, body: '' }, 'incomplete');
     await denied(s.publishLearningPost(author, incomplete.id, publicationVersion(incomplete), 'needs-body'), 'INVALID_INPUT');
     const video = await s.saveLearningPost(author, null, {
@@ -596,13 +603,14 @@ test('shared categories trim, preserve case, enforce length and membership, and 
 
 test('0018 preserves legacy drafts, publications, images, comment replies and referenced data in a D1 batch', async t => {
     const { db, s, migrate, rows } = await fixture(t, { before0018: true });
-    const saved = await s.saveLearningPost(author, null, input, 'old-content');
-    const published = await s.publishLearningPost(author, saved.id, publicationVersion(saved), 'old-publish');
-    await s.saveLearningPost(author, saved.id, { ...input, body: '私人新版', ...version(published) }, 'private-edit');
+    const saved = { id: 'old-post' }, published = { version: 2 };
     const { user, membership } = await s.me(author);
     const at = '2026-11-16T00:00:00.000Z';
     const sql = (query, ...bindings) => db.prepare(query).bind(...bindings);
     await db.batch([
+        sql("INSERT INTO learning_posts(id,team_id,owner_id,kind,category,title,summary,body,status,version,created_at,updated_at) VALUES(?,?,?,'article','战术',?,?,'私人新版','published',3,?,?)", saved.id,membership.teamId,user.id,input.title,input.summary,at,at),
+        sql("INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,version,author_epoch,published_at) VALUES(?,'article','战术',?,?,?,?,?,?)", saved.id,input.title,input.summary,input.body,published.version,membership.epoch,at),
+        sql("INSERT INTO operations(id,actor_id,kind,target_id,key,input_hash,status,result_json,created_at) VALUES('publish-op',?,'learning-publish',?,'old-publish','hash','done',json_object('id',?),?)",user.id,saved.id,saved.id,at),
         sql("INSERT INTO learning_images(id,post_id,object_key,status,digest,mime_type,bytes,width,height,created_at) VALUES('image',?,'key','ready','digest','image/png',4,2,2,?)", saved.id, at),
         sql("INSERT INTO learning_draft_images(post_id,image_id,position,alt) VALUES(?,'image',0,'草稿图片')", saved.id),
         sql("INSERT INTO learning_publication_images(post_id,image_id,position,alt) VALUES(?,'image',0,'发布图片')", saved.id),
@@ -623,6 +631,151 @@ test('0018 preserves legacy drafts, publications, images, comment replies and re
     assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results, []);
     await sql("INSERT INTO learning_activity_events (id,post_id,author_epoch,shared_at) VALUES('next-event',?,?,?)", saved.id, membership.epoch, at).run();
     assert.equal((await rows('learning_activity_events')).at(-1).sequence, 103);
+    for (const file of (await readdir(directory)).filter(name=>name.endsWith('.sql') && name>'0018_learning_categories.sql').sort()) await migrate(file);
     assert.equal((await draft(s, saved.id)).body, '私人新版');
     assert.equal((await s.getLearningPost(reader, saved.id)).body, input.body);
+});
+
+test('workspace material files bind to the edited item, survive publication and respect withdrawal', async t => {
+    const {s,db}=await fixture(t);
+    const photo=photos[0], clip=await readFile(new URL('../fixtures/synthetic-pass.mp4',import.meta.url));
+    const digest=async(bytes)=>Buffer.from(await crypto.subtle.digest('SHA-256',bytes)).toString('hex');
+    async function attach(who,kind,parentId,mime,bytes,key) {
+        const meta={kind,parentId,mime,bytes:bytes.length,digest:await digest(bytes)};
+        const {id}=await s.reserveMaterialAsset(who,meta,key);
+        const request=()=>new Request('https://kapok.test/file',{method:'PUT',body:bytes,headers:{'content-type':mime,'content-length':String(bytes.length)}});
+        assert.deepEqual(await s.putMaterialAsset(who,id,request(),key),{id});
+        assert.deepEqual(await s.putMaterialAsset(who,id,request(),key),{id});
+        return id;
+    }
+    const draft=await s.saveLearningPost(author,null,input,'compose');
+    const clipId=await attach(author,'post',draft.id,'video/mp4',clip,'clip');
+    const photoId=await attach(author,'post',draft.id,photo.type,photo.bytes,'photo');
+    const url='/api/v1/material-assets/'+clipId;
+    const fields={...input,kind:'video',video:{source:'upload',url},workspaceDetails:{
+        date:'2026-11-23',photos:[{id:photoId,alt:'合成图片'}],chapters:{[url]:[{at:0,title:'开场'}]},
+    }};
+    const edit=await s.saveLearningPost(author,draft.id,{...fields,...version(draft)},'save');
+    await denied(s.getMaterialAsset(reader,clipId,null),'NOT_FOUND');
+    const preview=await s.getMaterialAsset(author,photoId,null);
+    assert.deepEqual(new Uint8Array(await preview.arrayBuffer()),photo.bytes);
+    const published=await s.publishLearningPost(author,draft.id,publicationVersion(edit),'pub');
+    const playback=await s.getMaterialAsset(reader,clipId,'bytes=2-7');
+    assert.equal(playback.status,206);
+    assert.deepEqual(Buffer.from(await playback.arrayBuffer()),clip.subarray(2,8));
+    const post=await s.getLearningPost(reader,draft.id);
+    assert.deepEqual(post.video,fields.video);
+    assert.deepEqual(JSON.parse(post.workspaceDetails),fields.workspaceDetails);
+    const other=await s.saveLearningPost(reader,null,input,'different');
+    await denied(s.saveLearningPost(reader,other.id,{...fields,...version(other)},'copy'),'VERSION_CONFLICT');
+    await s.withdrawLearningPost(author,draft.id,publicationVersion(published),'withdraw');
+    await denied(s.getMaterialAsset(reader,photoId,null),'NOT_FOUND');
+    const training=(await s.publishTraining(admin,{title:'训练',description:'训练简介',date:'2026-11-23'},'new')).training;
+    const trainingPhoto=await attach(admin,'training',training.id,photo.type,photo.bytes,'training-photo');
+    const workspaceDetails={category:'防守',body:'要点',photos:[{id:trainingPhoto,alt:'练习示意'}],chapters:{}};
+    const newTraining=await s.saveTraining(admin,training.id,{workspaceDetails,title:training.title,date:training.date,description:training.description,status:'published',expectedVersion:training.version},'training-edit');
+    assert.equal(JSON.parse(newTraining.workspaceDetails).body,'要点');
+    assert.equal(newTraining.publisherId,(await s.me(admin)).user.id);
+    assert.deepEqual(new Uint8Array(await (await s.getMaterialAsset(reader,trainingPhoto,null)).arrayBuffer()),photo.bytes);
+    await denied(s.reserveMaterialAsset(reader,{kind:'training',parentId:training.id,mime:photo.type,bytes:photo.bytes.length,digest:await digest(photo.bytes)},'deny'),'NOT_FOUND');
+    assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
+});
+
+test('workspace editor publishes a local video and photos, rereads chapters and preserves other training videos', async t => {
+    const {s}=await fixture(t);
+    const {saveMaterial,loadMaterial,selectVideo}=await import('../../app/workspace-ui/materials.js');
+    const {parseVideo}=await import('../../app/workspace-ui/video-source.js');
+    const origin='https://kapok.test';
+    const session=async who=>{
+        const actorId=await actorKey(who), account=await s.me(who), controller=new AbortController();
+        async function handle(path,method='GET',body,key=crypto.randomUUID()) {
+            const response=await api(s,who,method,path,{payload:body,key});
+            const envelope=await response.json();
+            assert.equal(response.status,200,envelope.error?.message);
+            return envelope.data;
+        }
+        return {actorId,account,signal:controller.signal,read:path=>handle(path),write:handle};
+    };
+    const authorContext=await session(author), adminContext=await session(admin);
+    const actors=new Map([[authorContext.actorId,author],[adminContext.actorId,admin]]);
+    const originalFetch=globalThis.fetch;
+    t.after(()=>{globalThis.fetch=originalFetch;});
+    globalThis.fetch=async(url,options)=>{
+        if (typeof url!=='string' || !url.startsWith('/api/v1/')) return originalFetch(url,options);
+        const headers=new Headers(options.headers);
+        headers.set('Origin',origin);headers.set('Content-Length',String(options.body.size));
+        return dispatchApi(new Request(origin+url,{...options,headers}),url.slice(8).split('/'),actors.get(headers.get('X-Kapok-Actor')),s);
+    };
+    // A one-frame WebM containing the real 2x2 VP8 keyframe of the image fixture.
+    const element=(hex,...parts)=>{
+        const content=Buffer.concat(parts.map(part=>Buffer.from(part)));
+        const len=content.length<127 ? [128+content.length] : [64+(content.length>>8),content.length&255];
+        return Buffer.concat([Buffer.from(hex,'hex'),Buffer.from(len),content]);
+    };
+    const dur=Buffer.alloc(8);dur.writeDoubleBE(1000);
+    const header=element('1a45dfa3',element('4282',Buffer.from('webm')));
+    const frame=photos[2].bytes.slice(20);
+    const webm=Buffer.concat([header,element('18538067',
+        element('1549a966',element('4489',dur)),
+        element('1654ae6b',element('ae',element('d7',[1]),element('83',[1]),element('86',Buffer.from('V_VP8')),element('e0',element('b0',[2]),element('ba',[2])))),
+        element('1f43b675',element('e7',[0]),element('a3',[0x81,0,0,0x80],frame)))]);
+    const form={kind:'video',title:'视频与照片',date:'2026-11-23',category:'场上复盘',summary:'学习',body:'练习要点',photos:[{
+        file:new File([photos[0].bytes],'test.png',{type:'image/png'}),alt:'图片',
+    }],clipFile:new File([webm],'clip.webm',{type:'video/webm'}),source:null,timepoints:[{at:0,title:'开始'}]};
+    const postId=await saveMaterial(authorContext,null,form,authorContext.signal,{key:'workspace-compose'});
+    const reading=selectVideo(await loadMaterial(adminContext,{id:postId,kind:'video'},adminContext.signal));
+    assert.equal(reading.title,form.title);
+    assert.equal(reading.photos[0].alt,'图片');
+    assert.deepEqual(reading.timepoints,form.timepoints);
+    assert.equal(reading.video.source,'upload');
+    const media=await s.getMaterialAsset(admin,reading.video.url.split('/').at(-1),'bytes=0-3');
+    assert.equal(media.headers.get('Content-Type'),'video/webm');
+    assert.deepEqual(Buffer.from(await media.arrayBuffer()),webm.subarray(0,4));
+    const existing=selectVideo(await loadMaterial(authorContext,{id:postId,kind:'video'},authorContext.signal,true));
+    await saveMaterial(authorContext,existing,{...existing,title:'已编辑本地视频',clipFile:null,timepoints:[{at:0,title:'新章节'}]},authorContext.signal,{key:'edit-native'});
+    const refreshed=selectVideo(await loadMaterial(adminContext,{id:postId,kind:'video'},adminContext.signal));
+    assert.equal(refreshed.title,'已编辑本地视频');
+    assert.equal(refreshed.videoAsset,reading.videoAsset);
+    assert.deepEqual(refreshed.photos,reading.photos);
+    assert.deepEqual(refreshed.timepoints,[{at:0,title:'新章节'}]);
+    const overview=JSON.parse((await s.listLearningPosts(admin)).find(row=>row.id===postId).workspaceDetails);
+    assert.equal(overview.photos[0].id,refreshed.photos[0].id);
+    assert.equal(overview.chapters,undefined);
+    const trainingInput={...form,kind:'training',clipFile:null,photos:[],source:parseVideo('BV1xx411c7mD')};
+    const id=await saveMaterial(adminContext,null,trainingInput,adminContext.signal,{key:'new-training'});
+    const old=selectVideo(await loadMaterial(adminContext,{id,kind:'training'},adminContext.signal));
+    const response=await s.saveComment(reader,old.selectedVideo.id,null,{text:'视频评论',timestampSec:2,referenceTimes:[2,5]},'comment');
+    const item={...trainingInput,clipFile:form.clipFile,source:null,photos:form.photos};
+    await saveMaterial(adminContext,old,item,adminContext.signal,{key:'append-webm'});
+    const both=await loadMaterial(authorContext,{id,kind:'training'},authorContext.signal);
+    assert.equal(both.videos.length,2);
+    const latest=selectVideo(both,both.videos[1].id);
+    assert.deepEqual(latest.timepoints,item.timepoints);
+    assert.deepEqual(selectVideo(both,old.selectedVideo.id).timepoints,trainingInput.timepoints);
+    assert.equal(latest.photos.length,1);
+    const trainingOverview=JSON.parse((await s.listTrainings(reader)).find(row=>row.id===id).workspaceDetails);
+    assert.equal(trainingOverview.photos[0].id,latest.photos[0].id);
+    assert.equal(trainingOverview.body,undefined);
+    assert.equal(trainingOverview.chapters,undefined);
+    const stored=(await s.listComments(reader,old.selectedVideo.id))[0];
+    assert.equal(stored.id,response.id);
+    assert.deepEqual(JSON.parse(stored.referenceTimes),[2,5]);
+    const team=await s.writeTrainingDiscussion(author,id,null,{text:'整场训练'},'thread');
+    await s.writeTrainingDiscussion(reader,id,null,{text:'回应',rootId:team.id,replyToId:team.id},'reply');
+    assert.equal((await s.readTrainingDiscussion(reader,id)).length,2);
+    await s.writeTrainingDiscussion(author,id,team.id,{action:'delete',expectedVersion:1},'remove');
+    const after=await s.readTrainingDiscussion(reader,id);
+    assert.equal(after.find(c=>c.id===team.id).text,null);
+    assert.equal(after.find(c=>c.rootId===team.id).text,'回应');
+    const exported=await s.exportOwnData(author), readerExport=await s.exportOwnData(reader);
+    assert.equal(exported.materialAssets.length,2);
+    assert.equal(exported.materialAssets.every(a=>a.parentId===postId),true);
+    assert.deepEqual(exported.learningPosts[0].publication.workspaceDetails.chapters[reading.videoAsset],refreshed.timepoints);
+    assert.deepEqual(exported.trainingDiscussions.map(row=>row.id),[team.id]);
+    assert.deepEqual(readerExport.materialAssets,[]);
+    assert.deepEqual(readerExport.trainingDiscussions.map(row=>row.text),['回应']);
+    assert.deepEqual(readerExport.comments.find(c=>c.id===response.id).referenceTimes,[2,5]);
+    const quietAccount=await s.exportOwnData(admin);
+    assert.deepEqual(quietAccount.trainingDiscussions,[]);
+    assert.deepEqual(quietAccount.learningPosts,[]);
 });

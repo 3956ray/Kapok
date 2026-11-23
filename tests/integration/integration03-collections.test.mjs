@@ -17,7 +17,7 @@ const ref = id => ({ kind: 'post', id });
 const input = { kind: 'article', category: '战术', title: 'Synthetic post', body: 'Synthetic body' };
 const topic = { title: 'Synthetic topic', summary: 'Synthetic summary' };
 const denied = (promise, code) => assert.rejects(promise, error => error.code === code);
-async function fixture(t, before0014 = false) {
+async function fixture(t, cutoff) {
     const mf = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("test")}}',
         compatibilityDate: '2026-05-22', d1Databases: ['DB'] });
     t.after(() => mf.dispose());
@@ -26,7 +26,7 @@ async function fixture(t, before0014 = false) {
         const sql = await readFile(new URL(file, directory), 'utf8');
         await db.batch(sql.split('--> statement-breakpoint').map(s => s.trim()).filter(Boolean).map(s => db.prepare(s)));
     };
-    for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql') && (!before0014 || file < '0014')).sort()) await migrate(file);
+    for (const file of (await readdir(directory)).filter(file => file.endsWith('.sql') && (!cutoff || file < cutoff)).sort()) await migrate(file);
     const make = (overrides = {}) => createService({ db, accessInitialAdminEmail: admin.verifiedEmail, ...overrides });
     const s = make();
     async function join(p) {
@@ -223,21 +223,25 @@ test('D1 rolls back topic item, target ownership and membership transitions insi
 });
 
 test('0014 preserves populated learning, training and old private collection rows', async t => {
-    const { s, db, migrate } = await fixture(t, true);
+    const { s, db, migrate } = await fixture(t, '0014');
     const authorAccount = await s.me(author);
     await db.prepare(`INSERT INTO learning_posts(id,team_id,owner_id,kind,category,title,summary,body,status,version,created_at,updated_at)
         VALUES('existing-post',?,?,'article','战术','Existing','Summary','Body','published',2,'2026-11-15','2026-11-15')`)
         .bind(authorAccount.membership.teamId, authorAccount.user.id).run();
     await db.prepare(`INSERT INTO learning_post_publications(post_id,kind,category,title,summary,body,version,author_epoch,published_at)
         VALUES('existing-post','article','战术','Existing','Summary','Body',2,?,'2026-11-15')`).bind(authorAccount.membership.epoch).run();
-    const training = await s.publishTraining(admin, { title: '旧训练', date: '2026-11-15', description: '',
-        video: { title: '旧视频', url: 'https://youtu.be/dQw4w9WgXcQ' } }, 'legacy');
-    await s.saveCollection(author, null, { sourceKind: 'video', sourceId: training.video.id, privateNote: '原备注' }, 'legacy');
+    // Seed the historical row format before later migrations introduce new write fields.
+    await db.batch([
+        db.prepare("INSERT INTO trainings(id,team_id,title,date,description,status,created_at,updated_at) VALUES('old-training',?,'旧训练','2026-11-15','','published','2026-11-15','2026-11-15')").bind(authorAccount.membership.teamId),
+        db.prepare("INSERT INTO videos(id,training_id,team_id,title,source,url,position,created_at,updated_at) VALUES('old-video','old-training',?,'旧视频','youtube','https://youtu.be/dQw4w9WgXcQ',0,'2026-11-15','2026-11-15')").bind(authorAccount.membership.teamId),
+        db.prepare("INSERT INTO collections(id,owner_id,source_kind,source_id,private_note,created_at,updated_at) VALUES('old-bookmark',?,'video','old-video','原备注','2026-11-15','2026-11-15')").bind(authorAccount.user.id),
+    ]);
     const tables = ['learning_posts', 'learning_post_publications', 'trainings', 'videos', 'collections', 'operations'];
     const snapshot = async () => (await db.batch(tables.map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1')))).map(r => r.results);
     const before = await snapshot();
     await migrate('0014_topic_collections.sql');
     assert.deepEqual(await snapshot(), before);
+    for (const file of (await readdir(directory)).filter(name => name.endsWith('.sql') && name > '0014_topic_collections.sql').sort()) await migrate(file);
     assert.equal((await s.getLearningPost(reader, 'existing-post')).body, 'Body');
     assert.equal((await s.getLearningPost(author, 'existing-post', 'draft')).association, null);
     assert.equal((await s.listCollections(author))[0].privateNote, '原备注');
@@ -277,4 +281,81 @@ test('topic writes retain the principal binding in the shared learning fence', a
     assert.equal((await s.me(author)).user.id, ids[0]);
     assert.equal((await s.me(reader)).user.id, ids[1]);
     assert.equal(await db.prepare("SELECT id FROM operations WHERE key='raced-identity'").first(), null);
+});
+
+test('workspace collections project old D1 records and atomically publish ordered live sources', async t => {
+    const { s, db } = await fixture(t);
+    const legacy = await s.saveTopicCollection(author, null, topic, 'old');
+    const legacyPublication = await s.publishTopicCollection(author, legacy.id, publication(legacy), 'make-public');
+    const readerRows = await s.workspaceTopics(reader);
+    assert.deepEqual(readerRows.map(row => [row.id, row.category, row.published]), [[legacy.id, '', 1]]);
+    const training = await s.saveTraining(admin, null, { title: 'Footwork', date: '2026-11-11', description: '', status: 'published' }, 'session');
+    const article = await post(s, reader, 'study');
+    const newItems = [{ kind: 'training', id: training.id }, ref(article.id)];
+    const payload = { title: 'New group', summary: 'Read in order', category: '防守', items: newItems, ...publication(legacyPublication) };
+    assert.equal((await api(s, reader, 'PATCH', 'workspace/topics/' + legacy.id, payload, 'not-mine')).status, 404);
+    const saved = await api(s, author, 'PATCH', 'workspace/topics/' + legacy.id, payload, 'revise');
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json()).data.id, legacy.id);
+    assert.equal((await api(s, author, 'PATCH', 'workspace/topics/' + legacy.id, payload, 'revise')).status, 200);
+    const [fresh] = await s.workspaceTopics(reader);
+    assert.deepEqual(fresh.items.map(({kind,id}) => ({kind,id})), newItems);
+    assert.equal(fresh.category, '防守');
+    await db.prepare("UPDATE trainings SET status='hidden' WHERE id=?").bind(training.id).run();
+    assert.deepEqual((await s.workspaceTopics(reader))[0].items.map(x => x.id), [article.id]);
+    const create = {...payload, expectedVersion: 0};
+    assert.equal((await api(s, author, 'POST', 'workspace/topics', create, 'hidden-content')).status, 409);
+    assert.equal((await s.workspaceTopics(reader)).length, 1);
+    assert.equal((await api(s, author, 'DELETE', 'workspace/topics/' + legacy.id, publication(legacyPublication), 'stale')).status, 409);
+    const current = await s.getTopicCollection(author, legacy.id, 'draft');
+    const del = () => api(s, author, 'DELETE', 'workspace/topics/' + legacy.id, publication(current), 'delete');
+    assert.equal((await del()).status, 200);
+    assert.equal((await del()).status, 200);
+    assert.deepEqual(await s.workspaceTopics(reader), []);
+    assert.equal((await s.getLearningPost(reader,article.id)).id,article.id);
+});
+
+
+test('0020 upgrades populated directories without changing old chapter order or publication revisions', async t => {
+    const { s, db, migrate } = await fixture(t, '0020');
+    const account = await s.me(author);
+    await db.batch([
+        db.prepare("INSERT INTO topic_collections(id,team_id,owner_id,title,summary,status,version,created_at,updated_at) VALUES('old',?,?,'Draft','intro','published',7,'2026-11-15','2026-11-15')").bind(account.membership.teamId,account.user.id),
+        db.prepare("INSERT INTO topic_collection_publications(collection_id,title,summary,version,author_epoch,visibility_id,published_at) VALUES('old','Publication','intro',6,?,'visible','2026-11-15')").bind(account.membership.epoch),
+        db.prepare("INSERT INTO topic_collection_items(collection_id,snapshot,kind,source_id,position) VALUES ('old',1,'post','old-post',0),('old',1,'video','old-video',1),('old',0,'video','old-video',0),('old',0,'post','old-post',1)"),
+    ]);
+    const read = async () => (await db.prepare('SELECT * FROM topic_collection_items ORDER BY snapshot,position').all()).results;
+    const before = await read();
+    await migrate('0020_workspace_topics.sql');
+    assert.deepEqual(await read(),before);
+    assert.deepEqual((await s.workspaceTopics(author)).map(row => [row.title,row.version,row.category]).sort(),
+        [['Draft',7,''],['Publication',6,'']]);
+    assert.equal((await db.prepare('PRAGMA foreign_key_check').all()).results.length,0);
+});
+
+test('team share freezes directory order, excludes hidden sources, and expires on withdrawal or deletion', async t => {
+    const { s, db } = await fixture(t);
+    const a = await post(s, author, 'one');
+    const b = await post(s, author, 'two');
+    const epoch = (await s.me(author)).membership.epoch;
+    const input = { title: '训练路线', category: '进攻', summary:'学习顺序', items:[ref(a.id),ref(b.id)], expectedVersion:0, expectedMembershipEpoch:epoch };
+    const {id} = await s.publishWorkspaceTopic(author,null,input,'create');
+    const edition = await s.shareWorkspaceTopic(reader,id,{expectedPublishedVersion:1},'copy');
+    assert.deepEqual(await s.shareWorkspaceTopic(author,id,{expectedPublishedVersion:1},'another-copy'),edition);
+    await s.publishWorkspaceTopic(author,id,{...input,title:'新标题',items:[ref(b.id)],expectedVersion:1},'edit');
+    const before = await s.readWorkspaceShare(reader,edition.id);
+    assert.equal(before.title,input.title);
+    assert.deepEqual(before.items.map(row=>row.id),[a.id,b.id]);
+    await s.hideLearningPost(admin,a.id,{expectedVersion:a.publishedVersion},'hide');
+    assert.deepEqual((await s.readWorkspaceShare(reader,edition.id)).items.map(row=>row.id),[b.id]);
+    const draft = await s.getTopicCollection(author,id,'draft');
+    const withdrawn = await s.withdrawTopicCollection(author,id,publication(draft),'withdraw');
+    await denied(s.readWorkspaceShare(reader,edition.id),'NOT_FOUND');
+    await s.publishWorkspaceTopic(author,id,{...input,items:[ref(b.id)],expectedVersion:withdrawn.version},'restore');
+    await denied(s.readWorkspaceShare(reader,edition.id),'NOT_FOUND');
+    const current = await s.getTopicCollection(author,id,'draft');
+    const live = await s.shareWorkspaceTopic(reader,id,{expectedPublishedVersion:current.publishedVersion},'second');
+    await s.deleteWorkspaceTopic(author,id,publication(current),'delete');
+    await denied(s.readWorkspaceShare(reader,live.id),'NOT_FOUND');
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM workspace_topic_shares').first()).n,0);
 });

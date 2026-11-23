@@ -26,6 +26,9 @@ const sources = `WITH sources AS (
     SELECT 'video',v.id,v.team_id,v.title,'',NULL,'video',v.training_id,p.user_id,p.disc_name,p.jersey_number,NULL
     FROM videos v JOIN trainings t ON t.id=v.training_id LEFT JOIN profiles p ON p.user_id=v.publisher_id
     WHERE ${topicVideoVisible}
+    UNION ALL
+    SELECT 'training',t.id,t.team_id,t.title,t.description,NULL,'training',t.id,NULL,NULL,NULL,NULL
+    FROM trainings t WHERE t.status IN ('published','archived')
 )`;
 const sourceJson = `json_object('kind',s.kind,'id',s.id,'title',s.title,'summary',s.summary,'category',s.category,
     'mediaKind',s.media_kind,'trainingId',s.training_id,'cover',json(s.cover),
@@ -60,7 +63,7 @@ function version(value: unknown, min = 1) {
 }
 function reference(input: unknown): TopicReference {
     const { kind, id } = object(input, ['kind', 'id']);
-    if ((kind !== 'post' && kind !== 'video') || !isId(id)) throw invalid();
+    if ((kind !== 'post' && kind !== 'video' && kind !== 'training') || !isId(id)) throw invalid();
     return { kind, id };
 }
 function references(input: unknown, max: number) {
@@ -129,7 +132,7 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
     async function listTopicSources(p: Principal | null): Promise<TopicSource[]> {
         const { c, f } = await contextual(p);
         const { results } = await q(`${sources} SELECT ${sourceJson} AS item FROM sources s
-            WHERE s.team_id=? AND ${f.sql} ORDER BY s.title,s.kind,s.id`, c.membership.teamId, ...f.values).all<{ item: string }>();
+            WHERE s.team_id=? AND s.kind<>'training' AND ${f.sql} ORDER BY s.title,s.kind,s.id`, c.membership.teamId, ...f.values).all<{ item: string }>();
         return results.map(row => JSON.parse(row.item) as TopicSource);
     }
     async function saveTopicCollection(p: Principal | null, id: string | null, input: unknown, key: string) {
@@ -277,6 +280,123 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         if (after.status !== status || (publish ? after.publishedVersion !== next : after.version !== next)) throw learningConflict();
         return after;
     }
+    // Project both revisions in one authorized read. Only the author can receive snapshot zero.
+    async function workspaceTopics(p: Principal | null) {
+        const { c, f } = await contextual(p);
+        const { results } = await q(`${sources}
+            SELECT tc.id,tcp.title,tcp.summary,tcp.category,tcp.published_at AS updated,tc.owner_id AS ownerId,
+                p.disc_name AS author,1 AS published,tcp.version AS version,'published' AS status,${projectedItems(1)}
+            ${collectionJoin} WHERE tc.team_id=? AND ${topicVisible} AND ${f.sql}
+            UNION ALL
+            SELECT tc.id,tc.title,tc.summary,tc.category,tc.updated_at,tc.owner_id,p.disc_name,0,tc.version,
+                ${effectiveStatus},${projectedItems(0)}
+            FROM topic_collections tc LEFT JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id
+            JOIN profiles p ON p.user_id=tc.owner_id
+            WHERE tc.owner_id=? AND tc.team_id=? AND ${f.sql} ORDER BY updated DESC`,
+            c.membership.teamId, ...f.values, c.user.id, c.membership.teamId, ...f.values)
+            .all<{id:string; items:string; ownerId:string; updated:string}>();
+        return results.map(row => ({ ...row, items: JSON.parse(row.items) as TopicSource[], isAuthor: row.ownerId === c.user.id }));
+    }
+    async function shareWorkspaceTopic(p: Principal | null, id: string, input: unknown, key: string) {
+        const { c, f } = await contextual(p);
+        const expected = version(object(input,['expectedPublishedVersion']).expectedPublishedVersion);
+        const op = await operation(c.user.id,'workspace-topic-share',id,key,{expected});
+        if (!op.replay) {
+            const share = crypto.randomUUID();
+            const insert = q(`INSERT INTO workspace_topic_shares(id,collection_id,version,visibility_id,title,summary,category,published_at,items)
+                SELECT ?,tc.id,tcp.version,tcp.visibility_id,tcp.title,tcp.summary,tcp.category,tcp.published_at,
+                    (SELECT json_group_array(json(ref)) FROM (SELECT json_object('kind',ti.kind,'id',ti.source_id) ref
+                    FROM topic_collection_items ti WHERE ti.collection_id=tc.id AND ti.snapshot=1 ORDER BY ti.position))
+                ${collectionJoin} WHERE tc.id=? AND tc.team_id=? AND tcp.version=? AND ${topicVisible} AND ${f.sql}
+                ON CONFLICT(collection_id,version) DO NOTHING`,share,id,c.membership.teamId,expected,...f.values);
+            const valid = assertGuard(db,op.opId,'source',`EXISTS(SELECT 1 ${collectionJoin} WHERE tc.id=? AND tc.team_id=?
+                AND tcp.version=? AND ${topicVisible})`,[id,c.membership.teamId,expected]);
+            await commit(op,[guard(op,'member',f),valid,insert],{id});
+        }
+        const row = await q(`SELECT sh.id FROM workspace_topic_shares sh JOIN topic_collections tc ON tc.id=sh.collection_id
+            JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id AND tcp.visibility_id=sh.visibility_id
+            WHERE sh.collection_id=? AND sh.version=? AND tc.team_id=? AND ${topicVisible} AND ${f.sql}`,id,expected,c.membership.teamId,...f.values).first<{id:string}>();
+        if (!row) throw missing();
+        return row;
+    }
+    async function readWorkspaceShare(p: Principal | null, id: string) {
+        const { c, f } = await contextual(p);
+        const row = await q(`${sources} SELECT sh.collection_id AS id,sh.title,sh.summary,sh.category,sh.published_at AS updated,
+            tc.owner_id AS ownerId,p.disc_name AS author,1 AS published,sh.version,'published' AS status,
+            (SELECT json_group_array(json(item)) FROM (SELECT ${sourceJson} AS item FROM json_each(sh.items) j
+                JOIN sources s ON s.team_id=tc.team_id AND s.kind=json_extract(j.value,'$.kind') AND s.id=json_extract(j.value,'$.id')
+                ORDER BY CAST(j.key AS INTEGER))) AS items
+            FROM workspace_topic_shares sh JOIN topic_collections tc ON tc.id=sh.collection_id
+            JOIN topic_collection_publications tcp ON tcp.collection_id=tc.id AND tcp.visibility_id=sh.visibility_id
+            JOIN profiles p ON p.user_id=tc.owner_id WHERE sh.id=? AND tc.team_id=? AND ${topicVisible} AND ${f.sql}`,
+            id,c.membership.teamId,...f.values).first<{id:string;items:string;ownerId:string}>();
+        if (!row) throw missing();
+        return {...row, items:JSON.parse(row.items) as TopicSource[], isAuthor:row.ownerId===c.user.id, editionId:id};
+    }
+    async function publishWorkspaceTopic(p: Principal | null, id: string | null, input: unknown, key: string) {
+        const { c, f } = await contextual(p);
+        const raw = object(input, ['title','summary','category','items','expectedVersion','expectedMembershipEpoch']);
+        const expected = version(raw.expectedVersion, id ? 1 : 0);
+        const epoch = version(raw.expectedMembershipEpoch);
+        if ((!id && expected !== 0) || epoch !== c.membership.epoch) throw learningConflict();
+        const { category, summary } = raw;
+        const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+        if (!title || title.length > topicDefaults.maxTitle || typeof summary !== 'string' || summary.length > 1200 ||
+            typeof category !== 'string' || category.length > 32) throw invalid();
+        const items = references(raw.items, topicDefaults.maxItems);
+        if (!items.length || new Set(items.map(itemKey)).size !== items.length) throw invalid();
+        const op = await operation(c.user.id, 'workspace-topic-publish', id ?? 'new', key, { expected, epoch, title, summary, category, items });
+        if (op.replay) return { id: op.replay.result.id! };
+        const target = id ?? crypto.randomUUID();
+        const next = expected + 1;
+        const at = clock().toISOString();
+        // Hidden sources cannot be edited by the client. Preserve their positions so restoring
+        // their source does not silently remove a legacy chapter after an unrelated title edit.
+        const draft = id ? await getTopicCollection(p,id,'draft') : null;
+        if (draft && draft.version !== expected) throw learningConflict();
+        const existing = id ? await readItems(c,id) : [];
+        const hidden = existing.filter(item => !item.available);
+        const nextItems = [...items];
+        for (const [index, item] of existing.entries()) {
+            if (!item.available) nextItems.splice(Math.min(index,nextItems.length),0,{kind:item.kind,id:item.id});
+        }
+        if (nextItems.length > topicDefaults.maxItems) throw invalid();
+        const checked = [...items.map(item => ({ ...item, available: 1 })), ...hidden];
+        const write = [guard(op, 'member', f), sourceGuard(op, 'sources', c, checked)];
+        const keepVisibility = draft?.status === 'published';
+        if (id) {
+            write.push(owned(op, 'before', c, target, expected), q(`UPDATE topic_collections SET title=?,summary=?,category=?,
+                status='published',version=?,updated_at=? WHERE id=?`,title,summary,category,next,at,target));
+        } else {
+            write.push(q(`INSERT INTO topic_collections(id,team_id,owner_id,title,summary,category,status,version,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,'published',?,?,?)`,target,c.membership.teamId,c.user.id,title,summary,category,next,at,at));
+        }
+        write.push(q(`INSERT INTO topic_collection_publications(collection_id,title,summary,category,version,author_epoch,visibility_id,published_at)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(collection_id) DO UPDATE SET title=excluded.title,summary=excluded.summary,
+            category=excluded.category,version=excluded.version,author_epoch=excluded.author_epoch,
+            visibility_id=CASE WHEN ? THEN visibility_id ELSE excluded.visibility_id END,published_at=excluded.published_at`,
+            target,title,summary,category,next,epoch,crypto.randomUUID(),at, Number(keepVisibility)),
+            ...replaceItems(target,0,nextItems),...replaceItems(target,1,nextItems),
+            owned(op,'after',c,target,next),guard(op,'after-member',f));
+        await commit(op,write,{id:target});
+        return {id:target};
+    }
+    async function deleteWorkspaceTopic(p: Principal | null,id: string,input: unknown,key: string) {
+        const { c, f } = await contextual(p);
+        const raw = object(input, ['expectedVersion','expectedMembershipEpoch']);
+        const expected = version(raw.expectedVersion);
+        if (version(raw.expectedMembershipEpoch) !== c.membership.epoch) throw learningConflict();
+        const op = await operation(c.user.id,'workspace-topic-delete',id,key,{expected,epoch:c.membership.epoch});
+        if (!op.replay) {
+            const draft = await getTopicCollection(p,id,'draft');
+            if (draft.version !== expected) throw learningConflict();
+            await commit(op,[guard(op,'before-member',f),owned(op,'owned',c,id,expected),
+                q('DELETE FROM topic_collection_items WHERE collection_id=?',id),
+                q('DELETE FROM topic_collection_publications WHERE collection_id=?',id),
+                q('DELETE FROM topic_collections WHERE id=?',id),guard(op,'after-member',f)],{id});
+        }
+        return {id};
+    }
     async function getFeaturedTopics(p: Principal | null, admin: true): Promise<FeaturedTopicAdmin>;
     async function getFeaturedTopics(p: Principal | null, admin?: false): Promise<FeaturedTopics>;
     async function getFeaturedTopics(p: Principal | null, admin = false) {
@@ -412,6 +532,7 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
         orderTopicItems: async (p: Principal | null, id: string, input: unknown, key: string) => (await changeItems(p, id, input, key, 'order')).collection,
         publishTopicCollection: (p: Principal | null, id: string, input: unknown, key: string) => changeTopicPublication(p, id, input, key, true),
         withdrawTopicCollection: (p: Principal | null, id: string, input: unknown, key: string) => changeTopicPublication(p, id, input, key, false),
+        workspaceTopics, publishWorkspaceTopic, deleteWorkspaceTopic, shareWorkspaceTopic, readWorkspaceShare,
         getFeaturedTopics, updateFeaturedTopics, retryLearningInclusion, attemptLearningInclusion,
     };
 }

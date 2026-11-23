@@ -49,7 +49,7 @@ function postInput(fields: Input, order: ImageOrder[]): LearningPostInput {
     const source = parseYouTubeSource(url);
     return {
         ...rest,
-        video: fields.kind === 'video' ? { source: source ? 'youtube' : 'bilibili', url: source?.url ?? url.trim() } : null,
+        video: fields.kind === 'video' ? { source: source ? 'youtube' : /^\/api\/v1\/material-assets\/[a-f0-9-]{36}$/.test(url.trim()) ? 'upload' : 'bilibili', url: source?.url ?? url.trim() } : null,
         ...(fields.kind === 'article' ? { images: imageReferences(order) } : {}),
     };
 }

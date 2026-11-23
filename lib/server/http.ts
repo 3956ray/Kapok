@@ -2,6 +2,7 @@ import { learningCategoryPath, learningJsonBytes } from '../contracts/learning.t
 import type { Principal } from '../contracts/index';
 import { DomainError } from './domain.ts';
 import type { Service } from './domain';
+import { readBilibiliDuration, resolveBilibiliShare } from './bilibili.ts';
 import { actorKey } from './identity.ts';
 
 export const privateHeaders = { 'Cache-Control': 'private, no-store, max-age=0', 'Vary': 'Cookie, oai-authenticated-user-id, Cf-Access-Jwt-Assertion', 'X-Content-Type-Options': 'nosniff' };
@@ -14,11 +15,11 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     const pageRead = request.method === 'GET' && path[0] === 'page-read';
     if (pageRead) path = path.slice(1);
     const route = path.join('/');
-    if (pageRead && !/^(?:(?:article|topic|watch|article-discussion|video-discussion)\/[\w-]+|home|home-reflections|activity-page|training-index|learn-index|growth|me|reflections(?:\/[\w-]+(?:\/edit)?)?|members(?:\/[\w-]+)?|announcements(?:\/[\w-]+)?|collections|learning\/(?:featured|mine))$/.test(route)) {
+    if (pageRead && !/^(?:(?:article|topic|watch|article-discussion|video-discussion)\/[\w-]+|workspace|home|home-reflections|activity-page|training-index|learn-index|growth|me|reflections(?:\/[\w-]+(?:\/edit)?)?|members(?:\/[\w-]+)?|announcements(?:\/[\w-]+)?|collections|learning\/(?:featured|mine))$/.test(route)) {
       throw new DomainError('NOT_FOUND', '未找到此功能。', 404);
     }
     const method = request.method;
-    const putBytes = method === 'PUT' && /^(?:uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
+    const putBytes = method === 'PUT' && /^(?:material-assets\/[^/]+|uploads\/[^/]+|learning\/posts\/[^/]+\/images\/[^/]+)\/content$/.test(route);
     const maxBody = method === 'POST' && route === 'uploads' ? 80000 : /^learning\/posts(?:\/[^/]+)?$/.test(route) ? learningJsonBytes : 40000;
     if (!['GET', 'HEAD'].includes(method)) {
       if (request.headers.get('Origin') !== new URL(request.url).origin) throw new DomainError('FORBIDDEN', '请从本站提交操作。', 403);
@@ -53,6 +54,20 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     if (initial && initial.me.user?.status !== 'active') throw new DomainError('FORBIDDEN', '当前账号暂不可用。', 403);
     let data: unknown;
     if (method === 'GET' && route === 'bootstrap') data = await service.getBootstrap(principal);
+    else if (method === 'GET' && (route === 'media/bilibili-link' || route === 'media/bilibili-duration')) {
+      await service.activeMember(principal);
+      const url = new URL(request.url).searchParams.get('url') ?? '';
+      data = route === 'media/bilibili-link' ? { url: await resolveBilibiliShare(url) } : { duration: await readBilibiliDuration(url) };
+    }
+    else if (initial && route === 'workspace') {
+      if (initial.me.membership?.status !== 'active') throw new DomainError('FORBIDDEN', '当前账号没有队伍访问权限。', 403);
+      const [account, trainings, posts, categories, drafts, reflections, collections, topics, members] = await Promise.all([
+        service.getAccount(principal), service.listTrainings(principal), service.listLearningPosts(principal),
+        service.listLearningCategories(principal), service.listMyLearningPosts(principal), service.listMyReflections(principal),
+        service.listCollections(principal), service.workspaceTopics(principal), service.listMembers(principal),
+      ]);
+      data = { account, trainings, posts, categories, drafts, reflections, collections, topics, members };
+    }
     else if (initial && route === 'home') {
       const [me, trainings] = await Promise.all([service.getAccount(principal), service.listTrainings(principal, true)]);
       data = { me, featured: trainings[0] };
@@ -141,6 +156,8 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'PUT' && path[0] === 'reflections' && path[2] === 'publication' && path.length === 3) data = await service.publishReflection(principal, path[1], await body(), key);
     else if (method === 'GET' && route === 'members') data = await service.listMembers(principal);
     else if (method === 'GET' && path[0] === 'members' && path.length === 2) data = await service.getMemberProfile(principal, path[1]);
+    else if (method === 'GET' && route === 'workspace/export-assets') data = await service.listWorkspaceExportAssets(principal);
+    else if (method === 'GET' && route === 'workspace/dispatch') data = await service.workspaceDispatch(principal, new URL(request.url).searchParams.get('cursor'));
     else if (method === 'GET' && route === 'activity') {
       const url = new URL(request.url);
       data = await service.listActivity(principal, url.searchParams.get('cursor'), Number(url.searchParams.get('limit') ?? 20));
@@ -152,6 +169,12 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'POST' && route === 'announcements') data = await service.saveAnnouncement(principal, null, await body(), key);
     else if (method === 'GET' && path[0] === 'announcements' && path.length === 2) data = await service.getAnnouncement(principal, path[1]);
     else if (method === 'PATCH' && path[0] === 'announcements' && path.length === 2) data = await service.saveAnnouncement(principal, path[1], await body(), key);
+    else if (path[0] === 'workspace' && path[1] === 'topics' && path.length === 4 && path[3] === 'share' && method === 'POST') data = await service.shareWorkspaceTopic(principal,path[2],await body(),key);
+    else if (path[0] === 'workspace' && path[1] === 'topic-shares' && path.length === 3 && method === 'GET') data = await service.readWorkspaceShare(principal,path[2]);
+    else if (route === 'workspace/topics' && method === 'GET') data = await service.workspaceTopics(principal);
+    else if (route === 'workspace/topics' && method === 'POST') data = await service.publishWorkspaceTopic(principal, null, await body(), key);
+    else if (path[0] === 'workspace' && path[1] === 'topics' && path.length === 3 && method === 'PATCH') data = await service.publishWorkspaceTopic(principal, path[2], await body(), key);
+    else if (path[0] === 'workspace' && path[1] === 'topics' && path.length === 3 && method === 'DELETE') data = await service.deleteWorkspaceTopic(principal, path[2], await body(), key);
     else if (route === 'learning/collections' && method === 'GET') data = await service.listTopicCollections(principal);
     else if (route === 'learning/collections' && method === 'POST') data = await service.saveTopicCollection(principal, null, await body(), key);
     else if (route === 'learning/collections/editable' && method === 'GET') data = await service.listEditableTopicCollections(principal);
@@ -226,6 +249,11 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'GET' && path[0] === 'collections' && path.length === 3 && path[2] === 'reflection-seed') data = await service.getCollectionReflectionSeed(principal, path[1]);
     else if (method === 'POST' && route === 'collections') data = await service.saveCollection(principal, null, await body(), key);
     else if (method === 'PATCH' && path[0] === 'collections' && path.length === 2) data = await service.saveCollection(principal, path[1], await body(), key);
+    else if (path[0]==='trainings' && path[2]==='discussion' && method==='GET' && path.length===3) data=await service.readTrainingDiscussion(principal,path[1]);
+    else if (path[0]==='trainings' && path[2]==='discussion' && ((method==='POST' && path.length===3) || (method==='PATCH' && path.length===4))) data=await service.writeTrainingDiscussion(principal,path[1],path[3] ?? null,await body(),key);
+    else if (method === 'POST' && route === 'material-assets') data=await service.reserveMaterialAsset(principal,await body(),key);
+    else if (method === 'PUT' && path[0] === 'material-assets' && path.length === 3 && path[2]==='content') data=await service.putMaterialAsset(principal,path[1],request,key);
+    else if (method === 'GET' && path[0] === 'material-assets' && path.length === 2) return await service.getMaterialAsset(principal,path[1],request.headers.get('Range'));
     else if (method === 'GET' && route === 'uploads/policy') data = await service.getUploadPolicy(principal);
     else if (method === 'GET' && path[0] === 'uploads' && path.length === 2) data = await service.getUpload(principal, path[1]);
     else if (method === 'GET' && route === 'uploads') data = await service.listUploads(principal, new URL(request.url).searchParams.get('cursor'));

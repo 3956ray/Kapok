@@ -17,9 +17,9 @@ export default async function RegistrationProfile({ searchParams }: { searchPara
   if (context.user?.principal.provider !== 'access') redirect(authEntryPath('register', returnTo));
   if (context.error || !context.me) redirect(authContinuationPath('register', returnTo));
   const state = authAccountState(context.me);
-  if (state === 'restricted') return <AuthLayout verifiedActorId={context.user.userId} title="账号暂不可用"><RestrictedAccount returnTo={returnTo} /></AuthLayout>;
+  if (state === 'restricted') return <AuthLayout register verifiedActorId={context.user.userId} title="账号暂不可用"><RestrictedAccount returnTo={returnTo} /></AuthLayout>;
   if (state === 'registered') redirect(authContinuationPath('register', returnTo));
-  return <AuthLayout title="让队友认出你">
+  return <AuthLayout register title="让队友认出你">
     <p>填写队友熟悉的盘名与背号，确认后加入 Kapok。</p>
     <JoinScreen actorId={context.user.userId} returnTo={returnTo} reverifyHref={authContinuationPath('register', returnTo)} />
     <SignOut actorId={context.user.userId} href={chatGPTSignOutPath()} switchEmail />

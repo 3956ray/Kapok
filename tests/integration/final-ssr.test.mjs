@@ -44,7 +44,7 @@ sitesTest('final C1 actual server-page SSR omits personalized business headings,
         for (const secret of ['private A name', 'private team', 'private training', 'private video', 'withdrawn body']) assert.ok(!html.includes(secret), path + ': ' + secret);
         assert.match(html, /data-kapok-sensitive[^>]*hidden/);
         if (path === '../../app/page.tsx' || path === '../../app/home/page.tsx') {
-            assert.match(html, /<time class="workspace-date" datetime="\d{4}-\d{2}-\d{2}" aria-label="[^"]+">/i);
+            assert.match(html, /data-bloom-workspace/);
         }
     }
 });
@@ -90,10 +90,16 @@ sitesTest('B route shells retain the main landmark and show workspace navigation
         const Page = (await import(`../../app/${route ? route + '/' : ''}page.tsx`)).default;
         const stream = await renderToReadableStream(await Page(params)); await stream.allReady;
         const html = await new Response(stream).text();
-        assert.match(html, /<main id="main-content" tabindex="-1">/, route);
-        assert.equal(html.includes('aria-label="主要导航"'), nav, route);
-        assert.equal(html.includes('aria-label="工作区导航"'), nav, route);
-        if (route === 'growth') assert.match(html, /<a\b(?=[^>]*class="[^"]*growth-compose[^"]*")(?=[^>]*aria-label="写复盘")(?=[^>]*href="\/reflections\/new")[^>]*>/);
+        assert.match(html, /<main\b[^>]*id="main-content"[^>]*tabindex="-1"[^>]*>/, route);
+        const legacyNavigation = ['me/data','me/recycle'].includes(route);
+        if (nav && !legacyNavigation) {
+            assert.match(html,/data-bloom-workspace/,route);
+            assert.match(html,/data-kapok-sensitive[^>]*hidden/,route);
+            assert.doesNotMatch(html,/class="mobile-drawer"|class="frame"|class="bottom-nav"/,route);
+        } else {
+            assert.equal(html.includes('aria-label="主要导航"'),legacyNavigation,route);
+            assert.equal(html.includes('aria-label="工作区导航"'),legacyNavigation,route);
+        }
         for (const secret of ['private A name', 'private team', 'synthetic-invite-token']) assert.ok(!html.includes(secret), route + ': ' + secret);
     }
 });
@@ -161,7 +167,10 @@ test('V2 account and detail shells opt in to compose only for active members', a
                 for (const [i, Page] of pages.entries()) {
                     const stream = await renderToReadableStream(await Page({ params: Promise.resolve({ id: 'resource' }) }));
                     const html = await new Response(stream).text();
-                    assert.equal(html.includes('class="workspace-compose"'), status === 'active' && i < 6, routes[i]);
+                    const workspaceEntry = status === 'active' && [0,3,4,5].includes(i);
+                    assert.equal(html.includes('data-bloom-workspace'),workspaceEntry,routes[i]);
+                    assert.equal(html.includes('class="workspace-compose"'),status === 'active' && [1,2].includes(i),routes[i]);
+                    if (workspaceEntry) assert.match(html,/data-kapok-sensitive[^>]*hidden/,routes[i]);
                     if (status === 'active' && i > 5) {
                         assert.match(html, /此页面仅管理员可访问/);
                         assert.doesNotMatch(html, /data-kapok-sensitive|<form/);
@@ -225,7 +234,7 @@ sitesTest('training management SSR denies direct member access and fixes the adm
         assert.match(denied, /此页面仅管理员可访问/);
         assert.doesNotMatch(denied, /data-kapok-sensitive/);
         const ordinary = await ssr(await TrainingPage({ params, searchParams: Promise.resolve({ view: ['member', 'member'] }) }));
-        assert.match(ordinary, /class="app-shell with-nav video-workspace" data-surface="video"/);
+        assert.match(ordinary, /data-bloom-workspace/);
         assert.match(ordinary, /data-kapok-sensitive/);
         assert.doesNotMatch(ordinary, /返回训练管理/);
         setServerMe(me);

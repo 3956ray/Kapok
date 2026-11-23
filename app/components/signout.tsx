@@ -11,13 +11,13 @@ import { registrationDraft } from '../../lib/client/registration-draft';
 
 const accountChangedMessage = '登录账号已变化，请重新加载。';
 
-export function SignOut({ actorId, href, switchEmail = false }: { actorId: string; href: string; switchEmail?: boolean }) {
+type LogoutProps = { actorId: string; href: string; switchEmail?: boolean };
+export function useSignOut({ actorId, href, switchEmail = false }: LogoutProps) {
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     const request = useRef<AbortController | null>(null);
     useLayoutEffect(() => () => request.current?.abort(), [actorId]);
-    return <>
-        <a href={href} target="_top" className="button secondary" aria-busy={busy} aria-disabled={busy || undefined} onClick={async e => {
+    async function logout(e: React.MouseEvent<HTMLAnchorElement>) {
             e.preventDefault();
             if (request.current) return;
             if (!window.confirm(switchEmail ? '更换邮箱需要退出当前登录，并清除当前账号在本机的草稿。确认更换？' : '退出登录会清理此账号在本机的未上云草稿。可取消并先保存记录。确认退出？')) return;
@@ -80,7 +80,16 @@ export function SignOut({ actorId, href, switchEmail = false }: { actorId: strin
                 return;
             }
             window.location.assign(href);
-        }}><LogOut size={17} aria-hidden="true" />{busy ? '正在确认当前账号…' : switchEmail ? '退出当前登录，换一个邮箱' : '退出当前登录'}</a>
+    }
+    return {logout,busy,error};
+}
+
+export function SignOut({actorId,href,switchEmail}: LogoutProps) {
+    const {logout,busy,error} = useSignOut({actorId,href,switchEmail});
+    return <>
+        <a href={href} target="_top" className="button secondary" aria-busy={busy} aria-disabled={busy || undefined} onClick={logout}>
+            <LogOut size={17} aria-hidden="true" />{busy ? '正在确认当前账号…' : switchEmail ? '退出当前登录，换一个邮箱' : '退出当前登录'}
+        </a>
         {error && <p className="form-error" role="alert">{error}</p>}
         {error === accountChangedMessage && <button type="button" className="secondary" onClick={() => window.location.reload()}>重新加载页面</button>}
     </>;

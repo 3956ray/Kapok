@@ -31,8 +31,9 @@ test('learning bookmarks and private reflection references survive upgrade, refr
     await db.prepare("INSERT INTO collections VALUES('old',?,'video','old-video',15,'旧收藏',7,?,?)").bind(readerId, date, date).run();
     const old = await db.prepare("SELECT * FROM collections WHERE id='old'").first();
     await migrate('0016_learning_private_sources.sql');
-    await migrate('0017_learning_activity.sql');
     assert.deepEqual(await db.prepare("SELECT * FROM collections WHERE id='old'").first(), old);
+
+    for (const file of (await readdir(directory)).filter(name=>name.endsWith('.sql') && name>'0016_learning_private_sources.sql').sort()) await migrate(file);
 
     const postFields = { kind: 'article', category: '战术', title: '公开资料标题', summary: '合成摘要', body: '第三方正文' };
     const postDraft = await s.saveLearningPost(author, null, postFields, 'post');

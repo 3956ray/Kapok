@@ -237,7 +237,7 @@ test('B growth a failed collection read does not turn into an empty or partial s
 
 test('B private note accepts only a current matching owner value, not a duplicate collection receipt',async()=>{
  for(const matching of [true,false]){setup();
-  data.collections=[{id:'saved',privateNote:matching?'本次备注':'以前的备注'}];
+  data.collections=[{id:'saved',sourceKind:'video',sourceId:'v',privateNote:matching?'本次备注':'以前的备注'}];
   override=(path,options)=>path==='collections'&&options.method==='POST'?response({id:'saved'}):null;
   try{
    await mount(VideoDiscussion);await input(document.querySelector('.private-note textarea'),' 本次备注 ');await click('保存私人备注');
@@ -248,7 +248,7 @@ test('B private note accepts only a current matching owner value, not a duplicat
 });
 test('discussion collection reconciles the owner note before claiming success or clearing new input',async()=>{
  for(const matching of [false,true]){setup();
-  data.collections=[{id:'saved-comment',privateNote:matching?'本次讨论备注':'以前的讨论备注'}];
+  data.collections=[{id:'saved-comment',sourceKind:'comment',sourceId:'c',privateNote:matching?'本次讨论备注':'以前的讨论备注'}];
   override=(path,options)=>path==='collections'&&options.method==='POST'?response({id:'saved-comment'}):null;
   try{
    await mount(VideoDiscussion);await click('加入成长');
@@ -331,7 +331,7 @@ test('B growth fresh source revalidation removes titles from visible and hidden 
 
 test('B reconciled duplicate private notes do not exhaust the pending budget or block unrelated saves',async()=>{
  setup();const {api}=await import('../../lib/client/api.ts');
- data.collections=[{id:'saved',privateNote:'已有私人备注'}];
+ data.collections=[{id:'saved',sourceKind:'video',sourceId:'v',privateNote:'已有私人备注'}];
  override=(path,options)=>path==='collections'&&options.method==='POST'?response({id:'saved'}):null;
  try{
   await mount(VideoDiscussion);
@@ -688,9 +688,9 @@ test('confirmed PATCH replay showing newer owner note keeps input editable for e
 test('new reflection route sanitizes collection IDs and gives collection precedence over external source hints',async()=>{
  const {setServerMe}=await import('../helpers/server-stubs.mjs');const {runWithSitesIdentity}=await import('../../lib/server/request-identity.ts');const Page=(await import('../../app/reflections/new/page.tsx')).default;const NewReflection=props=>runWithSitesIdentity(()=>Page(props));setServerMe(me);
  const converted=await NewReflection({searchParams:Promise.resolve({collection:'saved',training:'untrusted',video:'untrusted'})});
- assert.equal(converted.props.children.props.collectionId,'saved');assert.equal(converted.props.children.props.trainingId,undefined);assert.equal(converted.props.children.props.videoId,undefined);
- const normal=await NewReflection({searchParams:Promise.resolve({training:'tr',video:'v'})});assert.equal(normal.props.children.props.trainingId,'tr');assert.equal(normal.props.children.props.videoId,'v');
- for(const collection of ['bad/id',['one','two'],'x'.repeat(81)]){const invalid=await NewReflection({searchParams:Promise.resolve({collection,training:'untrusted'})});assert.equal(invalid.props.children.props.collectionId,undefined);assert.equal(invalid.props.children.props.trainingId,undefined);}
+ assert.equal(converted.props.path,'/notes/new?collection=saved');
+ const normal=await NewReflection({searchParams:Promise.resolve({training:'tr',video:'v'})});assert.equal(normal.props.path,'/notes/new?training=tr&video=v');
+ for(const collection of ['bad/id',['one','two'],'x'.repeat(81)]){const invalid=await NewReflection({searchParams:Promise.resolve({collection,training:'untrusted'})});assert.equal(invalid.props.path,'/notes/new');}
  setServerMe({user:null,profile:null,membership:null});const gated=await NewReflection({searchParams:Promise.resolve({collection:'saved',training:'ignored'})});assert.equal(gated.props.children.props.returnTo,'/reflections/new?collection=saved');setServerMe(undefined);
 });
 
@@ -890,14 +890,14 @@ test('account UI allows only the own preview route in return and navigation stat
 });
 
 
-test('U1 return targets allow only learning root and supported growth filters', () => {
- for(const target of ['/learn','/growth?filter=bookmarks','/growth?filter=reflections']) assert.equal(safeReturnTo(target),target);
- for(const target of ['/learn/mine','/learn/posts/x','/learn?tab=contents','/growth?filter=all','/growth?filter=unknown','/growth?filter=bookmarks&filter=reflections','/growth?filter=bookmarks&filter=bookmarks','/growth?filter=bookmarks&returnTo=https://evil.test','https://evil.test/learn','//evil.test/learn','/learn%2Fmine']) assert.equal(safeReturnTo(target),'/');
+test('U1 return targets retain supported learning pages and valid growth filters', () => {
+ for(const target of ['/learn','/learn/mine','/learn/posts/x','/learn?tab=contents','/growth?filter=bookmarks','/growth?filter=reflections']) assert.equal(safeReturnTo(target),target);
+ for(const target of ['/learn/other','/learn/posts/x/other','/learn?tab=invalid','/growth?filter=all','/growth?filter=unknown','/growth?filter=bookmarks&filter=reflections','/growth?filter=bookmarks&filter=bookmarks','/growth?filter=bookmarks&returnTo=https://evil.test','https://evil.test/learn','//evil.test/learn','/learn%2Fmine']) assert.equal(safeReturnTo(target),'/');
 });
 
 test('U1 controlled back keeps the approved growth filter and learning source only',async()=>{
  const {confirmNavigationActor,controlledBackSource,clearNavigationActor}=await import('../../lib/client/navigation-state.ts');
- for(const [source,expected] of [['/growth?filter=bookmarks','/growth?filter=bookmarks'],['/growth?filter=reflections','/growth?filter=reflections'],['/growth?filter=unknown','/growth'],['/growth?filter=bookmarks&filter=bookmarks','/growth'],['/learn','/learn'],['/learn/mine',null]]){
+ for(const [source,expected] of [['/growth?filter=bookmarks','/growth?filter=bookmarks'],['/growth?filter=reflections','/growth?filter=reflections'],['/growth?filter=unknown','/growth'],['/growth?filter=bookmarks&filter=bookmarks','/growth'],['/learn','/learn'],['/learn/mine','/learn/mine'],['/learn/other',null]]){
   setup(source);confirmNavigationActor('A','u1');
   const link=document.createElement('a');link.href='/reflections/u1';document.body.append(link);
   link.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true,cancelable:true}));link.remove();

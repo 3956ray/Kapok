@@ -816,3 +816,85 @@ test('final I5 inactive me/bootstrap omit all business fields while active-left 
     assert.deepEqual(await s.me(author), minimal);
     assert.deepEqual((await s.getBootstrap(author)).me, minimal);
 });
+
+test('new workspace reads existing reflections and bookmarks and safely retries an interrupted team publication', async t => {
+    const { loadGrowth, loadNote, saveNote, prepareSave, bookmark, editRemark, removeBookmark } = await import('../../app/workspace-ui/growth.js');
+    const { s, db } = await fixture(t);
+    async function context(principal) {
+        const actor = await actorKey(principal);
+        const request = async (path, method = 'GET', input, key = crypto.randomUUID()) => {
+            const url = new URL('/api/v1/' + path, 'https://kapok.test');
+            const r = await dispatchApi(new Request(url, {method,
+                headers: {'X-Kapok-Actor':actor, Origin:url.origin, 'Idempotency-Key':key, 'Content-Type':'application/json'},
+                ...(input ? {body:JSON.stringify(input)} : {})}), path.split('/'), principal, s);
+            const payload = await r.json();
+            if (!r.ok) throw Object.assign(new Error(payload.error.message), payload.error);
+            return payload.data;
+        };
+        return {read: path => request(path), write: request};
+    }
+    const mine = await context(author), other = await context(member);
+    assert.deepEqual((await s.workspaceDispatch(member,null)).items, []);
+    assert.deepEqual(await other.read('workspace/export-assets'), []);
+    const existing = await s.saveReflection(author, null, content, 'legacy');
+    const old = await loadNote(mine, existing.id);
+    assert.equal(old.ownerId, 'me');
+    assert.equal(old.body, content.text);
+    assert.equal(old.category, undefined);
+    await assert.rejects(loadNote(other, existing.id));
+    const input = {title:'新版手记', body:'边线观察', category:'战术判断', scope:'team'};
+    assert.equal(prepareSave(input,null,{},'2026-11-23').publish,false);
+    const operation = prepareSave({...input,publish:true}, null, {trainingId:null,videoId:null}, '2026-11-23');
+    let lost = false;
+    const interrupted = {...mine, write: async (...args) => {
+        const receipt = await mine.write(...args);
+        if (!lost && args[0].endsWith('/grants')) { lost=true; throw Error('response lost'); }
+        return receipt;
+    }};
+    await assert.rejects(saveNote(interrupted, operation), /response lost/);
+    const result = await saveNote(mine, operation);
+    assert.equal((await loadNote(other,result.id)).category, '战术判断');
+    assert.equal((await s.listActivity(member)).items.some(row=>row.href==='/reflections/'+result.id), true);
+    assert.equal((await loadGrowth(mine)).notes.length,2);
+    assert.equal((await loadGrowth(other)).notes.length,0);
+    const training = await s.saveTraining(admin,null,{title:'整场训练',description:'',date:content.date,status:'published'}, 'new-training');
+    await bookmark(mine,{kind:'training',id:training.id});
+    let saved = (await loadGrowth(mine)).saved[training.id];
+    assert.equal(saved.title,'整场训练');
+    await editRemark(mine,saved,'私人观察');
+    await assert.rejects(editRemark(mine,saved,'旧版本覆盖'));
+    assert.equal((await loadGrowth(other)).saved[training.id],undefined);
+    await db.prepare("UPDATE trainings SET status='draft' WHERE id=?").bind(training.id).run();
+    saved = (await loadGrowth(mine)).saved[training.id];
+    assert.equal(saved.missing,true);
+    assert.equal(saved.note,'私人观察');
+    await removeBookmark(mine,saved);
+    assert.equal((await loadGrowth(mine)).saved[training.id],undefined);
+});
+
+test('workspace resumes earlier local drafts under the same actor and retains the original source and receipt', async () => {
+    const { listDeviceDrafts } = await import('../../lib/client/reflection-draft.ts');
+    const { draftKey } = await import('../../lib/client/session-guard.ts');
+    const { reflectionSeedPath } = await import('../../app/workspace-ui/growth.js');
+    const body = { title:'旧草稿',text:'仅本人',date:'2026-11-15',trainingId:null,videoId:null };
+    const draft = { ...body, trainingId:'',videoId:'',schema:1,updatedAt:'2026-11-15', cloud:null,
+        pending:{ key:'original-save-key', targetId:null,body } };
+    const entries = new Map([
+        [draftKey('a','bad'),'{'],
+        [draftKey('a','collection:old-id'),JSON.stringify(draft)],
+        [draftKey('b','new'),JSON.stringify(draft)],
+        [draftKey('a','bloom-notes'),JSON.stringify({})],
+    ]);
+    const storage = { length:entries.size, key:i=>[...entries.keys()][i], getItem:k=>entries.get(k) };
+    assert.deepEqual(listDeviceDrafts(storage,'a'),[
+        {href:'/reflections/new?collection=old-id',title:draft.title,updatedAt:draft.updatedAt,pending:true},
+    ]);
+    assert.deepEqual(JSON.parse(entries.get(draftKey('a','collection:old-id'))).pending,draft.pending);
+    for (const [query, endpoint] of [
+        ['collection=saved-id','collections/saved-id/reflection-seed'],
+        ['video=clip&training=field','videos/clip'],
+        ['training=field',null],
+        ['sourceKind=topic_collection&sourceId=volume','learning/collections/volume/reflection-seed'],
+        ['sourceKind=learning_post&sourceId=post','learning/posts/post/reflection-seed'],
+    ]) assert.equal(reflectionSeedPath(new URLSearchParams(query)),endpoint);
+});
