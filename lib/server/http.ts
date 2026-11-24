@@ -281,6 +281,11 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'GET' && path[0] === 'collections' && path.length === 3 && path[2] === 'reflection-seed') data = await service.getCollectionReflectionSeed(principal, path[1]);
     else if (method === 'POST' && route === 'collections') data = await service.saveCollection(principal, null, await body(), key);
     else if (method === 'PATCH' && path[0] === 'collections' && path.length === 2) data = await service.saveCollection(principal, path[1], await body(), key);
+    else if ((path[0]==='reflections' || path[0]==='announcements') && path[2]==='discussion' && method==='GET' && path.length===3)
+      data=await service.readReaderDiscussion(principal,path[0]==='reflections' ? 'reflection' : 'announcement',path[1]);
+    else if ((path[0]==='reflections' || path[0]==='announcements') && path[2]==='discussion' &&
+        ((method==='POST' && path.length===3) || (method==='PATCH' && path.length===4)))
+      data=await service.writeReaderDiscussion(principal,path[0]==='reflections' ? 'reflection' : 'announcement',path[1],path[3] ?? null,await body(),key);
     else if (path[0]==='trainings' && path[2]==='discussion' && method==='GET' && path.length===3) data=await service.readTrainingDiscussion(principal,path[1]);
     else if (path[0]==='trainings' && path[2]==='discussion' && ((method==='POST' && path.length===3) || (method==='PATCH' && path.length===4))) data=await service.writeTrainingDiscussion(principal,path[1],path[3] ?? null,await body(),key);
     else if (method === 'PUT' && path[0]==='workspace' && path[1]==='note-images' && path[3]==='content' && path.length===4)

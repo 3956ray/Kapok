@@ -1,3 +1,4 @@
+import { DiscussionPanel } from './discussion-panel.jsx';
 import { IllustratedNote, NotePictureEditor } from './note-pictures';
 import { notePhotos } from './note-layout.js';
 import { persistPrivateLayout, readPrivateLayout, savedParts, saveIllustratedNote, cancelDetachedNoteImages, discardLocalDraftFiles } from './note-image-store.js';
@@ -15,7 +16,7 @@ import {
   Tag,
   Trash2,
 } from 'lucide-react';
-import { Back, DeleteAction, Empty, IconButton, Modal, PageHead, Segments, usePreference, WriteNoteIcon } from './ui';
+import { Back, DeleteAction, Empty, IconButton, Modal, PageHead, Segments, Tip, usePreference, WriteNoteIcon } from './ui';
 import { NavLink, useNav, useTitle } from './router';
 import { day, eventTime, localDay, useData } from './store';
 import { DateMark, FieldPrint, fieldPhoto } from './press';
@@ -637,7 +638,9 @@ export function NoteDetail({ n }) {
           </span>
           <span>
             {n.author || db.profile.name}
-            <small>{n.scope === 'team' ? '队内可读' : '仅自己可见'}</small>
+            <small>{n.scope === 'team' ? '队内可读' : '仅自己可见'}
+              {n.ownerId === 'me' && <> · <NavLink className="reader-sharing" to={'/notes/' + encodeURIComponent(n.id) + '/sharing'}>分享设置</NavLink></>}
+            </small>
           </span>
           {n.ownerId !== 'me' && <IconButton icon={Bookmark}
             label={db.saved['reflection:' + n.id] ? '移除收藏' : '收藏复盘'}
@@ -652,14 +655,14 @@ export function NoteDetail({ n }) {
             }} />}
           {n.ownerId === 'me' && (
             <div className="detail-management">
-            <NavLink className="btn" to={'/notes/' + encodeURIComponent(n.id) + '/sharing'}>分享设置</NavLink>
-            <NavLink className="btn" to={'/notes/' + n.id + '/edit'}>
-              <Pencil size={15} />
-              编辑
-            </NavLink>
-            <DeleteAction label="删除复盘" title={n.title} description={n.scope === 'team'
-              ? '将从成长记录和队内动态移除，原来的复盘链接也将失效。' : '将从你的成长记录中移除。'}
-              onDelete={() => deleteNote(n)} to="/growth" />
+              <Tip label="编辑复盘">
+                <NavLink className="icon-button" aria-label="编辑复盘" to={'/notes/' + encodeURIComponent(n.id) + '/edit'}>
+                  <Pencil size={18} aria-hidden="true" />
+                </NavLink>
+              </Tip>
+              <DeleteAction iconOnly label="删除复盘" title={n.title} description={n.scope === 'team'
+                ? '将从成长记录和队内动态移除，原来的复盘链接也将失效。' : '将从你的成长记录中移除。'}
+                onDelete={() => deleteNote(n)} to="/growth" />
             </div>
           )}
         </div>
@@ -684,6 +687,7 @@ export function NoteDetail({ n }) {
           <ArrowUpRight size={21} />
         </NavLink>
       )}
+      {n.scope === 'team' && <DiscussionPanel kind="reflection" id={n.id} />}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { DiscussionPanel } from './discussion-panel.jsx';
 import { TextLinks } from '../components/learning-text';
 import { useEffect, useRef, useState } from 'react';
 import { DateMark } from './press';
@@ -76,5 +77,6 @@ export function AnnouncementReader({ id }) {
         <p><TextLinks text={article.text}/></p>
       </div>
     </article>
+    {article.status === 'published' && <DiscussionPanel kind="announcement" id={article.id} />}
   </div>;
 }

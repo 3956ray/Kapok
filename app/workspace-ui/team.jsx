@@ -39,7 +39,8 @@ function dispatchRow(row) {
   const params=new URLSearchParams({comment:row.comment});
   if(row.video)params.set('video',row.video);
   if(row.key.startsWith('tc:'))params.set('thread','training');
-  return {...row,type:'讨论',title:row.snippet,t:{id:row.source,title:row.title},href:'/trainings/'+id+'?'+params};
+  const section = row.kind === 'reflection_discussion' ? 'notes' : row.kind === 'announcement_discussion' ? 'announcements' : 'trainings';
+  return {...row,type:'讨论',title:row.snippet,t:{id:row.source,title:row.title || (section==='notes' ? '无标题复盘' : '')},href:'/'+section+'/'+id+'?'+params};
 }
 export function Activity() {
   useTitle('队内动态');

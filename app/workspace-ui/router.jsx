@@ -25,10 +25,12 @@ function index() {
   return Number.isInteger(history.state?.kapokIndex) ? history.state.kapokIndex : 0;
 }
 
+const hasDiscussion = pathname => /^\/(?:trainings|notes|announcements|notices)\/[^/]+$/.test(pathname);
+
 function commentTarget(path) {
   const url = new URL(path, 'http://kapok.local');
   const id = url.searchParams.get('comment');
-  const element = id && url.pathname.startsWith('/trainings/') ? document.getElementById('comment-' + id) : null;
+  const element = id && hasDiscussion(url.pathname) ? document.getElementById('comment-' + id) : null;
   // A cold or stale feed may replace its unavailable notice with the actual reply.
   return element?.hasAttribute('data-comment-unavailable') ? null : element;
 }
@@ -45,7 +47,7 @@ function focusComment(el) {
 // A shared discussion can arrive after the route's first render.
 function followComment(path) {
   const url = new URL(path, 'http://kapok.local');
-  if (!url.pathname.startsWith('/trainings/') || !url.searchParams.get('comment')) return null;
+  if (!hasDiscussion(url.pathname) || !url.searchParams.get('comment')) return null;
   const target = commentTarget(path);
   if (target) {
     focusComment(target);

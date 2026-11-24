@@ -183,6 +183,13 @@
       "when": 1795660000005,
       "tag": "0027_reflection_image_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1795660000006,
+      "tag": "0028_reader_discussions",
+      "breakpoints": true
     }
   ]
 }

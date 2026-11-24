@@ -47,6 +47,7 @@ const migrations = [
   "0025_workspace_topic_covers.sql",
   "0026_reflection_photos.sql",
   "0027_reflection_image_cleanup.sql",
+  "0028_reader_discussions.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
@@ -220,9 +221,9 @@ test("missing or wrong Access configuration and unavailable keys deny the valid 
   assert.equal(fetches, 1);
 });
 
-async function migratedDb(app) {
+async function migratedDb(app, files = migrations) {
   const db = await app.getD1Database("DB");
-  for (const name of migrations) {
+  for (const name of files) {
     const sql = readFileSync(path.join(migrationDir, name), "utf8");
     await db.batch(sql.split("--> statement-breakpoint").map(statement => statement.trim()).filter(Boolean).map(statement => db.prepare(statement)));
   }
@@ -430,4 +431,41 @@ test("deployed Worker runs the orphan sweep on its configured cron with no membe
   assert.equal(event.status,200,await event.text());
   assert.equal(await bucket.head(key),null);
   assert.equal(await bucket.head(key+"/thumbnail"),null);
+});
+
+test("0028 retains existing grants and publication state, and the deployed reader discussion routes bind the current generation",async t=>{
+  const app=start(t,{bindings:{...bindings,ACCESS_INITIAL_ADMIN_EMAIL:principal.verifiedEmail}});
+  const db=await migratedDb(app,migrations.slice(0,-1));
+  const jwt=await assertion(), actor=await actorKey(principal);
+  const api=async(path,method="GET",body)=>{
+    const response=await app.dispatchFetch(origin+"/api/v1/"+path,{method,body:body===undefined ? undefined : JSON.stringify(body),
+      headers:{"Cf-Access-Jwt-Assertion":jwt,Origin:origin,"Content-Type":"application/json","X-Kapok-Actor":actor,"Idempotency-Key":crypto.randomUUID()}});
+    return {status:response.status,...await response.json()};
+  };
+  assert.equal((await api("join","POST",{intent:"register",confirmed:true,discName:"合成测试",jerseyNumber:"11"})).status,200);
+  const {data:note}=await api("reflections","POST",{title:"合成复盘",text:"正文",date:"2026-11-24"});
+  const {data:shared}=await api("reflections/"+note.id+"/grants","PUT",{scope:"team",expectedVersion:note.version,
+    expectedSharingVersion:note.sharingVersion,expectedGeneration:note.generation});
+  const {data:notice}=await api("announcements","POST",{title:"合成公告",text:"正文",status:"published"});
+  const rows=async()=>({
+    note:await db.prepare('SELECT version,sharing_version,generation,gate,scope,published_at,text FROM reflections WHERE id=?').bind(note.id).first(),
+    notice:await db.prepare('SELECT version,status,published_at,text FROM announcements WHERE id=?').bind(notice.id).first()
+  });
+  const before=await rows();
+  const sql=readFileSync(path.join(migrationDir,"0028_reader_discussions.sql"),"utf8");
+  await db.batch(sql.split("--> statement-breakpoint").map(stmt=>db.prepare(stmt.trim())));
+  assert.deepEqual(await rows(),before);
+  for(const prefix of ["reflections/"+shared.id,"announcements/"+notice.id]) {
+    const route=prefix+"/discussion";
+    const read=await api(route);
+    assert.equal(read.status,200);
+    assert.deepEqual(read.data.items,[]);
+    const fence={expectedDiscussionEpoch:read.data.discussionEpoch,expectedMembershipEpoch:read.data.membershipEpoch};
+    assert.equal(fence.expectedDiscussionEpoch,1);
+    const written=await api(route,"POST",{...fence,text:"合成评论"});
+    assert.equal(written.status,200);
+    assert.equal((await api(route)).data.items[0].id,written.data.id);
+    assert.equal((await api(route+"/"+written.data.id,"PATCH",{...fence,action:"delete",expectedVersion:1})).status,200);
+  }
+  assert.deepEqual((await db.prepare("PRAGMA foreign_key_check").all()).results,[]);
 });

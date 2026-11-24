@@ -7,33 +7,60 @@ import { Avatar, Modal } from './ui';
 
 import { isReferenceSecond, maxTimepoints, parseTimeLabel, referenceTimeError, timeLabel } from './timepoints.js';
 import { ReferenceTime } from './reference-time.jsx';
-import { discussionSources, readDiscussion } from './discussion-sources.js';
+import { discussionSources, isReaderDiscussion, readDiscussion, readReaderDiscussion } from './discussion-sources.js';
 
-export default function Discussion(props) {
-  const { t } = props;
-  return <DiscussionThread key={[t.kind, t.id, t.selectedVideo?.id].join(':')} {...props}/>;
+export default function Discussion({ t, subject = t, ...media }) {
+  return <DiscussionResource key={[subject.kind, subject.id, subject.selectedVideo?.id].join(':')} item={subject} {...media} />;
 }
-function DiscussionThread({ t, mediaKey, measure, capture, play }) {
-  const { duration } = measure;
+
+function DiscussionResource({ item, mediaKey, ...media }) {
+  const { ctx } = useData();
+  const { params } = useNav();
+  const selected = params.get('comment');
+  const videoId = item.selectedVideo?.id;
+  const sources = useMemo(() => discussionSources(item.kind, item.id, videoId, item.publishedVersion),
+    [item.kind, item.id, videoId, item.publishedVersion]);
+  const reader = isReaderDiscussion(item.kind);
+  const [view, setView] = useState(null);
+  const [revision, setRevision] = useState(0);
+  function reload(invalidate = false) {
+    if (invalidate) setView(null);
+    setRevision(n => n + 1);
+  }
+  useEffect(() => {
+    const abort = new AbortController();
+    const reading = reader ? readReaderDiscussion(ctx, sources[0], abort.signal)
+      : readDiscussion(ctx, sources, mediaKey, abort.signal).then(rows => ({ rows }));
+    reading.then(result => {
+      if (!abort.signal.aborted) setView({ ctx, sources, ...result });
+    }).catch(error => { if (!abort.signal.aborted) setView({ ctx, sources, error }); });
+    return () => abort.abort();
+  }, [ctx, sources, mediaKey, revision, reader]);
+  const current = view?.ctx === ctx && view.sources === sources ? view : null;
+  if (reader && !current?.expected) {
+    if (['FORBIDDEN', 'NOT_FOUND'].includes(current?.error?.code)) {
+      return selected ? <p id={'comment-' + selected} tabIndex={-1} data-comment-unavailable="" role="status">这条留言暂不可用。</p> : null;
+    }
+    return <section className="discussion" aria-busy={!current}>
+      <h2>队内讨论</h2>
+      {current?.error ? <p role="alert">{current.error.message} <button type="button" onClick={() => reload()}>重试</button></p>
+        : <p role="status">正在读取留言…</p>}
+    </section>;
+  }
+  // A newly readable publication or membership gets a new composer, including a new idempotency key.
+  const epoch = current?.expected;
+  return <DiscussionThread key={epoch ? epoch.expectedDiscussionEpoch + ':' + epoch.expectedMembershipEpoch : 'material'}
+    item={item} sources={sources} view={current} reload={reload} selected={selected} mediaKey={mediaKey} {...media} />;
+}
+
+function DiscussionThread({ item, sources, view, reload, selected, mediaKey, measure, capture, play }) {
+  const duration = measure?.duration;
   const { db, ctx, notify } = useData();
   const people = useRoster();
-  const videoId = t.selectedVideo?.id;
-  const sources = useMemo(() => discussionSources(t.kind, t.id, videoId, t.publishedVersion),
-    [t.kind, t.id, videoId, t.publishedVersion]);
-  const [view,setView]=useState(null);
-  const [refresh,setRefresh]=useState(0);
-  const readOnly=t.kind==='training' && t.status!=='published';
-  useEffect(()=>{
-    const abort=new AbortController();
-    readDiscussion(ctx,sources,mediaKey,abort.signal).then(rows=>{
-      if (!abort.signal.aborted) setView({ctx,sources,rows});
-    }).catch(error=>{if (!abort.signal.aborted) setView({ctx,sources,error:error.message});});
-    return ()=>abort.abort();
-  },[ctx,sources,mediaKey,refresh]);
-  const current=view?.ctx===ctx && view.sources===sources ? view : null;
-  const catalogReady=!!current,sharesError=current?.error;
-  const comments=current?.rows ?? [];
-  const { params } = useNav();
+  const reader = isReaderDiscussion(item.kind);
+  const readOnly = item.kind === 'training' && item.status !== 'published';
+  const catalogReady = !!view, sharesError = view?.error?.message;
+  const comments = view?.rows ?? [];
   const [replyId, selectReply] = useState(null);
   const reply=comments.find(c=>c.id===replyId && c.status==='active');
   const destination = reply?.source ?? sources[0];
@@ -107,8 +134,6 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
   const pending = useRef(null);
   const inFlight = useRef(false);
   const mounted = useRef(false);
-  const selected = params.get('comment');
-
   const threads = new Map();
   for (const c of comments) {
     const id = c.root || c.id;
@@ -132,19 +157,19 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
   async function add(e) {
     e.preventDefault();
     const body = text.trim();
-    if (inFlight.current || (replyId && !reply)) return;
+    if (inFlight.current || !catalogReady || sharesError || readOnly || (replyId && !reply)) return;
     const seconds = requestedTimes();
     if (!seconds || (!body && !seconds.length)) return;
     const root = reply ? reply.root || reply.id : null;
-    const payload={text:body,...(root && {rootId:root,replyToId:reply.id}),
-      ...(seconds.length && {timestampSec:seconds[0],referenceTimes:seconds,...(destination.kind === 'post' && {mediaUrl:t.video?.url || mediaKey})})};
+    const payload={text:body,...view.expected,...(root && {rootId:root,replyToId:reply.id}),
+      ...(seconds.length && {timestampSec:seconds[0],referenceTimes:seconds,...(destination.kind === 'post' && {mediaUrl:item.video?.url || mediaKey})})};
     const signature=JSON.stringify([destination.write,payload]);
     if (pending.current?.signature!==signature) pending.current={id:uid(),signature};
     inFlight.current=true;
     setError(''); setSending(true);
     try {
       await ctx.write(destination.write,'POST',payload,pending.current.id);
-      setRefresh(n=>n+1);
+      reload();
       pending.current = null;
       if (mounted.current) {
         setReply(null);
@@ -154,6 +179,11 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
       }
       notify(root ? '回复已发布' : '讨论已发布');
     } catch (err) {
+      if (reader && ['FORBIDDEN', 'NOT_FOUND', 'VERSION_CONFLICT', 'READ_ONLY'].includes(err.code)) {
+        notify(err.message || '留言权限已变化，请重新确认。');
+        reload(true);
+        return;
+      }
       const message = err.message || '讨论暂时无法发布，请重试。';
       if (mounted.current) setError(message);
       else notify(message);
@@ -168,14 +198,19 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
     setDeleting(true);
     setDeleteError('');
     try {
-      await ctx.write(removing.source.write+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version});
-      setRefresh(n=>n+1);
+      await ctx.write(removing.source.write+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version,...view.expected});
+      reload();
       if (mounted.current) {
         setRemoving(null);
         requestAnimationFrame(() => heading.current?.focus({ preventScroll: true }));
       }
       notify('评论已删除');
     } catch (err) {
+      if (reader && ['FORBIDDEN', 'NOT_FOUND', 'VERSION_CONFLICT', 'READ_ONLY'].includes(err.code)) {
+        notify(err.message || '留言权限已变化，请重新确认。');
+        reload(true);
+        return;
+      }
       const message = err.message || '删除失败，请重试。';
       if (mounted.current) setDeleteError(message);
       else notify(message);
@@ -222,7 +257,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
             <button
               type="button"
               className="reply-button"
-              disabled={sending || readOnly || c.status!=='active' || (c.root && threads.get(c.root)?.root?.status!=='active')}
+              disabled={sending || readOnly || c.status!=='active' || (!reader && c.root && threads.get(c.root)?.root?.status!=='active')}
               onClick={() => {
                 setReply(c);
                 input.current?.focus();
@@ -256,7 +291,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
         <h2 id="discussion-heading" ref={heading} tabIndex={-1}>队内讨论</h2>
         <span className="count">{comments.length}</span>
       </div>
-      {sharesError && <p role="alert">{sharesError} <button onClick={()=>setRefresh(n=>n+1)}>重试</button></p>}
+      {sharesError && <p role="alert">{sharesError} <button onClick={() => reload()}>重试</button></p>}
       {selected && catalogReady && !sharesError && !threads.has(selected) && !comments.some((c) => c.id === selected) && (
         <p id={'comment-' + selected} data-comment-unavailable="" tabIndex={-1} role="status" className="removed-comment">
           这条评论已删除或暂不可用。
@@ -272,7 +307,7 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
           </div>
         ))
       ) : (
-        <p className="quiet-box">还没有讨论。可以记下观察到的动作，和队友聊聊。</p>
+        <p className="quiet-box">{reader ? '还没有留言。' : '还没有讨论。可以记下观察到的动作，和队友聊聊。'}</p>
       )}
       <form onSubmit={add} className="comment-form" aria-busy={sending}>
         {replyId && !reply && <p role="status">原评论已不可回复。<button type="button" onClick={()=>setReply(null)}>取消回复</button></p>}
@@ -303,7 +338,8 @@ function DiscussionThread({ t, mediaKey, measure, capture, play }) {
             maxLength={1000}
             readOnly={sending}
             aria-describedby={error ? 'discussion-error' : undefined}
-            placeholder={reply ? '写下回复…' : '说说你观察到的细节…'}
+            placeholder={reply ? '写下回复…' : item.kind === 'reflection' ? '聊聊这篇复盘…'
+              : item.kind === 'announcement' ? '关于这条公告，你想说什么？' : '说说你观察到的细节…'}
             value={text}
             onChange={(e) => {
               setText(e.target.value);

@@ -145,6 +145,9 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
                 CASE WHEN d.status='active' THEN d.body END AS text,d.status,d.created_at AS createdAt
                 FROM training_discussions d JOIN owner o ON o.id=d.author_id ORDER BY d.created_at,d.id`),
             owned(`SELECT t.id,t.title,t.date,t.description,t.status FROM trainings t JOIN owner o ON o.id=t.publisher_id ORDER BY t.date DESC,t.id`),
+            owned(`SELECT d.id,d.source_kind AS sourceKind,d.source_id AS sourceId,d.root_id AS rootId,d.reply_to_id AS replyToId,
+                CASE WHEN d.status='active' THEN d.body END AS text,d.status,d.created_at AS createdAt
+                FROM reader_discussions d JOIN owner o ON o.id=d.author_id ORDER BY d.created_at,d.id`),
         ]);
         const profile = result[0].results[0] as PersonalExport['profile'] | undefined;
         if (!profile) throw new DomainError('FORBIDDEN', '账号状态已变化，请重新确认。', 403);
@@ -163,6 +166,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             trainings:result[11].results as PersonalExport['trainings'],
             materialAssets:result[9].results as PersonalExport['materialAssets'],
             trainingDiscussions:result[10].results as PersonalExport['trainingDiscussions'],
+            readerDiscussions:result[12].results as PersonalExport['readerDiscussions'],
             generatedAt: clock().toISOString(),
             profile: profile.avatar ? profile : {discName:profile.discName,jerseyNumber:profile.jerseyNumber,bio:profile.bio},
             reflections: availability<PersonalExport['reflections'][number] & {storedPhotos:string;pendingPhotos:number;photoVersion:number;photoSharingVersion:number;photoGeneration:number}>(result[1].results)

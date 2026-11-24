@@ -69,6 +69,7 @@ export type PersonalExport = {
     trainings: {id:string; title:string; date:string; description:string; status:string}[];
     materialAssets: {id:string; parentKind:'training'|'post'; parentId:string; mimeType:string; bytes:number; createdAt:string}[];
     trainingDiscussions: {id:string; trainingId:string; rootId:string|null; replyToId:string|null; text:string|null; status:string; createdAt:string}[];
+    readerDiscussions: {id:string; sourceKind:'reflection'|'announcement'; sourceId:string; rootId:string|null; replyToId:string|null; text:string|null; status:string; createdAt:string}[];
 };
 
 export type ExportedImageReference = { id: string; position: number; alt: string; decorative: boolean };

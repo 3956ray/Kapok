@@ -838,7 +838,7 @@ export function createReflectionService({
                 boundary = decoded;
             } catch { throw new DomainError('INVALID_INPUT', '动态分页位置无效。'); }
         }
-        // D1 limits a compound SELECT to five terms. Materialize reflections and both training discussion sources separately.
+        // D1 limits a compound SELECT to five terms. Keep the five reflection and discussion sources together.
         const { results } = await q(`WITH first_sources AS MATERIALIZED (
             SELECT 'n:'||r.id AS key,'reflection' AS kind,r.id AS source,r.title,substr(r.text,1,160) AS snippet,
                 p.disc_name AS who,r.published_at AS date,NULL AS video,NULL AS comment FROM reflections r
@@ -850,6 +850,14 @@ export function createReflectionService({
             UNION ALL SELECT 'tc:'||d.id,'discussion',t.id,t.title,substr(d.body,1,160),p.disc_name,d.created_at,NULL,d.id
                 FROM training_discussions d JOIN trainings t ON t.id=d.training_id JOIN profiles p ON p.user_id=d.author_id
                 WHERE t.team_id=? AND t.status IN ('published','archived') AND d.status='active'
+            UNION ALL SELECT 'rc:'||d.id,'reflection_discussion',r.id,r.title,substr(d.body,1,160),p.disc_name,d.created_at,NULL,d.id
+                FROM reader_discussions d JOIN reflections r ON r.id=d.source_id AND r.team_id=d.team_id AND r.discussion_epoch=d.discussion_epoch
+                JOIN profiles p ON p.user_id=d.author_id
+                WHERE d.source_kind='reflection' AND d.status='active' AND r.team_id=? AND r.published_at IS NOT NULL AND ${reflectionShared}
+            UNION ALL SELECT 'ac:'||d.id,'announcement_discussion',a.id,a.title,substr(d.body,1,160),p.disc_name,d.created_at,NULL,d.id
+                FROM reader_discussions d JOIN announcements a ON a.id=d.source_id AND a.team_id=d.team_id AND a.discussion_epoch=d.discussion_epoch
+                JOIN profiles p ON p.user_id=d.author_id
+                WHERE d.source_kind='announcement' AND d.status='active' AND a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
             ) SELECT feed.*, CASE WHEN feed.kind='reflection' THEN json_array_length(note.photos) END AS photoCount,
                 CASE WHEN feed.kind='reflection' AND json_array_length(note.photos)>0
                      THEN '/api/v1/reflections/'||note.id||'/images/'||note.version||'-'||note.sharing_version||'-'||note.generation||'/'||
@@ -871,7 +879,9 @@ export function createReflectionService({
                 FROM announcements a WHERE a.team_id=? AND a.status='published' AND a.published_at IS NOT NULL
             ) feed LEFT JOIN reflections note ON feed.kind='reflection' AND note.id=feed.source
             WHERE ${member.sql} AND (?='' OR feed.date<? OR (feed.date=? AND feed.key<?)) ORDER BY feed.date DESC,feed.key DESC LIMIT 101`,
-            c.membership.teamId,c.user.id,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,...member.values,
+            c.membership.teamId,c.user.id,c.membership.teamId,c.membership.teamId,
+            c.membership.teamId,c.user.id,c.membership.teamId,
+            c.membership.teamId,c.membership.teamId,c.membership.teamId,c.membership.teamId,...member.values,
             boundary[0],boundary[0],boundary[0],boundary[1]).all<{key:string;date:string;kind:string;photoCount:number|null;photoUrl:string|null;photoCaption:string|null}>();
         const items=results.slice(0,100).map(({photoCount,photoUrl,photoCaption,...item}) => item.kind==='reflection'
             ? {...item,photoCount:photoCount ?? 0,firstPhoto:photoUrl ? {url:photoUrl,caption:photoCaption ?? ''} : null} : item);

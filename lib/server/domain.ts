@@ -14,6 +14,7 @@ import { createTrainingService } from './training.ts';
 import { createTopicCollections } from './topic-collections.ts';
 import { createLearningActivity } from './learning-activity.ts';
 import { createLearningDiscussion } from './learning-discussion.ts';
+import { createReaderDiscussions } from './reader-discussions.ts';
 import { createTrainingDiscussions } from './training-discussions.ts';
 import { createWorkspaceAssets } from './workspace-assets.ts';
 import { createLearningService } from './learning.ts';
@@ -387,6 +388,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
     ...topics,
     ...createLearningActivity({ db, clock, activeMember, operation }),
     ...createLearningDiscussion({ db, clock, activeMember, operation }),
+    ...createReaderDiscussions({db,clock,activeMember,operation}),
     ...createTrainingDiscussions({ db,clock,activeMember,operation }),
     ...createWorkspaceAssets({ db,bucket,clock,activeMember,operation,mediaPolicy }),
     ...createLearningService({ db, bucket, clock, learningPolicy, activeMember, operation, attemptLearningInclusion }),

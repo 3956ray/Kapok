@@ -1026,6 +1026,12 @@ test('0026 preserves populated private and shared notes, grants and versions wit
     assert.deepEqual(await s.getOwnReflection(author,draft.id),published);
     assert.deepEqual((await db.prepare("SELECT DISTINCT photos,local_photos_pending FROM reflections").all()).results,[{photos:'[]',local_photos_pending:0}]);
     assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
+    // The live feed uses tables introduced after the photo migration.
+    for (const file of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && name >= '0027').sort()) {
+        const migration = await readFile(new URL('../../drizzle/' + file, import.meta.url), 'utf8');
+        const statements = migration.split('--> statement-breakpoint').map(sql => sql.trim()).filter(Boolean);
+        await db.batch(statements.map(sql => db.prepare(sql)));
+    }
     assert.equal((await s.workspaceDispatch(member,null)).items.find(row=>row.source===draft.id).photoCount,0);
 });
 

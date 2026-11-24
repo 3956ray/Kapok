@@ -92,6 +92,7 @@ export const moderationAudit = sqliteTable('moderation_audit', {
 });
 
 export const reflections = sqliteTable('reflections', {
+    discussionEpoch:integer('discussion_epoch').notNull().default(1),
     photos: text('photos').notNull().default('[]'),
     localPhotosPending: integer('local_photos_pending').notNull().default(0),
     id: text('id').primaryKey(),
@@ -121,6 +122,7 @@ export const reflections = sqliteTable('reflections', {
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull()
 }, t => [
+    check('reflection_discussion_epoch',sql`${t.discussionEpoch}>0`),
     check('reflection_photos',sql`json_valid(${t.photos}) AND json_type(${t.photos})='array' AND json_array_length(${t.photos})<=9`),
     check('reflection_local_photos',sql`${t.localPhotosPending} IN (0,1)`),
     check('reflection_source_ref', sql`(${t.sourceKind} IS NULL AND ${t.sourceId} IS NULL) OR
@@ -165,6 +167,7 @@ export const reflectionImageSweep = sqliteTable('reflection_image_sweep', {
 }, t=>[check('reflection_image_sweep_singleton',sql`${t.id}=1`)]);
 
 export const announcements = sqliteTable('announcements', {
+    discussionEpoch:integer('discussion_epoch').notNull().default(1),
     id: text('id').primaryKey(),
     teamId: text('team_id').notNull().references(() => teams.id),
     title: text('title').notNull(),
@@ -179,6 +182,7 @@ export const announcements = sqliteTable('announcements', {
     revisionVersion: integer('revision_version'),
     lastOpId: text('last_op_id')
 }, t => [
+    check('announcement_discussion_epoch',sql`${t.discussionEpoch}>0`),
     check('announcement_title', sql`length(${t.title}) BETWEEN 1 AND 80`),
     check('announcement_text', sql`length(${t.text}) BETWEEN 1 AND 5000`),
     check('announcement_status', sql`${t.status} IN ('draft','published','deleted')`)
@@ -403,3 +407,23 @@ export const trainingDiscussions = sqliteTable('training_discussions', {
     body:text('body').notNull(),status:text('status',{enum:['active','deleted']}).default('active').notNull(),
     version:integer('version').default(1).notNull(),createdAt:text('created_at').notNull(),
 }, t=>[index('training_discussions_order').on(t.trainingId,t.createdAt,t.id)]);
+
+export const readerDiscussions = sqliteTable('reader_discussions', {
+    id:text('id').primaryKey().notNull(), teamId:text('team_id').notNull().references(()=>teams.id),
+    sourceKind:text('source_kind',{enum:['reflection','announcement']}).notNull(), sourceId:text('source_id').notNull(),
+    discussionEpoch:integer('discussion_epoch').notNull(), authorId:text('author_id').notNull().references(()=>users.id),
+    rootId:text('root_id').references(():AnySQLiteColumn=>readerDiscussions.id),
+    replyToId:text('reply_to_id').references(():AnySQLiteColumn=>readerDiscussions.id),
+    body:text('body').notNull(),status:text('status',{enum:['active','deleted']}).notNull().default('active'),
+    version:integer('version').notNull().default(1),createdAt:text('created_at').notNull(),
+}, t=>[
+    index('reader_discussions_source').on(t.teamId,t.sourceKind,t.sourceId,t.discussionEpoch,t.createdAt,t.id),
+    index('reader_discussions_author').on(t.authorId,t.createdAt,t.id),
+    index('reader_discussions_feed').on(t.teamId,t.createdAt,t.id).where(sql`${t.status}='active'`),
+    check('reader_discussion_kind',sql`${t.sourceKind} IN ('reflection','announcement')`),
+    check('reader_discussion_epoch',sql`${t.discussionEpoch}>0`),
+    check('reader_discussion_version',sql`${t.version}>0`),
+    check('reader_discussion_status',sql`${t.status} IN ('active','deleted')`),
+    check('reader_discussion_reply',sql`(${t.rootId} IS NULL)=(${t.replyToId} IS NULL)`),
+    check('reader_discussion_body',sql`(${t.status}='active' AND length(${t.body}) BETWEEN 1 AND 2000) OR (${t.status}='deleted' AND ${t.body}='')`),
+]);

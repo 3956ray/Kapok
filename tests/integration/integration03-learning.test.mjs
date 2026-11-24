@@ -47,6 +47,40 @@ async function api(s, actor, method, path, { payload, key = '', type = 'applicat
     return dispatchApi(new Request(origin + '/api/v1/' + path, { method, headers, body }), path.split('?')[0].split('/'), actor, s);
 }
 
+test('reader comments enter the team feed only with the current public source, and export only to their own author', async t => {
+    const {s}=await fixture(t);
+    const state = n => ({expectedVersion:n.version, expectedSharingVersion:n.sharingVersion, expectedGeneration:n.generation});
+    async function add(path, text) {
+        const response = await api(s,reader,'GET',path);
+        assert.equal(response.status,200);
+        const {discussionEpoch,membershipEpoch} = (await response.json()).data;
+        const write = await api(s,reader,'POST',path,{key:crypto.randomUUID(),payload:{text,
+            expectedDiscussionEpoch:discussionEpoch,expectedMembershipEpoch:membershipEpoch}});
+        assert.equal(write.status,200,await write.clone().text());
+        return (await write.json()).data.id;
+    }
+    const feed = async () => (await s.workspaceDispatch(author,null)).items.filter(item=>item.comment);
+    let n=await s.saveReflection(author,null,{title:'Review',text:'Passing practice',date:'2026-11-24'},'new');
+    n=await s.shareReflection(author,n.id,{...state(n),scope:'team'},'share');
+    const comment=await add('reflections/'+n.id+'/discussion','Review discussion');
+    assert.deepEqual(await feed(),[]);
+    n=await s.publishReflection(author,n.id,{...state(n),published:true},'distribute');
+    const a=await s.saveAnnouncement(admin,null,{title:'Notice',text:'Practice',status:'published'},'notice');
+    const noticeComment=await add('announcements/'+a.id+'/discussion','Notice discussion');
+    assert.deepEqual((await feed()).map(row=>[row.kind,row.source,row.comment]).sort(),[
+        ['announcement_discussion',a.id,noticeComment],['reflection_discussion',n.id,comment],
+    ]);
+    const mine=(await s.exportOwnData(reader)).readerDiscussions;
+    assert.deepEqual(mine.map(row=>row.id).sort(),[comment,noticeComment].sort());
+    assert.deepEqual((await s.exportOwnData(author)).readerDiscussions,[]);
+    n=await s.shareReflection(author,n.id,{...state(n),scope:'private'},'revoke');
+    await s.saveAnnouncement(admin,a.id,{title:'Notice',text:'Practice',status:'draft',expectedVersion:a.version},'withdraw');
+    assert.deepEqual(await feed(),[]);
+    n=await s.shareReflection(author,n.id,{...state(n),scope:'team'},'share-again');
+    await s.publishReflection(author,n.id,{...state(n),published:true},'distribute-again');
+    assert.deepEqual(await feed(),[]);
+});
+
 test('daily text articles publish and share atomically while archive posts retain explicit sharing', async t => {
     const { s, rows } = await fixture(t);
     await s.createLearningCategory(author, { name: '随谈' }, 'daily-category');

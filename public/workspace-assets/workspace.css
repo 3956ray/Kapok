@@ -2851,6 +2851,12 @@ kbd {
 .reader-meta .btn {
   margin-left: auto;
 }
+.prose-page > .discussion {
+  margin-top: clamp(24px, 4vw, 44px);
+  max-width: 65ch;
+}
+.prose-page > .discussion .heading-line { margin-bottom: 12px; }
+.reader-meta .reader-sharing { color: var(--green); text-decoration: underline; }
 .reader-topic {
   display: flex;
   align-items: center;
