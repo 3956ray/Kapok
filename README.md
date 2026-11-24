@@ -7,7 +7,7 @@ Kapok Bloom 是队伍训练、比赛回看与成长记录工具。访问 [kapok.
 - 收藏片段、保存私人备注、写复盘，按需要分享给全队或撤回。
 - 管理员可同页发布训练和可选视频，之后编辑、补视频及预览队员页面。
 
-后续开发请先读 [完整交接](HANDOFF.md) 和 [部署与恢复手册](docs/DEPLOYMENT.md)。[AGENTS.md](AGENTS.md) 是仓库内协作说明。
+本轮改了什么、为何这样改、还有什么待验，见[11 月 23–24 日开发记录](docs/RELEASE-2026-11-24.md)。接手开发请从[完整交接](HANDOFF.md)和[部署与恢复手册](docs/DEPLOYMENT.md)开始。[AGENTS.md](AGENTS.md) 是仓库内协作说明。
 
 ## 本地验证
 

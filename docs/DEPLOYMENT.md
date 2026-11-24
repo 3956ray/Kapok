@@ -1,8 +1,6 @@
 # Kapok 部署、恢复与验收
 
-> 2026-11-16：最新学习库交互更新已部署，见 [发布记录](RELEASE-2026-11-16.md)。
-
-> 2026-11-15：学习库与账号更新的部署状态见 [发布记录](RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
+最近一轮的范围、决策和验证边界见[11 月 23–24 日开发交接](RELEASE-2026-11-24.md)。历史回执见 [11 月 16 日](RELEASE-2026-11-16.md)和 [11 月 15 日](RELEASE-2026-11-15.md)。
 
 线上入口 [kapok.party](https://kapok.party)。从 Cloudflare Dashboard 查看当前部署版本与 Worker、Access 应用及 D1 的绑定。部署负责人保存所用 Git 提交、实际构建 SHA-256、Cloudflare Worker 版本、迁移记录及验收结果。
 
@@ -77,12 +75,14 @@ npm run dry-run:staging
 ## 部署顺序
 
 1. 本地运行完整检查，独立复测实际构建。核对当前线上 Worker、Access 和 D1，保存回退用构建与配置。备份数据库和导入账本，备份留在受限存储。用隔离副本实际恢复，检查完整性、外键、所有权、删除和撤权状态。
-2. 查 D1 迁移账本。现有版本使用 `0000`–`0010`，已应用文件不改写。仅有经审查的新增迁移才用 Wrangler `d1 migrations apply DB --remote --config dist/staging/server/wrangler.json`。回读账本与列状态。出现部分失败先诊断，不盲目重跑 ALTER。
+2. 查 D1 迁移账本。截至 2026-11-24 已应用到 `0028_reader_discussions.sql`。后续发布先对照实际账本，只追加新迁移。仅有经审查的新增迁移才用 Wrangler `d1 migrations apply DB --remote --config dist/staging/server/wrangler.json`。回读账本与列状态。出现部分失败先诊断，不盲目重跑 ALTER。
 3. 在仓库根目录使用 `node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js deploy --config dist/staging/server/wrangler.json`，记录版本。保留精确公开根与登录注册，其他子路径和业务 API 继续由 Access 保护。Access 当前使用邮箱 OTP 与 Everyone Allow，新账号验证完成后可自行注册，Worker 仍执行成员和管理员判断。
 4. 检查 `/`、`/login`、`/register`、`/register/profile`、`/auth/continue` 和 `/api/v1/me` 的真实响应。公开注册页先显示字段，资料页和 API 要求认证。真人复验注册、既有账号登录、回跳、退出和受限账号。
 5. 如需回退，先核对旧构建与现有数据及登录状态兼容。回退代码保持现有 D1，不用旧库覆盖新写入。若必须恢复数据，先在隔离副本核验删除、私密与撤权，确定恢复窗口后再由负责人处理。
 
 ## 首批导入
+
+以下是早期四条样本的操作手册。11 月 24 日完成的 B 站历史批次见[开发交接](RELEASE-2026-11-24.md)。
 
 指定管理员用真实会话打开 [首批视频导入页](https://kapok.party/admin/trainings/import)。核对显示的发布者和精确计划，确认日期、训练匹配和冲突。执行前导出账本；执行后再次导出并验证四条日期、训练关联、署名、队员可见性及播放。超时或中断使用原账本核对，避免重复创建。相同账本重跑预期零新增。审批后映射变化必须重新核对。未确认活动日期的另外四条不进入本批。验证码、Cookie、令牌和账本都无需上传。
 

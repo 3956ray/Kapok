@@ -1,10 +1,6 @@
 # Kapok 完整交接
 
-> 2026-11-16：最新学习库交互更新已部署，见 [发布记录](docs/RELEASE-2026-11-16.md)。
-
-> 2026-11-15：学习库与账号更新的当前状态见 [发布记录](docs/RELEASE-2026-11-15.md)。下文2026-11-08线上信息作为既有基线；源码更新不代表生产已部署。
-
-站点：[kapok.party](https://kapok.party)。源码：[3956ray/Kapok](https://github.com/3956ray/Kapok)。项目代号 KPK，当前阶段 CP03。线上运行在 Cloudflare Workers 与 D1，使用 Cloudflare Access 邮箱验证码。项目负责人控制部署、真实数据和验收。
+Kapok 正式工作区运行在 Cloudflare Workers、D1 和私有 R2。2026-11-24 已上线 Bloom 工作区、复盘及公告留言。新接手者先读[本轮开发过程、产品决定与待验项](docs/RELEASE-2026-11-24.md)，再查[逐批生产回执](docs/DEPLOYMENT.md)。[正式站](https://kapok.party/home) · [GitHub](https://github.com/3956ray/Kapok)
 
 ## 接手先做什么
 
@@ -18,12 +14,12 @@
 | 场景 | 规则 | 代码入口 |
 |---|---|---|
 | 注册和登录 | `/register` 先填盘名与背号，再邮箱验证，再确认建档。资料仅在当前标签页短暂预填，验证前零账号写入。`/login` 为已有用户，误走入口时解释状态。任何验证邮箱的人可以注册并直接入队。受限或已退出身份不能通过注册恢复。 | `lib/server/auth-entry.ts`、`app/auth/continue/`、`app/register/profile/`、`lib/client/registration-prefill.ts` |
-| 工作区导航 | 桌面可折叠侧栏，手机四项导航。写复盘、编辑、分享时仍显示导航。训练与视频详情同列宽，视频内保留底部输入栏和独立滚动。 | `app/components/shell.tsx`、`navigation.tsx`、`app/globals.css` |
-| 训练与视频 | 管理员同页发布训练，可带一条 B 站视频。训练、视频、动态与提交回执同一事务提交。可编辑、补视频并查看队员视图。归档只可回看。 | `app/admin/trainings/`、`lib/server/training.ts` |
-| 讨论 | 根评论与一级展示的回复串。直接回复目标可指向根评论或某条回复，也支持回复自己。草稿按账号、视频和目标分开。视频时刻可定位，隐藏或删除的内容不能泄露原文。 | `app/components/video-discussion.tsx`、`lib/server/training.ts` |
-| 成长、收藏与私人备注 | 收藏保留来源和可选时刻，私人备注仅本人可读，可转为私密复盘。访问失效时不展示已撤销的来源正文。 | `app/growth/`、`app/components/collections.tsx` |
-| 复盘和分享 | 新记录默认私密。允许队内阅读和发布动态是两个动作。撤回动态不收回阅读，撤权后旧链接不可读。编辑已共享内容并保存会恢复为私密；取消保持原状态。恢复已删除内容保持私密。 | `app/reflections/`、`lib/server/reflections.ts` |
-| 账号、后台 | 使用服务器判定的成员状态与角色。新成员默认普通队员。管理员可管理成员、训练和公告。不可撤掉最后一位有效管理员。导出只含本人有权数据。退出后清理本账号本机草稿和会话状态。 | `app/me/`、`app/admin/`、`lib/server/identity.ts`、`lib/server/data-rights.ts` |
+| 工作区导航 | 正式入口为 `/home`。手机底栏有训练、动态、想和写、成长、我的五项，桌面使用可折叠侧栏。旧资料链接仍需核对来源权限。 | `app/workspace-ui/shell.jsx`、`app/workspace-ui/router.jsx` |
+| 训练与日常 | 管理员管理队伍训练，队员可发布个人资料。日常图文可只发文字，进入动态。视频默认用平台封面，支持自选图。 | `app/workspace-ui/training.jsx`、`lib/server/video-covers.ts` |
+| 合集与来源 | 可收录可读资料和单条视频。章节可前后切换。撤回合集后，队员打开旧链接须重新检查可见性。 | `app/workspace-ui/collections.jsx`、`lib/server/topic-collections.ts` |
+| 讨论 | 训练和视频支持讨论与时间点引用。队内可读的复盘和已发布的公告支持文字留言、回复及删除自己的留言。动态入口可定位原留言。 | `app/workspace-ui/discussion.jsx`、`lib/server/reader-discussions.ts` |
+| 成长与复盘 | 收藏和私人备注归本人。可从已保存的备注新建复盘。「想和写」默认私密，队内阅读和分发动态分别控制。作者有编辑和删除入口。 | `app/workspace-ui/journal.jsx`、`lib/server/reflections.ts` |
+| 账号与管理 | 管理角色绑定队员账号，移交时保留原作者和至少一位可登录的有效管理员。支持头像与本人资料导出，暂停期间停止导出。 | `app/workspace-ui/manage.jsx`、`lib/server/profile-avatar.ts`、`lib/server/data-rights.ts` |
 
 B 站视频使用链接与播放器，不把外部视频写入 D1。训练、视频元数据、讨论、收藏、复盘、成员权限和提交回执都保存在 D1。当前线上学习图片通过 BUCKET 绑定私有 R2，由应用执行成员/所有权校验。生产认证适配在 `build/staging-worker.ts` 和 `lib/server/access-identity.ts`，API 分发在 `lib/server/http.ts`。公开入口仅为 `/`、`/login`、`/register`。邮箱准入开放后，业务页面仍需有效登录与成员权限。队员可访问队伍内容，私稿及私人备注仍按所有权隔离。
 
@@ -42,13 +38,13 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js de
 
 另开终端运行 `node tests/helpers/sharing-browser-proxy.mjs http://127.0.0.1:8790`。默认端口 `8791` 管理员、`8792` 作者、`8793` 队员、`8794` 非成员。读取 `.sites-runtime/reflection-sharing/fixture.json` 里的 `targetId`，用作者打开 `http://127.0.0.1:8792/reflections/<targetId>/sharing`。已初始化过的隔离状态直接复用；fixture 会拒绝覆盖同名目录。
 
-真实 Access 行为用 `npm run build:staging` 和 `npm run test:staging` 验证编译产物。测试自动建立隔离 D1 与合成签名环境，覆盖匿名和伪造身份、登录与注册、迁移及并发。测试不会向邮箱发验证码。
+运行 `npm run build:staging` 和 `npm run test:staging` 可在隔离 D1 和合成签名环境中验证编译产物，覆盖身份校验、登录与注册、迁移及并发。真实邮箱收码和登录回跳需账号持有人在正式站另验。
 
 ## 当前待办与验收顺序
 
 - 实际打开注册页，验证先填写、验证码、预填、确认和登录回跳。126 等国内邮箱与常用邮箱的真实收件由持有人操作，记录用时和结果。
 - 在主域名用真实管理员和普通队员走发布、预览、播放与回复、收藏备注、复盘分享与撤权、退出和再次登录。测试前确认所见 Worker 版本。
-- 首批四条视频日期已确认。真实导入由指定管理员在 [首批导入页](https://kapok.party/admin/trainings/import) 按手册预览、确认和逐条验证，不能把合成导入结果当成已入库。
+- 视频导入已有正式清点结果。新增批次先核对账号、分类和重复链接，再查受限账本，避免再次执行历史批次。见[批次记录](docs/RELEASE-2026-11-24.md)。
 - 手机软键盘、安全区、系统读屏、跨设备、实际 B 站播放、容量和恢复按 [部署与验收](docs/DEPLOYMENT.md) 复核。通过的测试要标注版本与环境。
 
 设计参考和已获准的真实验收证据由项目负责人提供。对照以其确认的最新版本为准。
