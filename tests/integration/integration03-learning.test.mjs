@@ -886,16 +886,16 @@ test('workspace dispatch archives training videos on the selected day across pag
     assert.equal(await auditTime(),publishedAt);
 });
 
-test('shared learning materials use the published record date or the original share time for undated records', async t => {
+test('shared videos use the published record date while articles and undated videos keep the original share time', async t => {
     const { s } = await fixture(t);
     await s.createLearningCategory(author,{name:'随谈'},'daily-category');
-    for (const data of [{}, {workspaceDetails:{date:'2020-09-25'}}, {kind:'video',video:{source:'bilibili',url:'https://www.bilibili.com/video/BV1xx411c7mD/'},workspaceDetails:{date:'2020-10-19'}}]) {
+    for (const data of [{kind:'video',video:{source:'bilibili',url:'https://www.bilibili.com/video/BV1xx411c7mD/'}}, {workspaceDetails:{date:'2020-09-25'}}, {kind:'video',video:{source:'bilibili',url:'https://www.bilibili.com/video/BV1xx411c7mD/'},workspaceDetails:{date:'2020-10-19'}}]) {
         const post = await s.saveLearningPost(author,null,{...input,...data,category:'随谈'},crypto.randomUUID());
         const published = await s.publishLearningPost(author,post.id,publicationVersion(post),crypto.randomUUID());
         await s.changeLearningActivity(author,post.id,{expectedPublishedVersion:published.publishedVersion,
             expectedMembershipEpoch:published.membershipEpoch,expectedEventId:null},crypto.randomUUID(),true);
         const {event} = await s.getLearningActivity(author,post.id);
-        const expected = data.workspaceDetails?.date ?? event.sharedAt;
+        const expected = data.kind === 'video' && data.workspaceDetails?.date ? data.workspaceDetails.date : event.sharedAt;
         const get = async () => (await s.workspaceDispatch(reader,null)).items.find(row=>row.source===post.id);
         assert.equal((await get()).date,expected);
         const current = await draft(s,post.id);

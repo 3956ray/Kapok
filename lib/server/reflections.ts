@@ -872,7 +872,7 @@ export function createReflectionService({
                 JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lc.author_id
                 WHERE lc.team_id=? AND lc.status='active' AND ${learningPostVisible}
             UNION ALL SELECT 'la:'||la.id,lpub.kind,lp.id,lpub.title,'',p.disc_name,
-                coalesce(json_extract(lpub.workspace_details,'$.date'),la.shared_at),NULL,NULL
+                coalesce(CASE WHEN lpub.kind='video' THEN json_extract(lpub.workspace_details,'$.date') END,la.shared_at),NULL,NULL
                 FROM learning_activity_events la JOIN learning_posts lp ON lp.id=la.post_id
                 JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lp.owner_id
                 WHERE lp.team_id=? AND ${learningActivityVisible}
