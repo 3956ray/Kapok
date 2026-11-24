@@ -181,7 +181,7 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
     } catch (err) {
       if (reader && ['FORBIDDEN', 'NOT_FOUND', 'VERSION_CONFLICT', 'READ_ONLY'].includes(err.code)) {
         notify(err.message || '留言权限已变化，请重新确认。');
-        reload(true);
+        reload(err.code !== 'VERSION_CONFLICT');
         return;
       }
       const message = err.message || '讨论暂时无法发布，请重试。';
@@ -198,7 +198,7 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
     setDeleting(true);
     setDeleteError('');
     try {
-      await ctx.write(removing.source.write+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version,...view.expected});
+      await ctx.write(removing.source.write+'/'+removing.id,'PATCH',{action:'delete',expectedVersion:removing.version,...view.expected},removing.operationKey);
       reload();
       if (mounted.current) {
         setRemoving(null);
@@ -208,7 +208,8 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
     } catch (err) {
       if (reader && ['FORBIDDEN', 'NOT_FOUND', 'VERSION_CONFLICT', 'READ_ONLY'].includes(err.code)) {
         notify(err.message || '留言权限已变化，请重新确认。');
-        reload(true);
+        if (mounted.current) setRemoving(null);
+        reload(err.code !== 'VERSION_CONFLICT');
         return;
       }
       const message = err.message || '删除失败，请重试。';
@@ -274,7 +275,7 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
                 onClick={(event) => {
                   event.currentTarget.focus({ preventScroll: true });
                   setDeleteError('');
-                  setRemoving(c);
+                  setRemoving({ ...c, operationKey:uid() });
                 }}
               >
                 删除
