@@ -2871,7 +2871,7 @@ kbd {
   flex: none;
 }
 .reader h1 {
-  font-size: clamp(32px, 3.8vw, 58px);
+  font-size: clamp(26px, 3.8vw - 6px, 52px);
   margin: 6px 0 17px;
 }
 .body-link {
