@@ -994,3 +994,23 @@ test('team bulletin keeps edited comments and invalidates the selection across m
         assert.notEqual(available.key,option.key);
     }
 });
+
+test('bulletin prefers the published custom cover for both video entry points', async t=>{
+    const {s,db}=await fixture(t);
+    const url='https://www.bilibili.com/video/BV1xx411c7mD/';
+    const {training,video}=await s.publishTraining(admin,{title:'封面训练',date:'2026-09-25',description:'',video:{title:'封面片段',url}},'train-cover');
+    const p=await s.saveLearningPost(author,null,{...input,kind:'video',title:'封面视频',video:{source:'bilibili',url}},'post-cover');
+    await s.publishLearningPost(author,p.id,publicationVersion(p),'publish-cover');
+    const options=async()=> (await s.bulletinOptions(admin,'封面',null)).items;
+    const published=(await options()).find(item=>item.href==='/trainings/'+p.id);
+    assert.equal(published.cover,'/api/v1/video-covers/post/'+p.id);
+    const details=JSON.stringify({photos:[{id:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',alt:'',coverOnly:true}]});
+    await db.batch([
+      db.prepare('UPDATE trainings SET workspace_details=? WHERE id=?').bind(details,training.id),
+      db.prepare('UPDATE learning_post_publications SET workspace_details=? WHERE post_id=?').bind(details,p.id),
+    ]);
+    const expected='/api/v1/material-assets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    assert.equal((await options()).find(item=>item.href.endsWith('?video='+video.id)).cover,expected);
+    await s.setBulletin(admin,{key:published.key,expectedVersion:0},'pin-cover');
+    assert.equal((await s.readBulletin(reader)).item.cover,expected);
+});

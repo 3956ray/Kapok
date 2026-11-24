@@ -8,7 +8,9 @@ import { isDefaultLearningCategory } from '../../lib/contracts/learning.ts';
 const encode = encodeURIComponent;
 const details = row => JSON.parse(row.workspaceDetails || '{}');
 const assetUrl = id => '/api/v1/material-assets/'+encode(id);
-const workspacePhotos = extra => (extra.photos || []).map(photo=>({...photo,url:assetUrl(photo.id)}));
+const workspacePhotos = extra => (extra.photos || []).map(photo=>({
+  ...photo, url:assetUrl(photo.id), selectedCover:photo.coverOnly === true,
+}));
 function training(row, account) {
   const extra = details(row);
   return { ...row, kind: 'training', format: '场上练习', sourceKind: 'training', sourceId: row.id,
@@ -104,7 +106,7 @@ async function uploadAsset(ctx,kind,parentId,file,signal,attempt) {
 async function saveAssetPhotos(ctx,kind,id,photos,signal,attempt) {
   const result=[];
   for (const photo of photos) {
-    result.push({id:photo.file ? await uploadAsset(ctx,kind,id,photo.file,signal,attempt) : photo.id,alt:photo.alt.trim()});
+    result.push({id:photo.file ? await uploadAsset(ctx,kind,id,photo.file,signal,attempt) : photo.id,alt:photo.alt.trim(),coverOnly:Boolean(photo.selectedCover)});
   }
   return result;
 }

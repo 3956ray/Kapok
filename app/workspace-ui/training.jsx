@@ -114,7 +114,7 @@ function RelatedNotes({ trainingId }) {
 }
 
 function MaterialStory({ t, photoDestination }) {
-  const photos = t.photos?.filter((p) => p.url) ?? [];
+  const photos = t.photos?.filter((p) => p.url && !p.selectedCover) ?? [];
   if (!t.body && !photos.length) return null;
   return (
     <div className="material-story">
@@ -438,7 +438,7 @@ export function TrainingReader({ t,reload,backControl,collectionNav,videoPath,co
             <i />
             {t.category} · {t.format || label}
           </span>
-          <h1 data-photo-destination={!local && !external && !t.photos?.length ? t.id : undefined}>
+          <h1 data-photo-destination={!local && !external && !t.photos?.some(p=>p.url && !p.selectedCover) ? t.id : undefined}>
             {t.title}
           </h1>
           <div className="details-meta">
@@ -508,7 +508,7 @@ function fileIssue(file, type) {
   return '';
 }
 
-function PhotoFields({ photos, choose, remove, describe, issue, linkedVideo }) {
+function PhotoFields({ photos, choose, remove, describe, issue, linkedVideo, markFirstCover }) {
   return (
     <div className="photo-fields">
       <div className="file-heading">
@@ -517,13 +517,14 @@ function PhotoFields({ photos, choose, remove, describe, issue, linkedVideo }) {
         </span>
         {photos.length > 0 && <small>{photos.length} 张</small>}
       </div>
-      {linkedVideo && <p className="field-hint">默认使用视频原封面。上传照片后，第一张将作为封面。</p>}
+      {linkedVideo && <p className="field-hint">这里添加的照片会显示在正文。</p>}
       {photos.length > 0 && (
         <ul className="photo-proof-list">
           {photos.map((p, i) => (
             <li key={p.key}>
               <img decoding="async" src={p.url} alt={'第 ' + (i + 1) + ' 张照片预览'} />
               <div>
+                {i===0 && markFirstCover && <button type="button" className="desk-action" onClick={()=>markFirstCover(p.key)}>仅用作封面</button>}
                 <label htmlFor={'photo-description-' + p.key}>照片说明 {i + 1}</label>
                 <input
                   type="text"
@@ -703,7 +704,7 @@ function MaterialEditor({ t }) {
       const file = new File([blob], '训练封面.jpg', {type: 'image/jpeg'});
       if (!chooseCover(file, 'clip')) return;
       setMore(true);
-      notify('已将当前画面设为首张照片和封面');
+      notify('已将当前画面设为视频封面');
     } catch {
       setIssue({field:'clip', message:'这个视频画面暂时无法提取，可以上传一张照片作封面。'});
     }
@@ -740,6 +741,7 @@ function MaterialEditor({ t }) {
       pointKey = '';
     }
   }
+  const bodyPhotos = photos.filter(photo=>!photo.selectedCover);
   const pointRows = pointDrafts[pointKey] || [];
   const duration = usingFile && clipInfo?.url === clip.url ? clipInfo.duration
     : pointKey === 'builtin' ? initial?.duration : 0;
@@ -747,7 +749,7 @@ function MaterialEditor({ t }) {
     e.preventDefault();
     if (request.current || progress) return;
     if (!title.trim()) return fail('title', '请填写' + titleLabel + '。');
-    if (kind === 'article' && !body.trim() && !photos.length) {
+    if (kind === 'article' && !body.trim() && !bodyPhotos.length) {
       return fail('body', '请填写图文正文或添加照片。');
     }
     if (kind === 'video' && !hasLink && !hasFile && !keepFilm) {
@@ -770,7 +772,7 @@ function MaterialEditor({ t }) {
         const resolved = await ctx.read('media/bilibili-link?url='+encodeURIComponent(source.url),controller.signal);
         source = parseVideo(resolved.url);
       }
-      const picked=photos;
+      const picked=kind==='article' ? bodyPhotos : photos;
       const input={kind,title:title.trim(),date,category:daily ? dailyArticleCategory : category,shareToActivity:daily,summary:summary.trim(),body:body.trim(),photos:picked,source,clipFile:usingFile && clip.file || null,timepoints:timepoints || []};
       const signature=JSON.stringify([input,picked.map(p=>p.key),usingFile && clip.url]);
       if (attempted.current?.signature!==signature) attempted.current={signature,key:uid()};
@@ -979,7 +981,7 @@ function MaterialEditor({ t }) {
                   <MediaCover item={{ source: coverSource, photos, platformCover: coverSource.url === initial?.source?.url ? initial.platformCover : undefined }} alt="发布封面预览" />
                   <span>
                     <strong>视频封面</strong>
-                    <small>{photos[0] ? '使用首张照片' : coverSource.platform === 'YouTube' ? '优先使用 YouTube 封面' : '发布后自动读取 B 站封面'}</small>
+                    <small>{photos[0]?.selectedCover ? '使用自选封面' : photos[0] ? '使用首张照片' : coverSource.platform === 'YouTube' ? '优先使用 YouTube 封面' : '发布后自动读取 B 站封面'}</small>
                   </span>
                   <label className="media-chooser">
                     <ImagePlus size={15} />{photos[0] ? '更换封面' : '上传封面'}
@@ -992,6 +994,10 @@ function MaterialEditor({ t }) {
                   </label>
                 </div>
               )}
+              {photos[0]?.selectedCover && <button type="button" className="desk-action" onClick={()=>{
+                release(photos[0].url);
+                setPhotos(list=>list.filter(photo=>!photo.selectedCover));
+              }}>移除自选封面</button>}
               {kind==='training' && t?.selectedVideo && <p className="field-hint">填写新链接或选择新文件会追加一个视频，原有视频及讨论会保留。</p>}
               <FieldIssue issue={issue} name="link" />
               <FieldIssue issue={issue} name="clip" />
@@ -1072,7 +1078,8 @@ function MaterialEditor({ t }) {
               <FieldIssue issue={issue} name="body" />
               {<PhotoFields
                 linkedVideo={kind !== 'article' && Boolean(usingLink || t?.source)}
-                photos={photos}
+                photos={bodyPhotos}
+                markFirstCover={kind!=='article' && !photos[0]?.selectedCover ? key=>setPhotos(list=>list.map(photo=>photo.key===key ? {...photo,selectedCover:true} : photo)) : null}
                 choose={choosePhotos}
                 issue={issue?.field === 'photos' ? issue.message : ''}
                 describe={(key, alt) =>

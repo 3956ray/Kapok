@@ -14,7 +14,8 @@ export function materialDetails(raw: unknown) {
         const ids = new Set();
         for (const photo of input.photos) {
             if (!photo || typeof photo.id !== 'string' || !/^[a-f0-9-]{36}$/.test(photo.id) || ids.has(photo.id) ||
-                typeof photo.alt !== 'string' || photo.alt.length>240 || Object.keys(photo).some(key=>key!=='id' && key!=='alt')) throw invalid();
+                typeof photo.alt !== 'string' || photo.alt.length>240 || (photo.coverOnly !== undefined && typeof photo.coverOnly !== 'boolean') ||
+                (photo.coverOnly && photo !== input.photos[0]) || Object.keys(photo).some(key=>!['id','alt','coverOnly'].includes(key))) throw invalid();
             ids.add(photo.id);
         }
     }

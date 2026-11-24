@@ -2,6 +2,7 @@ import type { Principal } from '../contracts/index';
 import { assertGuard, DomainError } from './domain.ts';
 import { bindLearningMember, commitLearning, learningMemberFence, learningMemberGuard, learningObject, learningPostVisible, type LearningContext, type LearningDependencies } from './learning.ts';
 import { reflectionShared } from './reflections.ts';
+import { topicCoverVersion } from './topic-cover.ts';
 import { topicVisible } from './topic-collections.ts';
 
 // Store only a source key and its visibility generation. Re-read the public title,
@@ -15,7 +16,8 @@ const posts = 'learning_posts lp JOIN learning_post_publications lpub ON lpub.po
 const dailyEvent = "(SELECT la.id FROM learning_activity_events la WHERE la.post_id=lp.id AND la.author_epoch=lpub.author_epoch AND la.revoked_at IS NULL)";
 const daily = "(lpub.kind='article' AND lpub.category='随谈')";
 const post = `lp.team_id=${team} AND ${learningPostVisible} AND (NOT ${daily} OR ${dailyEvent} IS NOT NULL)`;
-const trainingCover = `coalesce('/api/v1/material-assets/'||json_extract(t.workspace_details,'$.photos[0].id'),
+const uploadedPhoto = (details: string) => `'/api/v1/material-assets/'||json_extract(${details},'$.photos[0].id')`;
+const trainingCover = `coalesce(${uploadedPhoto('t.workspace_details')},
     (SELECT CASE WHEN v.source IN ('bilibili','youtube') THEN '/api/v1/video-covers/video/'||v.id END
         FROM videos v WHERE v.training_id=t.id AND v.team_id=t.team_id AND v.status='active' ORDER BY v.position,v.id LIMIT 1),
     '/workspace-assets/media/sideline-team.webp')`;
@@ -42,15 +44,21 @@ function sources() {
     return [
         source('t','t.id','t.bulletin_epoch',"'训练'",'t.title','t.description',"'/trainings/'||t.id",'t.date','trainings t',training,trainingCover),
         source('v','v.id',videoEpoch,"'视频'",'v.title','t.title',"'/trainings/'||t.id||'?video='||v.id",'t.date',videos,video,
-            "CASE WHEN v.source IN ('bilibili','youtube') THEN '/api/v1/video-covers/video/'||v.id END"),
+            `coalesce(${uploadedPhoto('t.workspace_details')},CASE WHEN v.source IN ('bilibili','youtube') THEN '/api/v1/video-covers/video/'||v.id END)`),
         source('p','lp.id',postEpoch,"CASE lpub.kind WHEN 'video' THEN '视频' ELSE '图文' END",'lpub.title','lpub.summary',
             "'/trainings/'||lp.id","coalesce(json_extract(lpub.workspace_details,'$.date'),lpub.published_at)",posts,post,
-            "CASE WHEN lpub.video_source IN ('bilibili','youtube') THEN '/api/v1/video-covers/post/'||lp.id END"),
+            `coalesce((SELECT '/api/v1/learning/posts/'||lp.id||'/images/'||li.id
+                FROM learning_publication_images lir JOIN learning_images li ON li.id=lir.image_id AND li.post_id=lir.post_id
+                WHERE lir.post_id=lp.id AND li.status='ready' ORDER BY lir.position LIMIT 1),
+                ${uploadedPhoto('lpub.workspace_details')},
+                CASE WHEN lpub.video_source IN ('bilibili','youtube') THEN '/api/v1/video-covers/post/'||lp.id END)`),
         source('n','r.id',noteEpoch,"'复盘'","coalesce(nullif(r.title,''),'无标题复盘')",'r.text',"'/notes/'||r.id",'r.date','reflections r',note),
         source('a','a.id','a.discussion_epoch',"'公告'",'a.title','a.text',"'/announcements/'||a.id",'a.published_at','announcements a',notice),
-        source('topic','tc.id','tcp.visibility_id',"'合集'",'tcp.title','tcp.summary',"'/shared/'||tc.id",'tcp.published_at',topics,topic),
+        source('topic','tc.id','tcp.visibility_id',"'合集'",'tcp.title','tcp.summary',"'/shared/'||tc.id",'tcp.published_at',topics,topic,
+            `'/api/v1/workspace/topic-covers/published/'||tc.id||'/'||${topicCoverVersion('tcp.version')}`),
         source('edition','sh.id','sh.visibility_id',"'合集'",'sh.title','sh.summary',"'/shared/'||sh.id",'sh.published_at',
-            topics+' JOIN workspace_topic_shares sh ON sh.collection_id=tc.id AND sh.visibility_id=tcp.visibility_id',topic),
+            topics+' JOIN workspace_topic_shares sh ON sh.collection_id=tc.id AND sh.visibility_id=tcp.visibility_id',topic,
+            `'/api/v1/workspace/topic-covers/share/'||sh.id||'/'||${topicCoverVersion('sh.version')}`),
         source('vc','d.id',videoEpoch+"||':'||d.bulletin_epoch","'讨论'",'v.title',commentSummary,
             "'/trainings/'||t.id||'?video='||v.id||'&comment='||d.id",'d.created_at',
             videos+' JOIN video_comments d ON d.video_id=v.id AND d.team_id=v.team_id',video+" AND d.status='active'"),
