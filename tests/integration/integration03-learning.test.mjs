@@ -904,3 +904,93 @@ test('shared videos use the published record date while articles and undated vid
         assert.equal((await get()).date,expected);
     }
 });
+
+test('team bulletin selects live member-visible sources, fences writes and falls back after withdrawal', async t => {
+    const {s} = await fixture(t);
+    const empty = {version:0,item:null,fallback:null,unavailable:false};
+    assert.deepEqual(await s.readBulletin(reader),empty);
+    await denied(s.bulletinOptions(reader,'',null),'FORBIDDEN');
+    await denied(s.setBulletin(reader,{key:null,expectedVersion:0},'no'),'FORBIDDEN');
+    const published=await s.saveAnnouncement(admin,null,{title:'精选通知',text:'需要集合',status:'published'},'notice');
+    await s.saveAnnouncement(admin,null,{title:'精选草稿',text:'不可展示',status:'draft'},'draft');
+    const opts=await s.bulletinOptions(admin,'精选',null);
+    assert.equal(opts.items.length,1);
+    const key=opts.items[0].key;
+    const choice={key,expectedVersion:0};
+    const selected=await s.setBulletin(admin,choice,'pin');
+    assert.equal(selected.version,1);
+    assert.equal(selected.item.href,'/announcements/'+published.id);
+    assert.deepEqual(await s.readBulletin(reader),selected);
+    assert.deepEqual(await s.setBulletin(admin,choice,'pin'),selected);
+    await assert.rejects(s.setBulletin(admin,{key:null,expectedVersion:0},'old'));
+    const draft=await s.saveAnnouncement(admin,published.id,{title:'精选通知',text:'草稿改动',status:'draft',expectedVersion:published.version},'revoke');
+    assert.deepEqual(await s.readBulletin(reader),{version:1,item:null,fallback:null,unavailable:false});
+    assert.deepEqual(await s.readBulletin(admin),{version:1,item:null,fallback:null,unavailable:true});
+    await s.saveAnnouncement(admin,published.id,{title:'第二版',text:'新的正文',status:'published',expectedVersion:draft.version},'again');
+    assert.equal((await s.readBulletin(reader)).item,null);
+    await assert.rejects(s.setBulletin(admin,{key,expectedVersion:1},'stale-choice'));
+    assert.deepEqual(await s.setBulletin(admin,{key:null,expectedVersion:1},'reset'),{version:2,item:null,fallback:null,unavailable:false});
+});
+
+test('team bulletin options paginate same-day content and a private reflection stays absent for its author', async t=>{
+    const {s,db}=await fixture(t);
+    const {membership}=await s.me(admin);
+    const inserts=Array.from({length:35},(_,i)=>db.prepare(
+        "INSERT INTO trainings(id,team_id,title,date,description,status,version,updated_at,created_at) VALUES(?,?,?,'2026-09-25','','published',1,'2026','2026')"
+    ).bind('page-'+i,membership.teamId,'合成训练'+i));
+    await db.batch(inserts);
+    const first=await s.bulletinOptions(admin,'训练',null);
+    const second=await s.bulletinOptions(admin,'训练',first.next);
+    assert.equal(first.items.length,30);
+    assert.equal(second.next,null);
+    assert.equal(new Set([...first.items,...second.items].map(o=>o.key)).size,35);
+    await denied(s.bulletinOptions(admin,'其他',first.next),'INVALID_INPUT');
+    const privateNote=await s.saveReflection(admin,null,{title:'私人想法',text:'私人正文',date:'2026-11-24'},'private');
+    assert.equal((await s.bulletinOptions(admin,'私人',null)).items.length,0);
+    await assert.rejects(s.setBulletin(admin,{key:'n:'+privateNote.id+':1',expectedVersion:0},'forge'));
+    const picked=first.items[0];
+    await s.setBulletin(admin,{key:picked.key,expectedVersion:0},'pin');
+    const id=picked.href.split('/').at(-1);
+    await db.prepare("UPDATE trainings SET title='更名' WHERE id=?").bind(id).run();
+    assert.equal((await s.readBulletin(reader)).item.title,'更名');
+    await db.prepare("UPDATE trainings SET status='hidden' WHERE id=?").bind(id).run();
+    const fallback=(await s.readBulletin(reader)).fallback;
+    assert.equal(fallback.type,'训练');
+    assert.notEqual(fallback.href,picked.href);
+    assert.equal(fallback.cover,'/workspace-assets/media/sideline-team.webp');
+    await db.batch(['hidden','published'].map(status=>db.prepare('UPDATE trainings SET status=? WHERE id=?').bind(status,id)));
+    assert.equal((await s.readBulletin(reader)).item,null);
+});
+
+test('team bulletin keeps edited comments and invalidates the selection across moderation cycles', async t => {
+    const {s}=await fixture(t);
+    const {video}=await s.publishTraining(admin,{title:'训练',date:'2026-10-19',description:'',
+        video:{title:'视频',url:'https://www.bilibili.com/video/BV1xx411c7mD/'}},'publish-video');
+    const post=await s.saveLearningPost(author,null,input,'new-post');
+    await s.publishLearningPost(author,post.id,publicationVersion(post),'publish-post');
+    const vc=await s.saveComment(reader,video.id,null,{text:'视频留言'},'add-video-comment');
+    const pc=await s.saveLearningComment(reader,post.id,null,{text:'图文留言'},'add-post-comment');
+    const timed=await s.saveComment(reader,video.id,null,{text:'',timestampSec:10,referenceTimes:[10,30]},'timed-only');
+    const timedOption=(await s.bulletinOptions(admin,'00:30',null)).items.find(x=>x.href.includes(timed.id));
+    assert.equal(timedOption.summary,'视频时刻 · 00:10、00:30');
+    const cases=[
+        {id:vc.id,edit:()=>s.saveComment(reader,video.id,vc.id,{text:'修改后的留言',expectedVersion:1},'edit-vc'),
+            moderate:(action)=>s.moderateComment(admin,vc.id,{action,reason:'治理'},action+'-vc')},
+        {id:pc.id,edit:()=>s.saveLearningComment(reader,post.id,pc.id,{text:'修改后的留言',expectedVersion:1},'edit-pc'),
+            moderate:(action)=>s.moderateLearningComment(admin,post.id,pc.id,{action,reason:'治理',expectedVersion:action==='hide'?2:3},action+'-pc')},
+    ];
+    let version=0;
+    for(const example of cases){
+        const option=(await s.bulletinOptions(admin,'留言',null)).items.find(x=>x.href.includes(example.id));
+        const set=await s.setBulletin(admin,{key:option.key,expectedVersion:version},'pin-'+example.id);
+        version=set.version;
+        await example.edit();
+        assert.equal((await s.readBulletin(reader)).item.summary,'修改后的留言');
+        await example.moderate('hide');
+        assert.equal((await s.readBulletin(reader)).item,null);
+        await example.moderate('restore');
+        assert.equal((await s.readBulletin(reader)).item,null);
+        const available=(await s.bulletinOptions(admin,'修改后的留言',null)).items.find(x=>x.href.includes(example.id));
+        assert.notEqual(available.key,option.key);
+    }
+});

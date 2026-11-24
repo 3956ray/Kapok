@@ -43,6 +43,7 @@ export const bootstraps = sqliteTable('bootstraps', {
 }, t => [uniqueIndex('bootstrap_team').on(t.teamId), uniqueIndex('bootstrap_operation').on(t.opId), check('bootstrap_slot', sql`${t.id}='site'`)]);
 
 export const trainings = sqliteTable('trainings', {
+  bulletinEpoch: integer('bulletin_epoch').notNull().default(1),
     publisherId: text('publisher_id').references(() => users.id),
     workspaceDetails: text('workspace_details').notNull().default('{}'),
     id: text('id').primaryKey(), teamId: text('team_id').notNull().references(() => teams.id), title: text('title').notNull(), date: text('date').notNull(), description: text('description').notNull(), status: text('status', {
@@ -65,6 +66,7 @@ export const uploads = sqliteTable('uploads', {
 
 }, t => [index('upload_team_lease').on(t.teamId, t.leaseUntil), check('upload_bytes', sql `${t.bytes}>0`), check('upload_status', sql `${t.status} IN ('pending','receiving','received','ready','rejected','cancelled')`)]);
 export const videos = sqliteTable('videos', {
+  bulletinEpoch: integer('bulletin_epoch').notNull().default(1),
     id: text('id').primaryKey(), trainingId: text('training_id').notNull().references(() => trainings.id), teamId: text('team_id').notNull().references(() => teams.id), title: text('title').notNull(), source: text('source', {
         enum: ['bilibili', 'youtube', 'upload']
     }).notNull(), url: text('url'), uploadId: text('upload_id').references(() => uploads.id).unique(), position: integer('position').notNull(), status: text('status', {
@@ -73,6 +75,7 @@ export const videos = sqliteTable('videos', {
     publisherId: text('publisher_id').references(() => users.id),
 }, t => [check('video_source', sql `${t.source} IN ('bilibili','youtube','upload')`), check('video_status', sql `${t.status} IN ('active','hidden','deleted')`), index('video_training_order').on(t.trainingId, t.position, t.id)]);
 export const videoComments = sqliteTable('video_comments', {
+  bulletinEpoch: integer('bulletin_epoch').notNull().default(1),
     referenceTimes: text('reference_times'),
     id: text('id').primaryKey(), videoId: text('video_id').notNull().references(() => videos.id), teamId: text('team_id').notNull().references(() => teams.id), authorId: text('author_id').notNull().references(() => users.id), rootId: text('root_id').references((): AnySQLiteColumn => videoComments.id), text: text('text').notNull(), timestampSec: integer('timestamp_sec'), status: text('status', {
         enum: ['active', 'hidden', 'deleted']
@@ -240,6 +243,7 @@ function learningContentChecks(name: string, t: { kind: AnySQLiteColumn; videoSo
     ];
 }
 export const learningPosts = sqliteTable('learning_posts', {
+  bulletinEpoch: integer('bulletin_epoch').notNull().default(1),
     workspaceDetails: text('workspace_details').notNull().default('{}'),
     id: text('id').primaryKey().notNull(), teamId: text('team_id').notNull().references(() => teams.id),
     ownerId: text('owner_id').notNull().references(() => users.id), ...learningContentColumns(),
@@ -348,6 +352,7 @@ export const topicLearningAssociations = sqliteTable('topic_learning_association
 ]);
 
 export const learningComments = sqliteTable('learning_comments', {
+  bulletinEpoch: integer('bulletin_epoch').notNull().default(1),
     referenceTimes: text('reference_times'),
     id: text('id').primaryKey(),
     postId: text('post_id').notNull().references(() => learningPosts.id),
@@ -427,3 +432,7 @@ export const readerDiscussions = sqliteTable('reader_discussions', {
     check('reader_discussion_reply',sql`(${t.rootId} IS NULL)=(${t.replyToId} IS NULL)`),
     check('reader_discussion_body',sql`(${t.status}='active' AND length(${t.body}) BETWEEN 1 AND 2000) OR (${t.status}='deleted' AND ${t.body}='')`),
 ]);
+
+export const teamBulletins = sqliteTable('team_bulletins', {
+  teamId: text('team_id').primaryKey().references(() => teams.id), selection: text('selection'), version: integer('version').notNull(),
+}, t => [check('bulletin_version', sql`${t.version}>0`)]);

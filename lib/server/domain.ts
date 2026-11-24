@@ -1,3 +1,4 @@
+import { createTeamBulletin } from './team-bulletin.ts';
 import { fieldPosition } from '../contracts/profile-position.ts';
 import { validateAvatar } from './profile-avatar.ts';
 import { imageDataBytes } from './learning-image-validation.ts';
@@ -387,7 +388,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   return { readVideoCover: (source: string | null) => videoCover(bucket, source), me, getAccount, getBootstrap, bootstrap, join, updateProfile, getProfileAvatar, createInvite, activeMember, ...reflections,
     ...createReflectionImages({db,bucket,activeMember,clock,operation}),
     ...createDataRightsService({ db, clock, activeMember, me: businessAccount, operation }),
-    ...topics,
+    ...topics, ...createTeamBulletin({db,activeMember,operation}),
     ...createLearningActivity({ db, clock, activeMember, operation }),
     ...createLearningDiscussion({ db, clock, activeMember, operation }),
     ...createReaderDiscussions({db,clock,activeMember,operation}),

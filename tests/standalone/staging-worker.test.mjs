@@ -49,6 +49,7 @@ const migrations = [
   "0027_reflection_image_cleanup.sql",
   "0028_reader_discussions.sql",
   "0029_field_positions.sql",
+  "0030_team_bulletin.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {

@@ -189,6 +189,12 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (method === 'GET' && route === 'members') data = await service.listMembers(principal);
     else if (method === 'GET' && path[0] === 'members' && path.length === 2) data = await service.getMemberProfile(principal, path[1]);
     else if (method === 'GET' && route === 'workspace/export-assets') data = await service.listWorkspaceExportAssets(principal);
+    else if (method === 'GET' && route === 'workspace/bulletin') data = await service.readBulletin(principal);
+    else if (method === 'GET' && route === 'workspace/bulletin/options') {
+      const params = new URL(request.url).searchParams;
+      data = await service.bulletinOptions(principal, params.get('q') ?? '', params.get('cursor'));
+    }
+    else if (method === 'PUT' && route === 'workspace/bulletin') data = await service.setBulletin(principal, await body(), key);
     else if (method === 'GET' && route === 'workspace/dispatch') data = await service.workspaceDispatch(principal, new URL(request.url).searchParams.get('cursor'));
     else if (method === 'GET' && route === 'activity') {
       const url = new URL(request.url);
