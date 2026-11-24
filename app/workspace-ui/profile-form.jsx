@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { fieldPositions } from '../../lib/contracts/profile-position';
 import { ImagePlus } from 'lucide-react';
 import { Avatar } from './ui.jsx';
 import { prepareAvatar, imageDataUrl } from './profile-avatar.js';
@@ -132,7 +133,7 @@ export function ProfileForm({ profile: p, onSave, onCancel, onBusy }) {
             场上位置
             <select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}>
               <option value="">尚未选择</option>
-              {['接盘手', '持盘手', '防守组'].map((v) => (
+              {fieldPositions.map((v) => (
                 <option key={v}>{v}</option>
               ))}
             </select>

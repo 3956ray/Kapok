@@ -1,3 +1,4 @@
+import { fieldPosition } from '../contracts/profile-position.ts';
 import { validateAvatar } from './profile-avatar.ts';
 import { imageDataBytes } from './learning-image-validation.ts';
 import { videoCover } from './video-covers.ts';
@@ -320,7 +321,8 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
   async function updateProfile(principal: Principal | null, input: unknown, key: string): Promise<WriteResult> {
     const current = authenticated(principal);
     const raw = object(input, ['discName', 'jerseyNumber', 'bio', 'position', 'expectedVersion', 'avatar']);
-    if (raw.position !== undefined && !['', '接盘手', '持盘手', '防守组'].includes(String(raw.position))) throw new DomainError('INVALID_INPUT', '请选择有效的场上位置。');
+    const position = fieldPosition(raw.position);
+    if (raw.position !== undefined && position === undefined) throw new DomainError('INVALID_INPUT', '请选择有效的场上位置。');
     const details = { ...profile(raw), ...(raw.position === undefined ? {} : { position: raw.position }), bio: raw.bio === undefined ? undefined : raw.bio };
     if (details.bio !== undefined && (typeof details.bio !== 'string' || details.bio.trim().length > 160)) throw new DomainError('INVALID_INPUT', '简介最多160字。');
     if (!Number.isSafeInteger(raw.expectedVersion) || Number(raw.expectedVersion) < 1) throw new DomainError('INVALID_INPUT', '请重新加载资料后再保存。');
@@ -341,7 +343,7 @@ export function createService({ db, bucket, clock = systemClock, bootstrapSiteUs
           : identityGuard(op.opId, context.user.id, current),
         assertGuard(db, op.opId, 'version', 'EXISTS(SELECT 1 FROM profiles WHERE user_id=? AND version=?)', [context.user.id, raw.expectedVersion]),
         statement('UPDATE profiles SET disc_name=?,jersey_number=?,bio=COALESCE(?,bio),version=version+1 WHERE user_id=? AND version=?', details.discName, details.jerseyNumber, typeof details.bio === 'string' ? details.bio.trim() : null, context.user.id, raw.expectedVersion),
-        ...(typeof raw.position === 'string' ? [statement('UPDATE profiles SET position=? WHERE user_id=?', raw.position, context.user.id)] : []),
+        ...(position !== undefined ? [statement('UPDATE profiles SET position=? WHERE user_id=?', position, context.user.id)] : []),
         ...(avatar === undefined ? [] : [
           assertGuard(db,op.opId,'avatar-member',`EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id
             WHERE m.user_id=? AND m.id=? AND m.epoch=? AND u.status='active' AND m.status='active')`,

@@ -48,6 +48,7 @@ const migrations = [
   "0026_reflection_photos.sql",
   "0027_reflection_image_cleanup.sql",
   "0028_reader_discussions.sql",
+  "0029_field_positions.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
@@ -435,7 +436,7 @@ test("deployed Worker runs the orphan sweep on its configured cron with no membe
 
 test("0028 retains existing grants and publication state, and the deployed reader discussion routes bind the current generation",async t=>{
   const app=start(t,{bindings:{...bindings,ACCESS_INITIAL_ADMIN_EMAIL:principal.verifiedEmail}});
-  const db=await migratedDb(app,migrations.slice(0,-1));
+  const db=await migratedDb(app,migrations.filter(file => file < "0028"));
   const jwt=await assertion(), actor=await actorKey(principal);
   const api=async(path,method="GET",body)=>{
     const response=await app.dispatchFetch(origin+"/api/v1/"+path,{method,body:body===undefined ? undefined : JSON.stringify(body),

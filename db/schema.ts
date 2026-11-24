@@ -12,7 +12,7 @@ export const authIdentities = sqliteTable('auth_identities', {
 export const profiles = sqliteTable('profiles', {
   position: text('position').notNull().default(''),
   userId: text('user_id').primaryKey().references(() => users.id), bio: text('bio').notNull().default(''), discName: text('disc_name').notNull(), jerseyNumber: text('jersey_number').notNull(), version: integer('version').notNull().default(1),
-}, t => [check('profile_disc_name', sql`length(${t.discName}) BETWEEN 1 AND 20`), check('profile_jersey', sql`length(${t.jerseyNumber}) BETWEEN 1 AND 4`), check('profile_version', sql`${t.version}>0`)]);
+}, t => [check('profile_position', sql`${t.position} IN ('','Cutter','Handler','防守大闸','六边形')`), check('profile_disc_name', sql`length(${t.discName}) BETWEEN 1 AND 20`), check('profile_jersey', sql`length(${t.jerseyNumber}) BETWEEN 1 AND 4`), check('profile_version', sql`${t.version}>0`)]);
 export const teams = sqliteTable('teams', {
   id: text('id').primaryKey(), singleton: integer('singleton').notNull(), name: text('name').notNull(), description: text('description').notNull(), createdAt: text('created_at').notNull(),
 }, t => [uniqueIndex('team_singleton').on(t.singleton), check('team_slot', sql`${t.singleton}=1`)]);

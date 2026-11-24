@@ -347,3 +347,30 @@ test('account lookup uses one D1 read and bootstrap batches its snapshot without
   assert.equal(batches, 1);
   assert.equal((await service.getBootstrap(alice)).me.user, null);
 });
+
+test('field positions migrate existing profiles and round-trip the four choices and an empty selection', async t => {
+  const { f } = await seeded(t);
+  await migrate(f.db, '0022_workspace_profile_position.sql');
+  const { user, profile: original } = await f.service.me(owner);
+  const write = (position, expectedVersion, key) => f.service.updateProfile(owner, {
+    ...bootstrapInput, expectedVersion, position,
+  }, key);
+  await f.db.prepare("UPDATE profiles SET position='持盘手' WHERE user_id=?").bind(user.id).run();
+  await migrate(f.db, '0029_field_positions.sql');
+  assert.deepEqual((await f.service.me(owner)).profile, { ...original, position: 'Handler' });
+  let version = original.version;
+  for (const [index, [input, expected]] of [
+    ['Cutter','Cutter'], ['Handler','Handler'], ['防守大闸','防守大闸'], ['六边形','六边形'],
+    ['接盘手','Cutter'], ['持盘手','Handler'], ['防守组','防守大闸'], ['',''],
+  ].entries()) {
+    const key = 'field-position-' + index;
+    const saved = await write(input, version, key);
+    assert.equal(saved.me.profile.position ?? '', expected);
+    assert.equal((await write(input, version, key)).operationId, saved.operationId);
+    version = saved.me.profile.version;
+  }
+  for (const invalid of [null, ['Cutter'], 'admin']) {
+    await rejectsCode(write(invalid, version, 'invalid-position'), 'INVALID_INPUT');
+  }
+  await assert.rejects(f.db.prepare("UPDATE profiles SET position='防守组' WHERE user_id=?").bind(user.id).run(), /CHECK constraint/i);
+});
