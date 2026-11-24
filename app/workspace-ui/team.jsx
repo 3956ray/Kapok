@@ -45,6 +45,17 @@ function dispatchRow(row) {
 export function Activity() {
   useTitle('队内动态');
   const { ctx, trainings, collections, remoteCollections, refreshShares } = useData();
+  const [board,setBoard] = useState(null);
+  const [boardRevision,reloadBoard] = useState(0);
+  useEffect(()=>{
+    const controller=new AbortController();
+    ctx.read('workspace/bulletin',controller.signal).then(value=>{
+      if (!controller.signal.aborted) setBoard({ctx,item:value.item,fallback:value.fallback});
+    },e=>{
+      if (!controller.signal.aborted) setBoard({ctx,error:e.message});
+    });
+    return ()=>controller.abort();
+  },[ctx,boardRevision]);
   const [filter, setFilter] = usePreference('activity-filter', '全部');
   const [anchor, setAnchor] = usePreference('activity-anchor', null);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,7 +95,12 @@ export function Activity() {
     ...catalogEntries(collections.filter(c=>c.published),remoteCollections,trainings).map(volume=>({key:'v:'+volume.key,type:'合集',date:volume.date,who:volume.author,title:volume.title,href:volume.href,volume})),
     ...feed,
   ].sort(compareActivity),[trainings,collections,remoteCollections,feed]);
-  const lead = trainings.find((t) => t.kind === 'training' && t.published);
+  const currentBoard = board?.ctx===ctx ? board : null;
+  const pin = currentBoard?.item;
+  const lead = pin || currentBoard?.fallback;
+  const cover = lead?.cover || (lead?.type==='训练' ? '/workspace-assets/media/sideline-team.webp' : null);
+  const photoKey = lead?.type==='训练' ? 'dispatch:'+lead.href.slice('/trainings/'.length) : undefined;
+  const canEdit = ctx.account.membership.role==='admin' && ctx.account.membership.status==='active';
   const voices = entries.filter((e) => e.type === '讨论' || e.type === '复盘').slice(0, 2);
   const filtered = useMemo(() => filter === '全部' ? entries : entries.filter((e) => e.type === filter), [entries, filter]);
   const cursor = filtered.length > activityPageSize && anchor?.filter === filter ? anchor : null;
@@ -99,6 +115,7 @@ export function Activity() {
   async function refresh() {
     scrollToIndex();
     setRefreshing(true);
+    reloadBoard(n=>n+1);
     try { await refreshShares(); } catch(e){setFeedError(e.message);} finally { setRefreshing(false); }
   }
   const groups = new Map();
@@ -121,33 +138,36 @@ export function Activity() {
           )
         }
       />
-      {lead && (
+      {canEdit && <div className="bulletin-edit"><NavLink className="desk-action" to="/account/manage/announcements?edit=bulletin"><Pencil size={15}/>编辑公告板</NavLink></div>}
+      {currentBoard?.error && <p role="alert">公告板暂时无法读取。<button onClick={()=>reloadBoard(n=>n+1)}>重试</button></p>}
+      {currentBoard && !currentBoard.error && !lead && <p className="quiet-box">公告板暂无内容。</p>}
+      {currentBoard && lead && (
         <div className="front-page">
-          <article className="lead-story">
-            <NavLink
+          <article className={cover ? "lead-story" : "lead-story bulletin-text"}>
+            {cover && <NavLink
               className="lead-photo"
-              to={'/trainings/' + lead.id}
-              photoKey={'dispatch:' + lead.id}
-              aria-label={'观看最新训练：' + lead.title}
+              to={lead.href}
+              photoKey={photoKey}
+              aria-label={'查看'+lead.type+'：'+lead.title}
             >
-              <span data-photo-key={'dispatch:' + lead.id}>
-                <img src={teamPhoto(lead)} alt="" fetchPriority="high" />
+              <span data-photo-key={photoKey}>
+                <img src={cover} referrerPolicy="no-referrer" alt="" fetchPriority="high" />
               </span>
               <i aria-hidden="true">
                 <ArrowUpRight size={22} />
               </i>
-            </NavLink>
+            </NavLink>}
             <div className="lead-story-info">
               <div className="record-meta">
-                <span className="press-section">最新训练</span>
+                <span className="press-section">{pin ? "公告板 · "+pin.type : "最新训练"}</span>
                 <span>{lead.author}</span>
               </div>
               <h2>
-                <NavLink to={'/trainings/' + lead.id} photoKey={'dispatch:' + lead.id}>
+                <NavLink to={lead.href} photoKey={photoKey}>
                   {lead.title}
                 </NavLink>
               </h2>
-              <p><TextLinks text={lead.summary}/></p>
+              {lead.summary && <p><TextLinks text={lead.summary}/></p>}
             </div>
           </article>
           <section className="press-column" aria-labelledby="voices-title">

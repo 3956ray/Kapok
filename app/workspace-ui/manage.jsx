@@ -1,3 +1,4 @@
+import { BulletinSettings } from './bulletin';
 import { localImageExport } from './note-image-store.js';
 import Link from 'next/link';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -99,7 +100,7 @@ function DeskIndex() {
   const records = trainings.filter((t) => t.kind === 'training');
   const descriptions = [
     records.length + ' 条训练 · 查看与维护训练记录',
-    '编写、修订和发布队内通知',
+    '管理动态顶部公告板，编写与发布队内通知',
     people.length + ' 位队员 · 设置管理权限与状态',
     '挑选并排列训练合集',
   ];
@@ -475,6 +476,7 @@ export function Management({ section = '' }) {
   const allowed = ctx.account.membership.role === 'admin' && ctx.account.membership.status === 'active';
   const endpoint = {announcements:'announcements?view=editor',members:'admin/members',featured:'learning/featured?view=admin'}[section];
   const resource = useDeskRead(allowed ? endpoint : null);
+  const board = useDeskRead(allowed && section === 'announcements' ? 'workspace/bulletin' : null);
   const item = sections.find(([key]) => key === section);
   const { db } = useData();
   const title = item?.[1] || '队伍管理';
@@ -518,6 +520,7 @@ export function Management({ section = '' }) {
       <DeskNav section={section} />
       {!section && <DeskIndex />}
       {section === 'trainings' && <TrainingDesk />}
+      {section === 'announcements' && <AwaitDesk resource={board}>{current=><BulletinSettings current={current} reload={board.reload}/>}</AwaitDesk>}
       {section === 'announcements' && <AwaitDesk resource={resource}>{rows=><Notices rows={rows} reload={resource.reload}/>}</AwaitDesk>}
       {section === 'members' && <AwaitDesk resource={resource}>{rows=><MemberDesk rows={rows} reload={resource.reload}/>}</AwaitDesk>}{' '}
       {section === 'featured' && <AwaitDesk resource={resource}>{current=><FeaturedDesk current={current} reload={resource.reload}/>}</AwaitDesk>}
