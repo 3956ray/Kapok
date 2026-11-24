@@ -19,7 +19,7 @@ import { NavLink, useNav } from './router';
 import { kindName, useData } from './store';
 import { noteCategoryLabel } from './categories.js';
 import { catalogEntries, matchText } from './collection-model';
-import { Avatar, IconButton, Mark, Modal, Status, Tip, usePreference, WriteNoteIcon } from './ui';
+import { Avatar, IconButton, Modal, Status, Tip, usePreference, WriteNoteIcon } from './ui';
 const dests = [
   { to: '/trainings', name: '训练室', icon: Clapperboard },
   { to: '/growth', name: '成长记录', icon: BookOpen },
@@ -78,7 +78,7 @@ function NavBody({ narrow = false, mobile = false, onClose }) {
     <>
       <div className="brand-line">
         <NavLink to="/trainings" aria-label="Kapok 训练室" className="brand" onClick={onClose}>
-          <Mark />
+          <img src="/workspace-assets/media/kapok-team-crest.png" alt="" width="34" height="34" />
           <b>Kapok</b>
         </NavLink>
         {mobile && (
