@@ -1,5 +1,5 @@
 import { TextLinks } from '../components/learning-text';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Clock3, CornerDownRight, Play, Send, X } from 'lucide-react';
 import { useNav } from './router';
 import { shortDate, uid, useData, useRoster } from './store';
@@ -8,6 +8,29 @@ import { Avatar, Modal } from './ui';
 import { isReferenceSecond, maxTimepoints, parseTimeLabel, referenceTimeError, timeLabel } from './timepoints.js';
 import { ReferenceTime } from './reference-time.jsx';
 import { discussionSources, isReaderDiscussion, readDiscussion, readReaderDiscussion } from './discussion-sources.js';
+
+function MaterialDiscussionList({ children }) {
+  const listRef = useRef(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const sidebar = list.closest('.material-columns')?.querySelector('.training-margin-content');
+    if (!sidebar) return;
+    const discussion = list.closest('.discussion');
+    const measure = () => {
+      const height = sidebar.getBoundingClientRect().bottom - list.getBoundingClientRect().top;
+      list.style.setProperty('--sidebar-reading-height', Math.round(height) + 'px');
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(sidebar);
+    for (const sibling of discussion.children) {
+      if (sibling === list) break;
+      observer.observe(sibling);
+    }
+    return () => observer.disconnect();
+  }, []);
+  return <div className="discussion-list" ref={listRef} role="region" aria-label="评论列表" tabIndex={0}>{children}</div>;
+}
 
 export default function Discussion({ t, subject = t, ...media }) {
   return <DiscussionResource key={[subject.kind, subject.id, subject.selectedVideo?.id].join(':')} item={subject} {...media} />;
@@ -286,6 +309,9 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
       </div>
     );
   }
+  const ThreadList = reader ? Fragment : MaterialDiscussionList;
+  const orderedThreads = [...threads.values()];
+  if (!reader) orderedThreads.reverse();
   return (
     <section className="discussion" aria-labelledby="discussion-heading">
       <div className="heading-line">
@@ -299,14 +325,16 @@ function DiscussionThread({ item, sources, view, reload, selected, mediaKey, mea
         </p>
       )}
       {threads.size ? (
-        [...threads.values()].map(({ id, root, replies }) => (
-          <div className="thread" key={id}>
-            {root ? entry(root) : (
-              <p className="removed-comment" id={'comment-' + id} tabIndex={-1}>原评论已删除</p>
-            )}
-            {replies.map(entry)}
-          </div>
-        ))
+        <ThreadList>
+          {orderedThreads.map(({ id, root, replies }) => (
+            <div className="thread" key={id}>
+              {root ? entry(root) : (
+                <p className="removed-comment" id={'comment-' + id} tabIndex={-1}>原评论已删除</p>
+              )}
+              {replies.map(entry)}
+            </div>
+          ))}
+        </ThreadList>
       ) : (
         <p className="quiet-box">{reader ? '还没有留言。' : '还没有讨论。可以记下观察到的动作，和队友聊聊。'}</p>
       )}

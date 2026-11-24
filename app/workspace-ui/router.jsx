@@ -35,10 +35,12 @@ function commentTarget(path) {
   return element?.hasAttribute('data-comment-unavailable') ? null : element;
 }
 function focusComment(el) {
-  const frame = document.documentElement;
-  const padding = getComputedStyle(frame);
-  const available =
-    frame.clientHeight - parseFloat(padding.scrollPaddingTop) - parseFloat(padding.scrollPaddingBottom);
+  const list = el.closest('.discussion-list');
+  const frames = list ? [document.documentElement, list] : [document.documentElement];
+  const available = Math.min(...frames.map(frame => {
+    const style = getComputedStyle(frame);
+    return frame.clientHeight - (parseFloat(style.scrollPaddingTop) || 0) - (parseFloat(style.scrollPaddingBottom) || 0);
+  }));
   const align = el.getBoundingClientRect().height > available ? 'start' : 'center';
   el.scrollIntoView({ block: align, behavior: 'instant' });
   el.focus({ preventScroll: true });
@@ -210,6 +212,11 @@ export function RouterProvider({ children, initialPath = base }) {
         const id = current.current.index + 1;
         history.replaceState({ ...history.state, kapokIndex: id }, '');
         change(to, id, false, false);
+        // The outer app router also scrolls newly entered hashes on its next frame.
+        const target = commentTarget(to);
+        if (target) requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (current.current.path === to && document.activeElement === target) focusComment(target);
+        }));
         return;
       }
       const id = index();

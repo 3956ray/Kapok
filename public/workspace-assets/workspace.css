@@ -311,6 +311,8 @@
   grid-column: 2;
   grid-row: 1;
   min-width: 0;
+}
+.training-margin-content {
   border-left: 1px solid var(--line);
   padding-left: clamp(15px, 2.4vw, 35px);
 }
@@ -318,7 +320,7 @@
   border: 0;
   padding: 0;
 }
-.training-margins > :not(.training-notes) + .training-notes {
+.training-margin-content > :not(.training-notes) + .training-notes {
   margin-top: 28px;
 }
 .training-notes .heading-line {
@@ -362,15 +364,15 @@
   .material-photos {
     grid-template-columns: minmax(0, 1fr);
   }
-  .material-columns .training-margins {
-    width: 100%;
+  .material-columns .training-margins { width: 100%; }
+  .training-margin-content {
     padding: 0;
     border: 0;
   }
   .material-columns .discussion {
     width: 100%;
   }
-  .material-columns {
+  .detail-columns.material-columns {
     display: flex;
     flex-direction: column;
   }
@@ -5316,3 +5318,35 @@ html[data-collection-step='reading'] .detail-page :is(.detail-head, .detail-summ
 }
 .writer-page .writing-main > label > input::placeholder,
 .writer-page .writing-main .writing-area::placeholder { font: inherit; opacity: 1; }
+
+/* Training reader: align the heading rows and keep the composer outside the scroll area. */
+.material-columns .discussion > .heading-line,
+.material-columns .training-margin-content .chapter-heading {
+  min-height: 44px;
+  margin-bottom: 6px;
+}
+.material-columns .discussion > .heading-line h2,
+.material-columns .training-margin-content .chapter-heading h2 {
+  margin: 0;
+  font: 600 26px/1.4 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', 'STSong', serif;
+  letter-spacing: -0.025em;
+}
+.material-columns .discussion-list {
+  max-height: 62svh;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+  scroll-padding-block: 8px;
+}
+.material-columns .discussion-list:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 2px;
+}
+@media (min-width: 701px) {
+  .material-columns > .discussion,
+  .material-columns > .training-margins { align-self: stretch; }
+  .material-columns .discussion-list {
+    /* The composer has a 12px top margin and starts 36px above the sidebar end. */
+    max-height: clamp(8rem, calc(var(--sidebar-reading-height, 62svh) - 48px), 78svh);
+  }
+}

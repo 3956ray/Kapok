@@ -474,11 +474,13 @@ export function TrainingReader({ t,reload,backControl,collectionNav,videoPath,co
       {t.published && <ContentLink id={t.id} videoId={t.selectedVideo?.id} />}
       <div className="detail-columns material-columns">
         <aside className="training-margins">
-          {(local || external) && <WatchChapters saved={reload} key={mediaKey} item={t} playback={{started,play,playhead}} duration={measure.duration} capture={capture} />}
-          <RelatedNotes trainingId={t.id} />
+          <div className="training-margin-content">
+            {(local || external) && <WatchChapters saved={reload} key={mediaKey} item={t} playback={{started,play,playhead}} duration={measure.duration} capture={capture} />}
+            <RelatedNotes trainingId={t.id} />
+          </div>
         </aside>
-        <Suspense fallback={<section className="discussion" aria-busy="true"><h2>队内讨论</h2></section>}>
-          {(t.kind==='training' ? ['published','archived'].includes(t.status) : !t.isDraft) ? <Discussion t={t} mediaKey={mediaKey} measure={measure} capture={capture} play={playCitation} /> : <section className="discussion"><h2>队内讨论</h2><p>资料发布后可参与讨论。</p></section>}
+        <Suspense fallback={<section className="discussion" aria-busy="true"><div className="heading-line"><h2>队内讨论</h2></div></section>}>
+          {(t.kind==='training' ? ['published','archived'].includes(t.status) : !t.isDraft) ? <Discussion t={t} mediaKey={mediaKey} measure={measure} capture={capture} play={playCitation} /> : <section className="discussion"><div className="heading-line"><h2>队内讨论</h2></div><p>资料发布后可参与讨论。</p></section>}
         </Suspense>
       </div>
     </div>
