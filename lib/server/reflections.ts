@@ -864,14 +864,15 @@ export function createReflectionService({
                         json_extract(note.photos,'$[0].id')||'?size=thumb' END AS photoUrl,
                 CASE WHEN feed.kind='reflection' THEN json_extract(note.photos,'$[0].caption') END AS photoCaption
             FROM (SELECT * FROM first_sources
-            UNION ALL SELECT 'v:'||v.id,'training_video',t.id,v.title,'',coalesce(p.disc_name,'队内训练'),e.published_at,v.id,NULL
+            UNION ALL SELECT 'v:'||v.id,'training_video',t.id,v.title,'',coalesce(p.disc_name,'队内训练'),t.date,v.id,NULL
                 FROM video_events e JOIN videos v ON v.id=e.video_id JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
                 LEFT JOIN profiles p ON p.user_id=v.publisher_id WHERE v.team_id=? AND v.status='active' AND t.status='published'
             UNION ALL SELECT 'lc:'||lc.id,'discussion',lp.id,lpub.title,substr(lc.text,1,160),p.disc_name,lc.created_at,NULL,lc.id
                 FROM learning_comments lc JOIN learning_posts lp ON lp.id=lc.post_id AND lp.team_id=lc.team_id
                 JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lc.author_id
                 WHERE lc.team_id=? AND lc.status='active' AND ${learningPostVisible}
-            UNION ALL SELECT 'la:'||la.id,lpub.kind,lp.id,lpub.title,'',p.disc_name,la.shared_at,NULL,NULL
+            UNION ALL SELECT 'la:'||la.id,lpub.kind,lp.id,lpub.title,'',p.disc_name,
+                coalesce(json_extract(lpub.workspace_details,'$.date'),la.shared_at),NULL,NULL
                 FROM learning_activity_events la JOIN learning_posts lp ON lp.id=la.post_id
                 JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lp.owner_id
                 WHERE lp.team_id=? AND ${learningActivityVisible}

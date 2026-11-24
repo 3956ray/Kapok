@@ -850,3 +850,57 @@ test('workspace editor publishes a local video and photos, rereads chapters and 
     assert.deepEqual(quietAccount.trainingDiscussions,[]);
     assert.deepEqual(quietAccount.learningPosts,[]);
 });
+
+test('workspace dispatch archives training videos on the selected day across pages and leaves discussion and publication times intact', async t => {
+    const { s, db } = await fixture(t);
+    const publish = date => s.publishTraining(admin, {title:'大学城训练', date, description:'',
+        video:{title:'训练片段',url:'https://www.bilibili.com/video/BV1xx411c7mD/'}}, crypto.randomUUID());
+    const recent = await publish('2020-10-19');
+    const older = await publish('2020-09-25');
+    const auditTime = () => db.prepare('SELECT published_at FROM video_events WHERE video_id=?').bind(older.video.id).first('published_at');
+    const publishedAt = await auditTime();
+    const comment = await s.saveComment(reader, older.video.id, null, {text:'今天的观察'}, 'comment');
+
+    // Historical bulk imports can span a page within a single activity day.
+    await db.prepare(`WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<100)
+        INSERT INTO videos(id,training_id,team_id,title,source,url,position,status,created_at,updated_at,publisher_id)
+        SELECT 'archive-'||n,training_id,team_id,title,source,url,n+1,status,created_at,updated_at,publisher_id
+        FROM videos,seq WHERE videos.id=?`).bind(older.video.id).run();
+    const first = await s.workspaceDispatch(reader,null);
+    const second = await s.workspaceDispatch(reader,first.next);
+    assert.equal(first.items.length,100);
+    assert.equal(second.next,null);
+    const items = [...first.items,...second.items];
+    assert.equal(items.length,103);
+    assert.equal(new Set(items.map(row=>row.key)).size,103);
+    assert.equal(items[0].comment,comment.id);
+    assert.equal(items[0].date,await db.prepare('SELECT created_at FROM video_comments WHERE id=?').bind(comment.id).first('created_at'));
+    assert.equal(items[1].video,recent.video.id);
+    assert.equal(items[1].date,'2020-10-19');
+    assert.ok(items.slice(2).every(row=>row.source===older.training.id && row.date==='2020-09-25'));
+    await s.saveTraining(admin,older.training.id,{date:'2020-10-20',title:'更正日期',description:'',
+        status:'published',expectedVersion:older.training.version},'correct');
+    const corrected = await s.workspaceDispatch(reader,null);
+    assert.equal(corrected.items[1].date,'2020-10-20');
+    assert.equal(corrected.items[1].source,older.training.id);
+    assert.equal(await auditTime(),publishedAt);
+});
+
+test('shared learning materials use the published record date or the original share time for undated records', async t => {
+    const { s } = await fixture(t);
+    await s.createLearningCategory(author,{name:'随谈'},'daily-category');
+    for (const data of [{}, {workspaceDetails:{date:'2020-09-25'}}, {kind:'video',video:{source:'bilibili',url:'https://www.bilibili.com/video/BV1xx411c7mD/'},workspaceDetails:{date:'2020-10-19'}}]) {
+        const post = await s.saveLearningPost(author,null,{...input,...data,category:'随谈'},crypto.randomUUID());
+        const published = await s.publishLearningPost(author,post.id,publicationVersion(post),crypto.randomUUID());
+        await s.changeLearningActivity(author,post.id,{expectedPublishedVersion:published.publishedVersion,
+            expectedMembershipEpoch:published.membershipEpoch,expectedEventId:null},crypto.randomUUID(),true);
+        const {event} = await s.getLearningActivity(author,post.id);
+        const expected = data.workspaceDetails?.date ?? event.sharedAt;
+        const get = async () => (await s.workspaceDispatch(reader,null)).items.find(row=>row.source===post.id);
+        assert.equal((await get()).date,expected);
+        const current = await draft(s,post.id);
+        await s.saveLearningPost(author,post.id,{...input,...data,category:'随谈',workspaceDetails:{date:'2020-12-01'},
+            expectedVersion:current.version},crypto.randomUUID());
+        assert.equal((await get()).date,expected);
+    }
+});
