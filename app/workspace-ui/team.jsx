@@ -101,8 +101,11 @@ export function Activity() {
   const cover = lead?.cover || (lead?.type==='训练' ? '/workspace-assets/media/sideline-team.webp' : null);
   const photoKey = lead?.type==='训练' ? 'dispatch:'+lead.href.slice('/trainings/'.length) : undefined;
   const canEdit = ctx.account.membership.role==='admin' && ctx.account.membership.status==='active';
-  const voices = entries.filter((e) => e.type === '讨论' || e.type === '复盘').slice(0, 2);
-  const filtered = useMemo(() => filter === '全部' ? entries : entries.filter((e) => e.type === filter), [entries, filter]);
+  const showingDiscussion = filter === '讨论';
+  const publications = useMemo(() => entries.filter((e) => e.type !== '讨论'), [entries]);
+  const edition = showingDiscussion ? entries : publications;
+  const voices = edition.filter((e) => e.type === '讨论' || e.type === '复盘').slice(0, 2);
+  const filtered = useMemo(() => filter === '全部' ? publications : entries.filter((e) => e.type === filter), [publications, entries, filter]);
   const cursor = filtered.length > activityPageSize && anchor?.filter === filter ? anchor : null;
   const match = cursor ? filtered.findIndex((e) => compareActivity(e, cursor) >= 0) : 0;
   const start = match < 0 ? Math.max(0, filtered.length - activityPageSize) : match;
@@ -130,10 +133,10 @@ export function Activity() {
         title="队内动态"
         description="Kapok Bloom 队报"
         action={
-          entries[0] && (
+          edition[0] && (
             <div className="edition-date">
               <span>最近更新</span>
-              <time dateTime={entries[0].date}>{newspaperDate(entries[0].date)}</time>
+              <time dateTime={edition[0].date}>{newspaperDate(edition[0].date)}</time>
             </div>
           )
         }
@@ -193,7 +196,7 @@ export function Activity() {
                 </article>
               ))
             ) : (
-              <p className="quiet-box">队友的讨论与公开复盘会出现在这里。</p>
+              <p className="quiet-box">{showingDiscussion ? '队友的讨论与公开复盘会出现在这里。' : '队友公开分享的复盘会出现在这里。'}</p>
             )}
           </section>
         </div>
