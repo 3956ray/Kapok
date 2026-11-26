@@ -1,6 +1,7 @@
 import type { Principal } from '../contracts/index';
 import { learningPostVisible, bindLearningMember, learningMemberFence, learningMemberGuard, learningObject, commitLearning, type LearningContext, type LearningDependencies } from './learning.ts';
 import { assertGuard, DomainError } from './domain.ts';
+import { teamReadableReflection } from './reflection-visibility.ts';
 import { validatedLearningImage } from './learning-image-validation.ts';
 import { inspectMP4Ranges } from './media.ts';
 import { HOSTED_MEDIA_POLICY, MEDIA_MAX_SECONDS, type MediaPolicy } from '../contracts/media.ts';
@@ -199,11 +200,15 @@ export function createWorkspaceAssets({ db,bucket,clock,activeMember,operation,m
                     WHERE lp.id=a.parent_id AND lp.owner_id=a.owner_id AND lp.team_id=a.team_id AND ${learningPostVisible}
                     AND (${publishedPhoto('lpub.workspace_details')} OR lpub.video_url='/api/v1/material-assets/'||a.id))))
             UNION ALL
+            SELECT ri.id,'reflection',r.id FROM reflection_images ri JOIN reflections r ON r.id=ri.reflection_id
+            WHERE r.owner_id=? AND r.team_id=? AND ri.owner_id=r.owner_id AND ri.team_id=r.team_id AND ri.state='ready'
+                AND ${teamReadableReflection} AND EXISTS(SELECT 1 FROM json_each(r.photos) j WHERE json_extract(j.value,'$.id')=ri.id)
+            UNION ALL
             SELECT v.id,'video',v.training_id FROM videos v JOIN uploads u ON u.id=v.upload_id AND u.team_id=v.team_id
             JOIN trainings t ON t.id=v.training_id AND t.team_id=v.team_id
             WHERE u.owner_id=? AND u.team_id=? AND u.status='ready' AND u.cleanup_state='none' AND u.transfer_active=0
                 AND v.status='active' AND t.publisher_id=u.owner_id AND t.status IN ('published','archived')
-        ) WHERE ${member.sql}`,owner,team,owner,team,...member.values).all();
+        ) WHERE ${member.sql}`,owner,team,owner,team,owner,team,...member.values).all();
         return results;
     }
     return {reserveMaterialAsset,putMaterialAsset,getMaterialAsset,listWorkspaceExportAssets};

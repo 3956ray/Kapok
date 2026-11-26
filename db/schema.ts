@@ -321,11 +321,11 @@ export const workspaceTopicCoverRevisions = sqliteTable('workspace_topic_cover_r
 ]);
 export const topicCollectionItems = sqliteTable('topic_collection_items', {
     collectionId: text('collection_id').notNull().references(() => topicCollections.id),
-    snapshot: integer('snapshot').notNull(), kind: text('kind', { enum: ['post', 'video', 'training'] }).notNull(),
+    snapshot: integer('snapshot').notNull(), kind: text('kind', { enum: ['post', 'video', 'training', 'reflection'] }).notNull(),
     sourceId: text('source_id').notNull(), position: integer('position').notNull(),
 }, t => [
     primaryKey({ columns: [t.collectionId, t.snapshot, t.kind, t.sourceId] }), unique().on(t.collectionId, t.snapshot, t.position),
-    check('topic_item_snapshot', sql`${t.snapshot} IN (0,1)`), check('topic_item_kind', sql`${t.kind} IN ('post','video','training')`),
+    check('topic_item_snapshot', sql`${t.snapshot} IN (0,1)`), check('topic_item_kind', sql`${t.kind} IN ('post','video','training','reflection')`),
     check('topic_item_position', sql`${t.position}>=0`),
 ]);
 export const workspaceTopicShares = sqliteTable('workspace_topic_shares', {

@@ -329,6 +329,7 @@ test('0020 upgrades populated directories without changing old chapter order or 
     const before = await read();
     await migrate('0020_workspace_topics.sql');
     await migrate('0025_workspace_topic_covers.sql');
+    await migrate('0026_reflection_photos.sql');
     assert.deepEqual(await read(),before);
     assert.deepEqual((await s.workspaceTopics(author)).map(row => [row.title,row.version,row.category,row.coverVersion]).sort(),
         [['Draft',7,'',null],['Publication',6,'',null]]);
@@ -420,4 +421,136 @@ test('workspace cover edits preserve share editions and enforce member, owner, v
     assert.equal((await cover(reader,'share',share.id,1)).status,404);
     await s.deleteWorkspaceTopic(author,id,publication(withdrawn),'cover-delete');
     assert.equal((await db.prepare('SELECT count(*) AS n FROM workspace_topic_cover_revisions').first()).n,0);
+});
+
+test('reflection chapters use the live team reading grant across the picker, editions, bulletin and exports', async t => {
+    const { s, db } = await fixture(t);
+    const account = await s.me(reader);
+    const photoId = crypto.randomUUID();
+    await db.prepare(`INSERT INTO reflection_images(id,owner_id,team_id,object_key,digest,mime,bytes,state,touched_at)
+        VALUES(?,?,?,?,?,'image/png',128,'ready',?)`).bind(photoId, account.user.id, account.membership.teamId,
+        'test/' + photoId, 'a'.repeat(64), new Date().toISOString()).run();
+    const body = {title:'队内随谈',text:'个人相册的说明',date:'2026-11-16',category:'随谈',photos:[{id:photoId,at:0,caption:''}]};
+    const note = await s.saveReflection(reader, null, body, 'note');
+    const noteRef = {kind:'reflection',id:note.id};
+    const noteVersions = n => ({expectedVersion:n.version,expectedSharingVersion:n.sharingVersion,expectedGeneration:n.generation});
+    const create = {title:'手动整理',summary:'整理好的章节',category:'',expectedMembershipEpoch:(await s.me(author)).membership.epoch,
+        expectedVersion:0,items:[noteRef]};
+    const picker = async actor => (await (await api(s,actor,'GET','learning/collections/sources?kind=reflection')).json()).data;
+
+    assert.deepEqual(await picker(reader),[]);
+    assert.deepEqual(await picker(admin),[]);
+    await denied(s.publishWorkspaceTopic(author,null,create,'private-note'),'VERSION_CONFLICT');
+    assert.deepEqual(await s.listWorkspaceExportAssets(reader),[]);
+
+    const granted = await s.shareReflection(reader,note.id,{scope:'team',...noteVersions(note)},'grant');
+    assert.equal((await s.workspaceDispatch(admin,null)).items.some(item=>item.source===note.id),false);
+    assert.deepEqual(await s.workspaceTopics(reader),[]);
+    await s.createLearningCategory(author,{name:'随谈'},'category');
+    const daily = await post(s,author,'daily',{title:'随谈图文',category:'随谈'});
+    const [candidate] = await picker(author);
+    assert.deepEqual((await picker(author)).map(x=>x.id),[note.id]);
+    assert.deepEqual([candidate.kind,candidate.mediaKind,candidate.title,candidate.date,candidate.category,candidate.author.id],
+        ['reflection','reflection',body.title,body.date,body.category,account.user.id]);
+    assert.equal(candidate.summary,body.text);
+    assert.equal(candidate.thumbnail,granted.photos[0].url+'?size=thumb');
+    assert.deepEqual((await s.listTopicSources(author)).map(x=>x.id).sort(),[note.id,daily.id].sort());
+    assert.deepEqual(await s.listWorkspaceExportAssets(reader),[{id:photoId,parentKind:'reflection',parentId:note.id}]);
+    assert.deepEqual(await s.listWorkspaceExportAssets(author),[]);
+
+    // A source grant that closes inside the publication transaction rolls back both table snapshots.
+    await db.prepare(`CREATE TRIGGER close_chapter_grant AFTER INSERT ON topic_collection_items WHEN NEW.kind='reflection'
+        BEGIN UPDATE reflections SET gate='closed' WHERE id=NEW.source_id; END`).run();
+    await denied(s.publishWorkspaceTopic(author,null,create,'interrupted'),'VERSION_CONFLICT');
+    assert.deepEqual(await s.workspaceTopics(author),[]);
+    assert.deepEqual((await picker(author)).map(x=>x.id),[note.id]);
+    await db.prepare('DROP TRIGGER close_chapter_grant').run();
+
+    const {id} = await s.publishWorkspaceTopic(author,null,{...create,items:[ref(daily.id),noteRef]},'manual');
+    const share = await s.shareWorkspaceTopic(admin,id,{expectedPublishedVersion:1},'edition');
+    await s.updateFeaturedTopics(admin,{expectedVersion:0,collectionIds:[id]},'feature');
+    const option = (await s.bulletinOptions(admin,create.title,null)).items.find(row=>row.href==='/shared/'+share.id);
+    assert.ok(option);
+    await s.setBulletin(admin,{key:option.key,expectedVersion:0},'pin');
+    const projections = async () => [
+        await s.getTopicCollection(author,id,'draft'), await s.getTopicCollection(admin,id), (await s.listTopicCollections(admin))[0],
+        (await s.workspaceTopics(admin))[0], await s.readWorkspaceShare(admin,share.id), (await s.getFeaturedTopics(admin)).collections[0]
+    ];
+    const availability = async () => {
+        const row = (await s.exportOwnData(author)).topicCollections.find(x=>x.id===id);
+        return [row.draft,row.publication].map(snapshot=>snapshot.items.find(item=>item.id===note.id).sourceAvailable);
+    };
+    for (const view of await projections()) assert.deepEqual(view.items.map(x=>x.id),[daily.id,note.id]);
+    assert.deepEqual(await availability(),[true,true]);
+
+    // Neither an invalidated author epoch nor a temporarily closed mutation gate may leak a preview.
+    await db.prepare('UPDATE reflections SET author_epoch=author_epoch+1 WHERE id=?').bind(note.id).run();
+    assert.deepEqual(await picker(admin),[]);
+    assert.deepEqual((await s.readWorkspaceShare(admin,share.id)).items.map(x=>x.id),[daily.id]);
+    await db.prepare('UPDATE reflections SET author_epoch=? WHERE id=?').bind(account.membership.epoch,note.id).run();
+    await db.prepare("UPDATE reflections SET gate='closed' WHERE id=?").bind(note.id).run();
+    assert.deepEqual(await picker(admin),[]);
+    await db.prepare("UPDATE reflections SET gate='open' WHERE id=?").bind(note.id).run();
+
+    // The application has a singleton team today. Exercise the explicit team fences with a second synthetic team.
+    await db.prepare('DROP INDEX team_singleton').run();
+    await db.prepare("INSERT INTO teams(id,singleton,name,description,created_at) VALUES('other-team',1,'Other','','now')").run();
+    const other = (await s.me(admin)).user.id;
+    await db.prepare("UPDATE memberships SET team_id='other-team' WHERE user_id=?").bind(other).run();
+    assert.deepEqual(await picker(admin),[]);
+    await denied(s.readWorkspaceShare(admin,share.id),'NOT_FOUND');
+    await denied(s.publishWorkspaceTopic(admin,null,create,'cross-team'),'VERSION_CONFLICT');
+    await db.prepare('UPDATE memberships SET team_id=? WHERE user_id=?').bind(account.membership.teamId,other).run();
+
+    const revoked = await s.shareReflection(reader,note.id,{scope:'private',...noteVersions(granted)},'private');
+    for (const view of await projections()) {
+        assert.deepEqual(view.items.map(x=>x.id),[daily.id]);
+        assert.ok(!JSON.stringify(view).includes(body.text));
+    }
+    assert.deepEqual(await availability(),[false,false]);
+    assert.deepEqual(await s.listWorkspaceExportAssets(reader),[]);
+    assert.deepEqual(await picker(reader),[]);
+    assert.equal((await s.readBulletin(admin)).item.href,'/shared/'+share.id);
+    const d = await s.getTopicCollection(author,id,'draft');
+    const added = await s.addTopicItems(author,id,{expectedVersion:d.version,items:[noteRef]},'late-add');
+    assert.equal(added.collection.items.some(x=>x.id===note.id),false);
+
+    const sharedAgain = await s.shareReflection(reader,note.id,{scope:'team',...noteVersions(revoked)},'grant-again');
+    await s.deleteReflection(reader,note.id,noteVersions(sharedAgain),'delete-note');
+    assert.deepEqual((await s.readWorkspaceShare(admin,share.id)).items.map(x=>x.id),[daily.id]);
+    await db.prepare("UPDATE memberships SET status='paused' WHERE user_id=?").bind((await s.me(author)).user.id).run();
+    await denied(s.listTopicSources(author,'reflection'),'FORBIDDEN');
+    await denied(s.readWorkspaceShare(author,share.id),'FORBIDDEN');
+});
+
+test('0031 preserves existing ordered snapshots and shared editions while admitting typed reflection chapters', async t => {
+    const { s, db, migrate } = await fixture(t,'0031');
+    const a = await post(s,author,'old-a');
+    const b = await post(s,reader,'old-b');
+    const tr = await s.saveTraining(admin,null,{title:'旧训练',date:'2026-11-12',description:'',status:'published'},'old-session');
+    const video = await s.addVideo(admin,tr.id,{title:'训练片段',source:'youtube',url:'https://youtu.be/dQw4w9WgXcQ',position:0},'old-video');
+    const items = [ref(b.id),{kind:'training',id:tr.id},{kind:'video',id:video.id},ref(a.id)];
+    const payload = {title:'旧目录',category:'战术',summary:'旧章节顺序',items,expectedVersion:0,
+        expectedMembershipEpoch:(await s.me(author)).membership.epoch};
+    const {id} = await s.publishWorkspaceTopic(author,null,payload,'old');
+    const edition = await s.shareWorkspaceTopic(reader,id,{expectedPublishedVersion:1},'old-share');
+    const reordered = await s.orderTopicItems(author,id,{expectedVersion:1,items:[...items].reverse()},'old-draft');
+    const snapshot = async () => (await db.batch([
+        db.prepare('SELECT * FROM topic_collection_items ORDER BY collection_id,snapshot,position'),
+        db.prepare('SELECT * FROM topic_collections ORDER BY id'),
+        db.prepare('SELECT * FROM topic_collection_publications ORDER BY collection_id'),
+        db.prepare('SELECT * FROM workspace_topic_shares ORDER BY id'),
+    ])).map(batch=>batch.results);
+    const before = await snapshot();
+    await migrate('0031_topic_reflection_items.sql');
+    assert.deepEqual(await snapshot(),before);
+    assert.deepEqual((await s.readWorkspaceShare(reader,edition.id)).items.map(x=>x.id),items.map(x=>x.id));
+    assert.deepEqual((await s.getTopicCollection(author,id,'draft')).items,reordered.items);
+    const insert = (kind,source,position) => db.prepare(
+        'INSERT INTO topic_collection_items(collection_id,snapshot,kind,source_id,position) VALUES(?,0,?,?,?)').bind(id,kind,source,position).run();
+    await assert.rejects(insert('unsupported','other',4),/CHECK/);
+    await assert.rejects(insert('reflection','new',0),/UNIQUE/);
+    await insert('reflection','new',4);
+    await assert.rejects(insert('reflection','new',5),/UNIQUE/);
+    assert.deepEqual((await db.prepare('PRAGMA foreign_key_check').all()).results,[]);
 });

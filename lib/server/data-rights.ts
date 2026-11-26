@@ -10,6 +10,7 @@ import { privateOwnerFence, publishedLearningLink, requirePrivateOwner } from '.
 import { learningActivityVisible } from './learning-activity.ts';
 import { learningPostVisible } from './learning.ts';
 import { topicCoverVersion } from './topic-cover.ts';
+import { teamReadableReflection } from './reflection-visibility.ts';
 import { topicVideoVisible, topicVisible } from './topic-collections.ts';
 
 type Context = Me & {
@@ -75,6 +76,7 @@ export function createDataRightsService({ db, clock, me, activeMember, operation
             SELECT json_object('kind',ti.kind,'id',ti.source_id,'position',ti.position,'sourceAvailable',${bool(`${teamSource('tc.team_id')} AND (
                 (ti.kind='post' AND EXISTS(SELECT 1 FROM learning_posts lp JOIN learning_post_publications lpub ON lpub.post_id=lp.id
                     WHERE lp.id=ti.source_id AND lp.team_id=tc.team_id AND ${learningPostVisible}))
+                OR (ti.kind='reflection' AND EXISTS(SELECT 1 FROM reflections r WHERE r.id=ti.source_id AND r.team_id=tc.team_id AND ${teamReadableReflection}))
                 OR (ti.kind='training' AND EXISTS(SELECT 1 FROM trainings t WHERE t.id=ti.source_id AND t.team_id=tc.team_id AND t.status IN ('published','archived')))
                 OR (ti.kind='video' AND EXISTS(SELECT 1 FROM videos v JOIN trainings t ON t.id=v.training_id
                     WHERE v.id=ti.source_id AND v.team_id=tc.team_id AND ${topicVideoVisible})))`)}) AS entry

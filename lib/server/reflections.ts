@@ -1,3 +1,5 @@
+import { reflectionShared } from './reflection-visibility.ts';
+export { reflectionShared } from './reflection-visibility.ts';
 import type { ReflectionPhotoRef } from '../contracts/reflections';
 import { reflectionPhotoUrl, validateReflectionPhotos } from './reflection-images.ts';
 import type { DeletedReflection } from '../contracts/data-rights';
@@ -76,14 +78,6 @@ function positive(input: unknown) {
 const missing = () => new DomainError('NOT_FOUND', '内容不可用或当前无权查看。', 404);
 const conflict = () => new DomainError('VERSION_CONFLICT', '记录或权限已变化，请重新加载后重试。', 409);
 
-// Used by reflection reads, directory, activity and collection guards: one authoritative predicate.
-export const reflectionShared = `r.deleted_at IS NULL AND r.gate='open' AND r.active_op_id IS NULL
-        AND EXISTS(SELECT 1 FROM users au JOIN memberships am ON am.user_id=au.id
-                WHERE au.id=r.owner_id AND au.status='active' AND am.team_id=r.team_id
-                AND am.status='active' AND am.epoch=r.author_epoch)
-        AND EXISTS(SELECT 1 FROM users ru JOIN memberships rm ON rm.user_id=ru.id
-                WHERE ru.id=? AND ru.status='active' AND rm.team_id=r.team_id AND rm.status='active'
-                AND r.scope='team')`;
 export function createReflectionService({
     db,
     clock,

@@ -5,6 +5,7 @@ import {
     type TopicChoice, type TopicCollection, type TopicDraft, type TopicPolicy, type TopicReference, type TopicSource,
 } from '../contracts/topic-collections.ts';
 import { imageDataBytes } from './learning-image-validation.ts';
+import { teamReadableReflection } from './reflection-visibility.ts';
 import { topicCoverVersion, validateTopicCover } from './topic-cover.ts';
 import { assertGuard, DomainError, type StoredResult } from './domain.ts';
 import { bindLearningMember, learningConflict, learningMemberFence, learningPostVisible, type LearningContext, type LearningDependencies, type LearningOp } from './learning.ts';
@@ -21,20 +22,27 @@ const sources = `WITH sources AS (
             'href','/api/v1/learning/posts/'||lp.id||'/images/'||li.id,'alt',lir.alt,
             'decorative',json(CASE lir.decorative WHEN 1 THEN 'true' ELSE 'false' END))
             FROM learning_publication_images lir JOIN learning_images li ON li.id=lir.image_id AND li.post_id=lir.post_id
-            WHERE lir.post_id=lp.id AND li.status='ready' ORDER BY lir.position LIMIT 1) AS cover
+            WHERE lir.post_id=lp.id AND li.status='ready' ORDER BY lir.position LIMIT 1) AS cover,NULL AS note_date,NULL AS thumbnail
     FROM learning_posts lp JOIN learning_post_publications lpub ON lpub.post_id=lp.id JOIN profiles p ON p.user_id=lp.owner_id
     WHERE ${learningPostVisible}
     UNION ALL
-    SELECT 'video',v.id,v.team_id,v.title,'',NULL,'video',v.training_id,p.user_id,p.disc_name,p.jersey_number,NULL
+    SELECT 'video',v.id,v.team_id,v.title,'',NULL,'video',v.training_id,p.user_id,p.disc_name,p.jersey_number,NULL,NULL,NULL
     FROM videos v JOIN trainings t ON t.id=v.training_id LEFT JOIN profiles p ON p.user_id=v.publisher_id
     WHERE ${topicVideoVisible}
     UNION ALL
-    SELECT 'training',t.id,t.team_id,t.title,t.description,NULL,'training',t.id,NULL,NULL,NULL,NULL
+    SELECT 'training',t.id,t.team_id,t.title,t.description,NULL,'training',t.id,NULL,NULL,NULL,NULL,NULL,NULL
     FROM trainings t WHERE t.status IN ('published','archived')
+    UNION ALL
+    SELECT 'reflection',r.id,r.team_id,coalesce(nullif(r.title,''),'无标题复盘'),substr(trim(r.text),1,160),r.category,
+        'reflection',NULL,r.owner_id,p.disc_name,p.jersey_number,NULL,r.date,
+        CASE WHEN json_array_length(r.photos)>0 THEN '/api/v1/reflections/'||r.id||'/images/'||r.version||'-'||
+            r.sharing_version||'-'||r.generation||'/'||json_extract(r.photos,'$[0].id')||'?size=thumb' END
+    FROM reflections r JOIN profiles p ON p.user_id=r.owner_id WHERE ${teamReadableReflection}
 )`;
-const sourceJson = `json_object('kind',s.kind,'id',s.id,'title',s.title,'summary',s.summary,'category',s.category,
+const sourceJson = `json_patch(json_object('kind',s.kind,'id',s.id,'title',s.title,'summary',s.summary,'category',s.category,
     'mediaKind',s.media_kind,'trainingId',s.training_id,'cover',json(s.cover),
-    'author',CASE WHEN s.author_id IS NOT NULL THEN json_object('id',s.author_id,'discName',s.disc_name,'jerseyNumber',s.jersey_number) END)`;
+    'author',CASE WHEN s.author_id IS NOT NULL THEN json_object('id',s.author_id,'discName',s.disc_name,'jerseyNumber',s.jersey_number) END),
+    json_object('date',s.note_date,'thumbnail',s.thumbnail))`;
 const projectedItems = (snapshot: number) => `(SELECT json_group_array(json(item)) FROM (
     SELECT ${sourceJson} AS item FROM topic_collection_items ti JOIN sources s ON s.kind=ti.kind AND s.id=ti.source_id AND s.team_id=tc.team_id
     WHERE ti.collection_id=tc.id AND ti.snapshot=${snapshot} ORDER BY ti.position)) AS items`;
@@ -65,7 +73,7 @@ function version(value: unknown, min = 1) {
 }
 function reference(input: unknown): TopicReference {
     const { kind, id } = object(input, ['kind', 'id']);
-    if ((kind !== 'post' && kind !== 'video' && kind !== 'training') || !isId(id)) throw invalid();
+    if ((kind !== 'post' && kind !== 'video' && kind !== 'training' && kind !== 'reflection') || !isId(id)) throw invalid();
     return { kind, id };
 }
 function references(input: unknown, max: number) {
@@ -131,10 +139,12 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
             WHERE tc.team_id=? AND tc.owner_id=? AND ${f.sql} ORDER BY tc.updated_at DESC,tc.id`,
         c.membership.teamId, c.user.id, ...f.values).all<TopicChoice>()).results;
     }
-    async function listTopicSources(p: Principal | null): Promise<TopicSource[]> {
+    async function listTopicSources(p: Principal | null, kind: string | null = null): Promise<TopicSource[]> {
         const { c, f } = await contextual(p);
+        if (kind !== null && kind !== 'reflection') throw invalid();
+        const kinds = kind === 'reflection' ? "s.kind='reflection'" : "s.kind<>'training'";
         const { results } = await q(`${sources} SELECT ${sourceJson} AS item FROM sources s
-            WHERE s.team_id=? AND s.kind<>'training' AND ${f.sql} ORDER BY s.title,s.kind,s.id`, c.membership.teamId, ...f.values).all<{ item: string }>();
+            WHERE s.team_id=? AND ${kinds} AND ${f.sql} ORDER BY s.title,s.kind,s.id`, c.membership.teamId, ...f.values).all<{ item: string }>();
         return results.map(row => JSON.parse(row.item) as TopicSource);
     }
     async function saveTopicCollection(p: Principal | null, id: string | null, input: unknown, key: string) {
@@ -416,7 +426,7 @@ export function createTopicCollections({ db, clock, activeMember, operation, top
             visibility_id=CASE WHEN ? THEN visibility_id ELSE excluded.visibility_id END,published_at=excluded.published_at`,
             target,title,summary,category,next,epoch,crypto.randomUUID(),at, Number(keepVisibility)),
             ...replaceItems(target,0,nextItems),...replaceItems(target,1,nextItems),
-            owned(op,'after',c,target,next),guard(op,'after-member',f));
+            sourceGuard(op,'after-sources',c,checked),owned(op,'after',c,target,next),guard(op,'after-member',f));
         await commit(op,write,{id:target});
         return {id:target};
     }

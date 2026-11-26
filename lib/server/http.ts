@@ -216,7 +216,7 @@ export async function dispatchApi(request: Request, path: string[], principal: P
     else if (route === 'learning/collections' && method === 'GET') data = await service.listTopicCollections(principal);
     else if (route === 'learning/collections' && method === 'POST') data = await service.saveTopicCollection(principal, null, await body(), key);
     else if (route === 'learning/collections/editable' && method === 'GET') data = await service.listEditableTopicCollections(principal);
-    else if (route === 'learning/collections/sources' && method === 'GET') data = await service.listTopicSources(principal);
+    else if (route === 'learning/collections/sources' && method === 'GET') data = await service.listTopicSources(principal, new URL(request.url).searchParams.get('kind'));
     else if (route === 'learning/featured' && method === 'GET') data = new URL(request.url).searchParams.get('view') === 'admin'
       ? await service.getFeaturedTopics(principal, true) : await service.getFeaturedTopics(principal);
     else if (route === 'learning/featured' && method === 'PATCH') data = await service.updateFeaturedTopics(principal, await body(), key);

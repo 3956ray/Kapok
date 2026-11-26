@@ -50,6 +50,7 @@ const migrations = [
   "0028_reader_discussions.sql",
   "0029_field_positions.sql",
   "0030_team_bulletin.sql",
+  "0031_topic_reflection_items.sql",
 ];
 
 test("the default build targets only synthetic D1, with Worker-first assets and no public routes", () => {
