@@ -1,8 +1,16 @@
 import { loadMaterial, selectVideo } from './materials.js';
 
+import { loadNote } from './growth.js';
 import { trainingCategory } from './categories.js';
 
+export function reflectionChapter({id, title, thumbnail, category, summary, author, date}) {
+  return {id:'reflection:' + id, reference:{kind:'reflection',id}, kind:'reflection',
+    title:title || '无标题复盘', category:category || '', summary:summary || '', author:author?.discName || '',
+    photos:thumbnail ? [{url:thumbnail,alt:''}] : [], date, href:'/notes/' + encodeURIComponent(id)};
+}
+
 function chapter(source, date, materials) {
+  if (source.kind === 'reflection') return reflectionChapter(source);
   const original = materials.get(source.trainingId || source.id);
   const id = source.kind === 'video' ? 'video:' + source.id : source.id;
   return {
@@ -15,6 +23,7 @@ function chapter(source, date, materials) {
 }
 
 export function chapterPath(item,base,videoId) {
+  if (item.reference?.kind === 'reflection') return base + '/items/' + item.id;
   const [path, query] = item.href.split('?');
   const params = new URLSearchParams(query);
   if (videoId) params.set('video',videoId);
@@ -68,7 +77,10 @@ export function deleteCollection(ctx, collection) {
 export async function readChapter(ctx, item, collection, signal, videoId) {
   const { id, kind } = item.reference;
   let material;
-  if (kind === 'video') {
+  if (kind === 'reflection') {
+    material = await loadNote({...ctx,signal},id);
+    if (material.scope !== 'team') throw new Error('该复盘已不可见。');
+  } else if (kind === 'video') {
     const source = await ctx.read('videos/' + id, signal);
     const parent = await loadMaterial(ctx, { kind: 'training', id: source.trainingId }, signal);
     if (!parent.videos.some(v => v.id === id)) throw new Error('该视频已不可见。');

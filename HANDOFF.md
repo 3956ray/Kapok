@@ -16,7 +16,7 @@ Kapok 正式工作区运行在 Cloudflare Workers、D1 和私有 R2。2026-11-24
 | 注册和登录 | `/register` 先填盘名与背号，再邮箱验证，再确认建档。资料仅在当前标签页短暂预填，验证前零账号写入。`/login` 为已有用户，误走入口时解释状态。任何验证邮箱的人可以注册并直接入队。受限或已退出身份不能通过注册恢复。 | `lib/server/auth-entry.ts`、`app/auth/continue/`、`app/register/profile/`、`lib/client/registration-prefill.ts` |
 | 工作区导航 | 正式入口为 `/home`。手机底栏有训练、动态、想和写、成长、我的五项，桌面使用可折叠侧栏。旧资料链接仍需核对来源权限。 | `app/workspace-ui/shell.jsx`、`app/workspace-ui/router.jsx` |
 | 训练与日常 | 管理员管理队伍训练，队员可发布个人资料。日常图文可只发文字，进入动态。视频默认用平台封面，支持自选图。 | `app/workspace-ui/training.jsx`、`lib/server/video-covers.ts` |
-| 合集与来源 | 可收录可读资料和单条视频。章节可前后切换。撤回合集后，队员打开旧链接须重新检查可见性。 | `app/workspace-ui/collections.jsx`、`lib/server/topic-collections.ts` |
+| 合集与来源 | 合集可手动收录训练、单条视频、图文（含日常分享）与队内可读复盘。日常分享继续留在训练档案之外，复盘按原文授权读取，无需分发到动态。章节可前后切换。撤回合集后，队员打开旧链接须重新检查可见性。 | `app/workspace-ui/collections.jsx`、`lib/server/topic-collections.ts` |
 | 讨论 | 训练和视频支持讨论与时间点引用。队内可读的复盘和已发布的公告支持文字留言、回复及删除自己的留言。动态入口可定位原留言。 | `app/workspace-ui/discussion.jsx`、`lib/server/reader-discussions.ts` |
 | 成长与复盘 | 收藏和私人备注归本人。可从已保存的备注新建复盘。「想和写」默认私密，队内阅读和分发动态分别控制。作者有编辑和删除入口。 | `app/workspace-ui/journal.jsx`、`lib/server/reflections.ts` |
 | 账号与管理 | 管理角色绑定队员账号，移交时保留原作者和至少一位可登录的有效管理员。支持头像与本人资料导出，暂停期间停止导出。 | `app/workspace-ui/manage.jsx`、`lib/server/profile-avatar.ts`、`lib/server/data-rights.ts` |

@@ -11,7 +11,7 @@ import { presentMaterials, deleteMaterial } from './materials.js';
 import { presentTopics, deleteCollection } from './topics.js';
 import { newTrainingCategory, trainingCategoryNames, noteCategoryName, noteTopics } from './categories.js';
 
-export const kindName = { training: '训练', article: '图文', video: '视频' };
+export const kindName = { training: '训练', article: '图文', video: '视频', reflection: '复盘' };
 export const categories = ['全部','进攻','防守','基础'];
 export const canEditMaterial = item => Boolean(item?.canEdit);
 export const uid = () => crypto.randomUUID();

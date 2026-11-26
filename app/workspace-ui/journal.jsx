@@ -1,3 +1,5 @@
+import { AddToCollection } from './collection-actions';
+import { reflectionChapter } from './topics';
 import { DiscussionPanel } from './discussion-panel.jsx';
 import { IllustratedNote, NotePictureEditor } from './note-pictures';
 import { notePhotos } from './note-layout.js';
@@ -622,7 +624,7 @@ export function NoteSharing({note}) {
   </div>;
 }
 
-export function NoteDetail({ n }) {
+export function NoteDetail({ n, backControl, collectionNav }) {
   const title = n.title || '训练复盘';
   useTitle(title);
   const { db, trainings, deleteNote, ctx, refreshShares, notify } = useData(),
@@ -630,7 +632,7 @@ export function NoteDetail({ n }) {
   const href = n.link?.href.replace(/^\/learn\/posts\//, '/trainings/').replace(/^\/learn\/collections\//, '/collections/');
   return (
     <div className="page-width prose-page">
-      <Back fallback="/growth" />
+      {backControl || <Back fallback="/growth" />}
       <article className="reader">
         <div className="reader-meta">
           <span>
@@ -642,6 +644,7 @@ export function NoteDetail({ n }) {
               {n.ownerId === 'me' && <> · <NavLink className="reader-sharing" to={'/notes/' + encodeURIComponent(n.id) + '/sharing'}>分享设置</NavLink></>}
             </small>
           </span>
+          {n.scope === 'team' && <AddToCollection id={'reflection:' + n.id} sharedItem={reflectionChapter(n)} />}
           {n.ownerId !== 'me' && <IconButton icon={Bookmark}
             label={db.saved['reflection:' + n.id] ? '移除收藏' : '收藏复盘'}
             onClick={async () => {
@@ -687,6 +690,7 @@ export function NoteDetail({ n }) {
           <ArrowUpRight size={21} />
         </NavLink>
       )}
+      {collectionNav}
       {n.scope === 'team' && <DiscussionPanel kind="reflection" id={n.id} />}
     </div>
   );

@@ -24,9 +24,10 @@ import { MediaCover } from './press';
 import { kindName, shortDate, useData } from './store';
 import { Back, Empty, IconButton, Modal, PageHead, Segments, Tip, usePreference } from './ui';
 import { trainingCategory, trainingCategoryNames } from './categories.js';
-import { catalogEntries, inTrainingCatalog, matchText } from './collection-model';
+import { catalogEntries, matchText } from './collection-model';
 import { chapterPath, presentTopic, readChapter } from './topics.js';
 import { DeleteCollection } from './collection-actions';
+import { NoteDetail } from './journal';
 import { TrainingReader } from './training';
 
 export function LibraryNav({ active }) {
@@ -64,7 +65,7 @@ export function Collections() {
     }).catch(()=>{ if (!controller.signal.aborted) setFeatured([]); });
     return () => controller.abort();
   },[ctx]);
-  const entries = catalogEntries(collections.filter(inTrainingCatalog), remoteCollections, trainings);
+  const entries = catalogEntries(collections, remoteCollections, trainings);
   const categories = ['全部', ...trainingCategoryNames([...categoryNames, ...entries.map(c => c.category)])];
   const activeFilter = categories.includes(trainingCategory(filter)) ? trainingCategory(filter) : '全部';
   const createPath =
@@ -431,6 +432,7 @@ function ChapterLoader({ collection, item, video, base, ...controls }) {
   if (current?.ctx !== ctx || current.item !== item || current.collection !== collection || current.video !== video || current.attempt !== attempt)
     return <p className="page-width pending-reader" role="status">正在读取内容…</p>;
   if (current.error) return <ReaderProblem title="暂时打不开这一项" text={current.error} to={base} retry={reload} />;
+  if (item.reference.kind === 'reflection') return <NoteDetail n={current.data} backControl={controls.backControl} collectionNav={controls.collectionNav} />;
   return <TrainingReader key={[current.data.id, current.data.selectedVideo?.id, params.get('t')].join(':')}
     t={current.data} reload={reload} collectionItem={{...current.data, id:item.id, reference:item.reference}} {...controls} />;
 }

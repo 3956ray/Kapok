@@ -7,7 +7,7 @@ const key = (kind, parent, id) => JSON.stringify([kind, parent, id]);
 const assetIndex = rows => new Set(rows.map(row => key(row.parentKind, row.parentId, row.id)));
 const assetPath = id => '/api/v1/material-assets/' + enc(id);
 const changed = () => new Error('合集或资料权限已变化，请重新打开后再导出。');
-const sourcePath = (kind,id) => ({training:'/trainings/',post:'/learn/posts/',video:'/videos/'})[kind] + enc(id);
+const sourcePath = (kind,id) => ({training:'/trainings/',post:'/learn/posts/',video:'/videos/',reflection:'/home#/notes/'})[kind] + enc(id);
 
 function ownedPhotos(extra, kind, parent, owned) {
   return (extra.photos || []).filter(p => safeId(p.id) && owned.has(key(kind,parent,p.id)))
@@ -30,6 +30,14 @@ async function chapter(ctx, ref, owned, signal) {
   const {kind,id} = ref;
   const href = sourcePath(kind,id);
   const actor = ctx.account.user.id;
+  if (kind === 'reflection') {
+    if (ref.author?.id !== actor) return {href};
+    const {value:n} = await ctx.read('page-read/reflections/'+enc(id),signal);
+    if (!n.isAuthor || n.author.id !== actor || n.scope !== 'team') throw changed();
+    const media = (n.photos || []).filter(p => owned.has(key('reflection',id,p.id)))
+      .map(p => ({type:'image',path:p.url,alt:p.caption}));
+    return {href,title:n.title || '无标题复盘',body:n.text,revision:n.version,media};
+  }
   if (kind === 'post') {
     if (ref.author?.id !== actor) return {href};
     const p = await ctx.read('learning/posts/'+enc(id),signal);
@@ -98,7 +106,7 @@ export async function exportTopicHtml(ctx, editionId, signal) {
   const entries = [];
   const binaries = new Map();
   for (const [index,ref] of directory.items.entries()) {
-    if (!['training','video','post'].includes(ref.kind) || !safeId(ref.id)) throw changed();
+    if (!['training','video','post','reflection'].includes(ref.kind) || !safeId(ref.id)) throw changed();
     const item = await chapter(ctx,ref,owned,signal);
     entries.push(item);
     parts.push('<section><h2>',escape(item.title || '队内资料 '+(index+1)),'</h2>');

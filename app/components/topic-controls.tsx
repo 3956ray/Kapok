@@ -10,7 +10,7 @@ import { useAccountSession } from './secure-resource';
 export const topicsEndpoint = 'learning/collections';
 export const topicKey = (item: TopicReference) => item.kind + ':' + item.id;
 export const topicRef = ({ kind, id }: TopicReference) => ({ kind, id });
-export const sourcePath = (item: TopicSource) => (item.kind === 'post' ? '/learn/posts/' : item.kind === 'training' ? '/trainings/' : '/videos/') + item.id;
+export const sourcePath = (item: TopicSource) => (item.kind === 'reflection' ? '/home#/notes/' : item.kind === 'post' ? '/learn/posts/' : item.kind === 'training' ? '/trainings/' : '/videos/') + item.id;
 export const topicStatus = { draft: '私人草稿', published: '已发布', withdrawn: '已撤回' };
 
 type WriteInput = Omit<LearningMutation, 'key'>;
@@ -107,7 +107,7 @@ export function TopicDialog({ title, label, disabled, icon, children }: {
 
 export function TopicSourceLabel({ item }: { item: TopicSource }) {
     return <span className="learning-row-text"><strong>{item.title}</strong>
-        <small>{[item.mediaKind === 'article' ? '图文' : item.mediaKind === 'training' ? '训练' : '视频', item.category, item.author?.discName].filter(Boolean).join(' · ')}</small>
+        <small>{[item.mediaKind === 'reflection' ? '复盘' : item.mediaKind === 'article' ? '图文' : item.mediaKind === 'training' ? '训练' : '视频', item.category, item.author?.discName].filter(Boolean).join(' · ')}</small>
         {item.summary && <span>{item.summary}</span>}
     </span>;
 }
@@ -128,7 +128,7 @@ export function TopicPicker({ sources, existing, apply, close }: {
         <div className="learning-filters" data-own-buffer>
             <label>搜索资料<input ref={searchField} type="search" value={search} onChange={event => setSearch(event.target.value)} /></label>
             <label>类型<select value={kind} onChange={event => setKind(event.target.value)}>
-                <option value="">全部</option><option value="article">图文</option><option value="video">视频</option>
+                <option value="">全部</option><option value="article">图文</option><option value="video">视频</option><option value="reflection">复盘</option>
             </select></label>
         </div>
         <p className="muted" role="status">已选 {selected.length} / {topicDefaults.maxBatch}　{selected.length === topicDefaults.maxBatch && '已达到单次选择上限'}</p>

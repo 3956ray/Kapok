@@ -2,16 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isDailyArticle } from '../../lib/contracts/learning.ts';
 import { noteCategoryName, newTrainingCategory, trainingCategoryNames } from '../../app/workspace-ui/categories.js';
-import { inTrainingCatalog } from '../../app/workspace-ui/collection-model.js';
+import { chapterPath, presentTopic } from '../../app/workspace-ui/topics.js';
 
 test('daily shares stay readable independently of the training catalog and personal note taxonomy', () => {
     const article = { kind: 'article', category: '随谈' };
     const training = { kind: 'training', category: '基本功' };
     assert.equal(isDailyArticle(article), true);
     assert.equal(isDailyArticle(training), false);
-    assert.equal(inTrainingCatalog({ items: [article] }), false);
-    assert.equal(inTrainingCatalog({ items: [article, training] }), true);
-    assert.equal(inTrainingCatalog({ items: [] }), true);
+    const {items} = presentTopic({items:[
+        {kind:'post', mediaKind:'article', category:'随谈', id:'daily', title:'队内相册'},
+        {kind:'reflection', mediaKind:'reflection', id:'note', title:'赛后观察'},
+    ]});
+    assert.equal(isDailyArticle(items[0]), true);
+    assert.equal(items[0].href, '/trainings/daily');
+    assert.equal(items[1].href, '/notes/note');
+    assert.equal(chapterPath(items[1], '/shared/edition'), '/shared/edition/items/reflection:note');
     assert.deepEqual(trainingCategoryNames(['战术', '基本概念', '随谈', '基本功', '进攻']), ['战术', '基本功', '进攻']);
     assert.throws(() => newTrainingCategory(' 随谈 '));
     assert.equal(newTrainingCategory('基本概念'), '基本功');

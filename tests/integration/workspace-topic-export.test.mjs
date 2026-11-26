@@ -56,3 +56,22 @@ test('offline topic keeps another author’s edition cover behind the member lin
   assert.doesNotMatch(await file.text(),/<img alt="合集封面"/);
   assert.ok(!paths.some(path => path.includes('topic-covers')));
 });
+
+test('reflection chapters export only the author’s team-readable text and keep teammate notes behind login', async t => {
+  const {ctx,signal} = fixture(t);
+  const mine = {kind:'reflection',id:'own-note',author:{id:'mine'}};
+  const other = {kind:'reflection',id:'other-note',title:'队友标题',author:{id:'another'}};
+  let scope = 'team';
+  ctx.read = async path => {
+    if (path === 'workspace/export-assets') return [];
+    if (path === 'workspace/topic-shares/s') return {items:[mine,other]};
+    assert.equal(path,'page-read/reflections/own-note');
+    return {value:{isAuthor:true,author:mine.author,scope,title:'本人复盘',text:'本人正文',version:1}};
+  };
+  const html = await (await exportTopicHtml(ctx,'s',signal)).file.text();
+  assert.match(html,/本人正文/);
+  assert.match(html,/\/home#\/notes\/other-note/);
+  assert.doesNotMatch(html,/队友标题/);
+  scope = 'private';
+  await assert.rejects(exportTopicHtml(ctx,'s',signal),/权限已变化/);
+});

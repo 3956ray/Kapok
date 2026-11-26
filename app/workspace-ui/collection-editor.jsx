@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, Plus, Search, X } from 'lucide-react';
-import { isDailyArticle } from '../../lib/contracts/learning.ts';
 import { CategoryField } from './category-field';
 import { matchText } from './collection-model';
 import { DeleteCollection } from './collection-actions';
-import { saveTopic } from './topics';
+import { reflectionChapter, saveTopic } from './topics';
 import { kindName, uid, useData } from './store';
 import { NavLink, useNav, useTitle } from './router';
 import { Back, IconButton, PageHead } from './ui';
 import { prepareCollectionCover } from './profile-avatar.js';
 import { MediaCover } from './press';
 
+const reflectionEntry = id => typeof id === 'string' && /^reflection:[\w-]{1,128}$/.test(id);
 const videoEntry = id => typeof id === 'string' && /^video:[\w-]{1,128}$/.test(id);
 
 function readDraft(key) {
@@ -46,7 +46,7 @@ export function CollectionEditor({ collection: entry }) {
       returned = sessionStorage.getItem(pickKey);
     } catch {}
     const requested = [incoming !== saved?.originItem && incoming, returned, params.get('added')].filter(
-      (id) => videoEntry(id) || (id && trainings.some((t) => t.id === id && !isDailyArticle(t))),
+      (id) => reflectionEntry(id) || videoEntry(id) || (id && trainings.some((t) => t.id === id && !t.isDraft)),
     );
     return {
       ...initial,
@@ -93,7 +93,19 @@ export function CollectionEditor({ collection: entry }) {
       sessionStorage.setItem(key, JSON.stringify(form));
     } catch {}
   }, [form, key]);
-  const available = new Map([...trainings, ...(collection?.items || [])].map(item => [item.id, item]));
+  const [noteSources,setNoteSources] = useState(null);
+  const [sourceAttempt,retrySources] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    ctx.read('learning/collections/sources?kind=reflection',controller.signal).then(sources => {
+      if (!controller.signal.aborted) setNoteSources({ctx,rows:sources.map(reflectionChapter)});
+    }, error => { if (!controller.signal.aborted) setNoteSources({ctx,error:error.message}); });
+    return () => controller.abort();
+  },[ctx,sourceAttempt]);
+  const notes = noteSources?.ctx === ctx ? noteSources : null;
+  const available = new Map([...trainings, ...(collection?.items || []).filter(i => i.kind !== 'reflection'), ...(notes?.rows || [])].map(item => [item.id, item]));
+  const missingNotes = form.itemIds.filter(id => reflectionEntry(id) && !available.has(id));
+
   // A directory can include one specific clip from a multi-video training.
   // Restore those selections from the member API even after leaving the editor and returning to its draft.
   const unresolved = form.itemIds.filter(id => videoEntry(id) && !available.has(id)).join(',');
@@ -121,7 +133,7 @@ export function CollectionEditor({ collection: entry }) {
   const selected = form.itemIds.map(id => available.get(id)).filter(Boolean);
   const choices = [...available.values()].filter(t => t.reference || (t.kind === 'training' ? ['published','archived'].includes(t.status) : !t.isDraft)).filter(
     (t) =>
-      !isDailyArticle(t) && (kind === 'all' || t.kind === kind) &&
+      (kind === 'all' || t.kind === kind) &&
       matchText(query, t.title, t.summary, t.author, t.category, t.body),
   );
   function patch(changes) {
@@ -277,6 +289,8 @@ export function CollectionEditor({ collection: entry }) {
               ? <p role="alert">{clips.error} <button type="button" className="ink-link" onClick={() => retryClips(n => n + 1)}>重试</button>
                   <button type="button" className="ink-link" onClick={() => patch({itemIds:form.itemIds.filter(id => !unresolved.split(',').includes(id))})}>移出未读取的视频</button></p>
               : <p role="status">正在读取所选视频…</p>)}
+            {notes?.error && <p role="alert">{notes.error} <button type="button" onClick={() => retrySources(n => n+1)}>重新读取复盘</button></p>}
+            {notes?.rows && missingNotes.length > 0 && <p role="alert">所选复盘已不可用。 <button type="button" onClick={() => patch({itemIds:form.itemIds.filter(id => !missingNotes.includes(id))})}>移出不可用的复盘</button></p>}
             {emptyError && (
               <p id="pick-error" className="form-error" role="alert">
                 请至少选一项内容，再发布合集。
@@ -347,14 +361,14 @@ export function CollectionEditor({ collection: entry }) {
                         label={'上移：' + t.title}
                         data-order="up"
                         icon={ArrowUp}
-                        disabled={i === 0}
+                        disabled={i === 0 || selected.length !== form.itemIds.length}
                         onClick={() => move(i, -1)}
                       />
                       <IconButton
                         label={'下移：' + t.title}
                         data-order="down"
                         icon={ArrowDown}
-                        disabled={i === selected.length - 1}
+                        disabled={i === selected.length - 1 || selected.length !== form.itemIds.length}
                         onClick={() => move(i, 1)}
                       />
                       <IconButton
@@ -393,7 +407,7 @@ export function CollectionEditor({ collection: entry }) {
           >
             取消编辑
           </button>
-          <button className="btn primary" disabled={sending || preparing || Boolean(unresolved && !clips?.rows)} type="submit">
+          <button className="btn primary" disabled={sending || preparing || missingNotes.length > 0 || Boolean(unresolved && !clips?.rows)} type="submit">
             <Check size={16} />
             {sending ? '正在发布…' : collection ? '保存合集修改' : '发布合集'}
           </button>
