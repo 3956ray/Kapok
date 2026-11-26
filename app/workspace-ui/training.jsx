@@ -787,7 +787,7 @@ function MaterialEditor({ t }) {
       await ctx.refresh();
       if (ctx.signal.aborted) return;
       notify(label+(edit?'已更新':'已发布'));
-      go(returnTo ? returnTo+(daily ? '' : '?added='+encodeURIComponent(id)) : daily && !edit ? '/activity' : '/trainings/'+encodeURIComponent(id),{replace:true});
+      go(returnTo ? returnTo+'?added='+encodeURIComponent(id) : daily && !edit ? '/activity' : '/trainings/'+encodeURIComponent(id),{replace:true});
     } catch(err) {
       if (!controller.signal.aborted && mounted.current) {
         fail('publication',err.message || '暂时无法保存，请重试。');
